@@ -35,10 +35,13 @@ const (
 // указывать отдельно, и стык с предыдущим звеном получается непрерывным по
 // построению, а не по проверке.
 type Primitive struct {
-	Kind   Kind
-	Length units.Distance // длина по оси пути
-	Radius float64        // метры, > 0; только для дуги
-	Angle  float64        // радианы со знаком; только для дуги
+	Kind Kind
+	// Length — длина примитива В ПЛАНЕ, то есть по горизонтальной проекции.
+	// Это координата u спеки формата. Пространственная длина оси s больше на
+	// множитель sqrt(1+g²) и считается в internal/track/profile.go.
+	Length units.Distance
+	Radius float64 // метры, > 0; только для дуги
+	Angle  float64 // радианы со знаком; только для дуги
 }
 
 // Straight строит прямую заданной длины.
@@ -72,7 +75,7 @@ func Arc(radiusM, angleRad float64) (Primitive, error) {
 
 // Advance возвращает позу после прохождения t от начала примитива.
 //
-// t измеряется вдоль оси пути и обрезается по длине примитива вызывающим кодом;
+// t измеряется в плане и обрезается по длине примитива вызывающим кодом;
 // здесь значения вне [0, Length] допускаются и продолжают кривую аналитически —
 // это удобно для стыков и для проверки непрерывности.
 func (p Primitive) Advance(from Pose, t units.Distance) Pose {
@@ -175,4 +178,29 @@ func Normalize(p Pose) Pose {
 func Reverse(p Pose) Pose {
 	p.Heading += math.Pi
 	return Normalize(p)
+}
+
+// Compose применяет движение b в системе координат позы a.
+//
+// Цепочка примитивов — жёсткое движение плоскости, поэтому Chain.End(start)
+// тождественно равно Compose(start, Chain.End(нулевая поза)). Это свойство и
+// позволяет восстанавливать начало элемента по его концу, не разворачивая
+// цепочку по звеньям.
+func Compose(a, b Pose) Pose {
+	c, s := math.Cos(a.Heading), math.Sin(a.Heading)
+	return Normalize(Pose{
+		X:       a.X + b.X*c - b.Y*s,
+		Y:       a.Y + b.X*s + b.Y*c,
+		Heading: a.Heading + b.Heading,
+	})
+}
+
+// Invert возвращает обратное движение: Compose(p, Invert(p)) — нулевая поза.
+func Invert(p Pose) Pose {
+	c, s := math.Cos(p.Heading), math.Sin(p.Heading)
+	return Normalize(Pose{
+		X:       -(p.X*c + p.Y*s),
+		Y:       p.X*s - p.Y*c,
+		Heading: -p.Heading,
+	})
 }

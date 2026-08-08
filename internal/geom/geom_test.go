@@ -270,3 +270,50 @@ func TestPrimitiveValidation(t *testing.T) {
 		t.Error("дуга больше полного оборота принята")
 	}
 }
+
+func TestComposeInvertRoundTrip(t *testing.T) {
+	for _, p := range []geom.Pose{
+		{X: 100, Y: -50, Heading: 0.7},
+		{X: -3, Y: 0.5, Heading: -3.0},
+		{X: 0, Y: 0, Heading: 0},
+	} {
+		got := geom.Compose(p, geom.Invert(p))
+		if math.Abs(got.X) > 1e-9 || math.Abs(got.Y) > 1e-9 || math.Abs(got.Heading) > 1e-9 {
+			t.Fatalf("Compose(%v, Invert(%v)) = %v, ожидалась нулевая поза", p, p, got)
+		}
+	}
+}
+
+// TestChainIsRigidMotion — то свойство, ради которого Compose существует:
+// цепочка целиком есть одно движение, поэтому её можно применить и отменить,
+// не разбирая на звенья.
+func TestChainIsRigidMotion(t *testing.T) {
+	a, err := geom.Straight(300 * units.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := geom.Arc(300, -0.1107)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := geom.Arc(300, 0.1107)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := geom.Chain{a, b, c}
+	start := geom.Pose{X: 17, Y: -4, Heading: 0.35}
+
+	delta := chain.End(geom.Pose{})
+	direct := chain.End(start)
+	viaCompose := geom.Compose(start, delta)
+	if math.Abs(direct.X-viaCompose.X) > 1e-9 ||
+		math.Abs(direct.Y-viaCompose.Y) > 1e-9 ||
+		math.Abs(direct.Heading-viaCompose.Heading) > 1e-9 {
+		t.Fatalf("цепочка не жёсткое движение: прямо %v, через Compose %v", direct, viaCompose)
+	}
+	// И обратно: по концу восстанавливается начало.
+	back := geom.Compose(direct, geom.Invert(delta))
+	if math.Abs(back.X-start.X) > 1e-9 || math.Abs(back.Y-start.Y) > 1e-9 {
+		t.Fatalf("восстановленное начало %v, ожидалось %v", back, start)
+	}
+}
