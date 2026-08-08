@@ -1,0 +1,616 @@
+{
+  "map_id": "ST_A",
+  "map_revision": 1,
+  "elements": [
+    {
+      "id": "ST_A_E_APPROACH",
+      "start": {
+        "plan": {
+          "x": 0,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 300
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_E12",
+      "start": {
+        "plan": {
+          "x": 1669.4093022197287,
+          "y": -1.8362971100536618,
+          "heading": -3.0308926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_E23",
+      "start": {
+        "plan": {
+          "x": 1588.4840446368783,
+          "y": -7.1362844598526385,
+          "heading": -3.0308926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_E34",
+      "start": {
+        "plan": {
+          "x": 1507.5583022197286,
+          "y": -12.436271809651608,
+          "heading": -3.0308926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_EXIT",
+      "start": {
+        "plan": {
+          "x": 1702.551,
+          "y": -4.1025667771436275e-15,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": -0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 100
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_IND",
+      "start": {
+        "plan": {
+          "x": 376.64221294597223,
+          "y": -1.8362971100542635,
+          "heading": -0.11069999999999958
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 400
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_SID",
+      "start": {
+        "plan": {
+          "x": 575.9179856945235,
+          "y": -17.736259159450952,
+          "heading": -0.11069999999999958
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 120
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_T1",
+      "start": {
+        "plan": {
+          "x": 377,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 1292.051
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_T2",
+      "start": {
+        "plan": {
+          "x": 414.4252575828504,
+          "y": -5.299987349798896,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 1173.701
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_T3",
+      "start": {
+        "plan": {
+          "x": 495.3505151657008,
+          "y": -10.599974699597793,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 1011.85
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_T4",
+      "start": {
+        "plan": {
+          "x": 576.2757727485513,
+          "y": -15.89996204939669,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 883.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_W12",
+      "start": {
+        "plan": {
+          "x": 333.14221294597223,
+          "y": -1.8362971100542635,
+          "heading": -0.11069999999999958
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_W1IND",
+      "start": {
+        "plan": {
+          "x": 333.5,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 10
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_W23",
+      "start": {
+        "plan": {
+          "x": 414.06747052882264,
+          "y": -7.13628445985316,
+          "heading": -0.11069999999999958
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_E_W34",
+      "start": {
+        "plan": {
+          "x": 494.99272811167305,
+          "y": -12.436271809652055,
+          "heading": -0.11069999999999958
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 14.731
+        },
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_1:diverging",
+      "start": {
+        "plan": {
+          "x": 300,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_1:straight",
+      "start": {
+        "plan": {
+          "x": 300,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_2:diverging",
+      "start": {
+        "plan": {
+          "x": 380.9252575828504,
+          "y": -5.299987349798911,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_2:straight",
+      "start": {
+        "plan": {
+          "x": 380.9252575828504,
+          "y": -5.299987349798911,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_3:diverging",
+      "start": {
+        "plan": {
+          "x": 461.8505151657008,
+          "y": -10.599974699597807,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_3:straight",
+      "start": {
+        "plan": {
+          "x": 461.8505151657008,
+          "y": -10.599974699597807,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E1:diverging",
+      "start": {
+        "plan": {
+          "x": 1702.551,
+          "y": -4.1025667771436275e-15,
+          "heading": 3.141592653589793
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E1:straight",
+      "start": {
+        "plan": {
+          "x": 1702.551,
+          "y": -4.1025667771436275e-15,
+          "heading": 3.141592653589793
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E2:diverging",
+      "start": {
+        "plan": {
+          "x": 1621.6262575828505,
+          "y": -5.299987349798356,
+          "heading": -3.1415926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E2:straight",
+      "start": {
+        "plan": {
+          "x": 1621.6262575828505,
+          "y": -5.299987349798356,
+          "heading": -3.1415926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E3:diverging",
+      "start": {
+        "plan": {
+          "x": 1540.7005151657008,
+          "y": -10.599974699597324,
+          "heading": -3.1415926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": 0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_E3:straight",
+      "start": {
+        "plan": {
+          "x": 1540.7005151657008,
+          "y": -10.599974699597324,
+          "heading": -3.1415926535897927
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_IND:diverging",
+      "start": {
+        "plan": {
+          "x": 343.5,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_IND:straight",
+      "start": {
+        "plan": {
+          "x": 343.5,
+          "y": 0,
+          "heading": 0
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_SID:diverging",
+      "start": {
+        "plan": {
+          "x": 542.7757727485513,
+          "y": -15.899962049396704,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300,
+          "angle": -0.1107
+        }
+      ]
+    },
+    {
+      "id": "ST_A_SW_SID:straight",
+      "start": {
+        "plan": {
+          "x": 542.7757727485513,
+          "y": -15.899962049396704,
+          "heading": 4.440892098500626e-16
+        },
+        "z": 142,
+        "slope": 0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ]
+    }
+  ]
+}

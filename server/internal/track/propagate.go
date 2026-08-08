@@ -41,10 +41,13 @@ func (i Incidence) String() string { return i.Port + "@" + i.Element }
 //
 // Z и Slope не входят в geom.Pose сознательно: geom считает план, вертикаль —
 // отдельная одномерная функция.
+// Теги обязательны: PortPose уезжает в RenderGeometry, то есть в контракт с
+// клиентом на Godot. Без них наружу протекали бы имена полей Go, и клиент зашил
+// бы их навсегда.
 type PortPose struct {
-	Plan  geom.Pose
-	Z     float64
-	Slope float64 // dz/du в направлении Plan
+	Plan  geom.Pose `json:"plan"`
+	Z     float64   `json:"z"`
+	Slope float64   `json:"slope"` // dz/du в направлении Plan
 }
 
 // PortRelation — связь двух концов в одном порту.

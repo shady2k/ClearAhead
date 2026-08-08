@@ -16,8 +16,9 @@ import (
 
 // Pose — положение и направление точки пути. Метры и радианы.
 type Pose struct {
-	X, Y    float64
-	Heading float64
+	X       float64 `json:"x"`
+	Y       float64 `json:"y"`
+	Heading float64 `json:"heading"`
 }
 
 // Kind различает примитивы кривой.
