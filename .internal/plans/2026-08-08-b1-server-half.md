@@ -2887,8 +2887,17 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 			http.Error(w, "только GET", http.StatusMethodNotAllowed)
 			return
 		}
-		rev, err := strconv.Atoi(r.PathValue("rev"))
-		if err != nil || r.PathValue("id") != man.MapID || rev != man.Revision {
+		// ВНИМАНИЕ. Первая редакция плана читала здесь r.PathValue напрямую и
+		// сама сверяла map_id с ревизией — то есть задача 10 нарушала барьер,
+		// введённый задачей 9 этого же плана, а барьерный тест поймал бы это
+		// на первом же прогоне. Поймано воркером при реализации.
+		//
+		// Правильно: ручка механически раскладывает сегменты пути в
+		// protocol.Input и отдаёт диспетчеру. Разбор, проверка и решение про
+		// 404 живут за барьером, в обработчике, зарегистрированном в rpc.Mux.
+		if _, err := mux.Dispatch(r.Context(), "geometry", protocol.Input{
+			Path: map[string]string{"id": id, "rev": rev},
+		}); err != nil {
 			http.NotFound(w, r)
 			return
 		}
