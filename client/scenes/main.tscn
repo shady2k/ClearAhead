@@ -1,0 +1,23 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/world.gd" id="2"]
+[ext_resource type="Script" path="res://scripts/camera.gd" id="3"]
+[ext_resource type="Script" path="res://scripts/ui.gd" id="4"]
+[ext_resource type="Script" path="res://scripts/debug.gd" id="5"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1")
+
+[node name="World" type="Node2D" parent="."]
+script = ExtResource("2")
+
+[node name="Camera2D" type="Camera2D" parent="."]
+script = ExtResource("3")
+
+[node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("4")
+
+[node name="Debug" type="Node2D" parent="World"]
+visible = false
+script = ExtResource("5")
