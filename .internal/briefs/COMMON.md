@@ -18,7 +18,7 @@
 - Трогать трекер задач (`bd`). Беды принадлежат координатору.
 
 ## Обязательно
-- Проверка **строго по своим пакетам**: `go build ./internal/<твой>/ && go vet ./internal/<твой>/ && go test ./internal/<твой>/`.
+- Проверка **строго по своим пакетам**: `go build ./server/internal/<твой>/ && go vet ./server/internal/<твой>/ && go test ./server/internal/<твой>/`.
   Именно так, с явным путём пакета. Это не общерепозиторный гейт, это твой пакет.
 - Heartbeat при каждой смене фазы:
   `orca orchestration send --type heartbeat --subject alive --task-id <TASK_ID> --dispatch-id <DISPATCH_ID> --phase "<фаза>" --json`

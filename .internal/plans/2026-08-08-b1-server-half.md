@@ -4,7 +4,7 @@
 
 **Goal:** Go-сервер читает рукописный `map.json` одной станции, компилирует его в `CompiledTrack` и `RenderGeometry` и отдаёт геометрию по HTTP с `ETag` и `Cache-Control: immutable`.
 
-**Architecture:** Три пакета над уже написанными `internal/units` и `internal/geom`. `internal/mapfmt` — строгий разбор файла (контракт документа и числовой контракт). `internal/track` — компилятор: вертикальный профиль и отображение `u ↔ s`, распространение поз от якоря, замыкание циклов, компиляция в два артефакта, хеши и манифест. `internal/httpapi` — ручка геометрии. Данные текут в одну сторону: файл → проверенная модель → скомпилированные артефакты → HTTP.
+**Architecture:** Три пакета над уже написанными `server/internal/units` и `server/internal/geom`. `server/internal/mapfmt` — строгий разбор файла (контракт документа и числовой контракт). `server/internal/track` — компилятор: вертикальный профиль и отображение `u ↔ s`, распространение поз от якоря, замыкание циклов, компиляция в два артефакта, хеши и манифест. `server/internal/httpapi` — ручка геометрии. Данные текут в одну сторону: файл → проверенная модель → скомпилированные артефакты → HTTP.
 
 **Tech Stack:** Go 1.26.5, модуль `github.com/shady2k/ClearAhead`. Только стандартная библиотека. Тесты — `go test`, golden-вектора как неизменяемые фикстуры.
 
@@ -19,9 +19,9 @@
 - Валидатор **отказывает, а не чинит**. Подгонки невязки нет нигде.
 - Всё неизвестное — отказ: неизвестное поле, неизвестный `kind`, неизвестная `format_version`.
 - Ошибки — по-русски, с указанием ID элемента и величины невязки, потому что читать их будет автор карты.
-- **Внешний вход попадает в обработчик только через `internal/rpc`** (Задача 9). Обработчик не видит ни пути, ни тела, ни сырых байтов — только разобранный тип запроса. Обойти барьер нельзя по типам, а остаток закрывает тест на AST.
+- **Внешний вход попадает в обработчик только через `server/internal/rpc`** (Задача 9). Обработчик не видит ни пути, ни тела, ни сырых байтов — только разобранный тип запроса. Обойти барьер нельзя по типам, а остаток закрывает тест на AST.
 - **Ничто не блокируется на вводе-выводе.** На сервере: обработчик не делает работы, зависящей от диска или сети — всё, что можно посчитать, считается при старте и лежит готовым в памяти. Когда в В2 появится тик, правило ужесточается: цикл тика не ждёт сети никогда, команды кладутся в очередь и разбираются фазой тика. На клиенте: HTTP только асинхронный, главный поток Godot не ждёт ответа ни при каких условиях (правило клиентского плана, здесь записано, чтобы не потерялось).
-- `internal/geom` и `internal/units` не переписываются. Единственная правка в `geom` — комментарий к `Primitive.Length` (Задача 1).
+- `server/internal/geom` и `server/internal/units` не переписываются. Единственная правка в `geom` — комментарий к `Primitive.Length` (Задача 1).
 
 ---
 
@@ -29,18 +29,18 @@
 
 | Файл | Ответственность |
 |---|---|
-| `internal/geom/geom.go` | *правка комментария*: `Length` — длина в плане (`u`), не по оси пути |
-| `internal/mapfmt/schema.go` | типы файла карты; ничего не делает, только описывает |
-| `internal/mapfmt/limits.go` | лимиты парсера одним местом |
-| `internal/mapfmt/decode.go` | строгий разбор: дубликаты ключей, глубина, конечность чисел |
-| `internal/mapfmt/validate.go` | проверки формы: ID, домены выравниваний, ссылки |
-| `internal/track/profile.go` | вертикальный профиль, `u → s` в замкнутой форме |
-| `internal/track/propagate.go` | распространение поз от якоря, замыкание циклов |
-| `internal/track/compile.go` | `CompiledTrack`, `RenderGeometry`, перевод объектов в `s` |
-| `internal/track/hash.go` | нормализованная модель, хеши, манифест ревизии |
-| `internal/httpapi/geometry.go` | `GET /maps/{id}/revisions/{n}/geometry` |
-| `cmd/clearahead/main.go` | бинарь: загрузить карту, поднять сервер |
-| `maps/st_a.json` | станция руками: четыре пути, две горловины, тупик, подъездной |
+| `server/internal/geom/geom.go` | *правка комментария*: `Length` — длина в плане (`u`), не по оси пути |
+| `server/internal/mapfmt/schema.go` | типы файла карты; ничего не делает, только описывает |
+| `server/internal/mapfmt/limits.go` | лимиты парсера одним местом |
+| `server/internal/mapfmt/decode.go` | строгий разбор: дубликаты ключей, глубина, конечность чисел |
+| `server/internal/mapfmt/validate.go` | проверки формы: ID, домены выравниваний, ссылки |
+| `server/internal/track/profile.go` | вертикальный профиль, `u → s` в замкнутой форме |
+| `server/internal/track/propagate.go` | распространение поз от якоря, замыкание циклов |
+| `server/internal/track/compile.go` | `CompiledTrack`, `RenderGeometry`, перевод объектов в `s` |
+| `server/internal/track/hash.go` | нормализованная модель, хеши, манифест ревизии |
+| `server/internal/httpapi/geometry.go` | `GET /maps/{id}/revisions/{n}/geometry` |
+| `server/cmd/clearahead/main.go` | бинарь: загрузить карту, поднять сервер |
+| `server/server/maps/st_a.json` | станция руками: четыре пути, две горловины, тупик, подъездной |
 
 Разделение внутри `track` — по этапам конвейера: профиль ничего не знает о графе, распространение ничего не знает о хешах. Каждый файл читается отдельно.
 
@@ -49,9 +49,9 @@
 ## Задача 1: композиция поз и правка комментария в `geom`
 
 **Files:**
-- Modify: `internal/geom/geom.go:39`
-- Modify: `internal/geom/geom.go` — добавить `Compose` и `Invert`
-- Test: `internal/geom/geom_test.go` — дописать тесты композиции
+- Modify: `server/internal/geom/geom.go:39`
+- Modify: `server/internal/geom/geom.go` — добавить `Compose` и `Invert`
+- Test: `server/internal/geom/geom_test.go` — дописать тесты композиции
 
 **Interfaces:**
 - Consumes: —
@@ -82,7 +82,7 @@
 
 - [ ] **Шаг 1: Правка комментария**
 
-В `internal/geom/geom.go` заменить строку 39:
+В `server/internal/geom/geom.go` заменить строку 39:
 
 ```go
 	Length units.Distance // длина по оси пути
@@ -150,7 +150,7 @@ func TestChainIsRigidMotion(t *testing.T) {
 }
 ```
 
-Run: `go test ./internal/geom/ -run "TestCompose|TestChainIsRigid" -v`
+Run: `go test ./server/internal/geom/ -run "TestCompose|TestChainIsRigid" -v`
 Expected: FAIL, `undefined: Compose`
 
 - [ ] **Шаг 3: Реализация**
@@ -199,8 +199,8 @@ git commit -m "feat: композиция и обращение поз; Length -
 ## Задача 2: типы файла карты и лимиты
 
 **Files:**
-- Create: `internal/mapfmt/schema.go`
-- Create: `internal/mapfmt/limits.go`
+- Create: `server/internal/mapfmt/schema.go`
+- Create: `server/internal/mapfmt/limits.go`
 
 **Interfaces:**
 - Consumes: —
@@ -386,8 +386,8 @@ git commit -m "feat: типы файла карты и лимиты парсер
 ## Задача 3: строгий разбор
 
 **Files:**
-- Create: `internal/mapfmt/decode.go`
-- Test: `internal/mapfmt/decode_test.go`
+- Create: `server/internal/mapfmt/decode.go`
+- Test: `server/internal/mapfmt/decode_test.go`
 
 **Interfaces:**
 - Consumes: `Map`, лимиты из Задачи 2.
@@ -476,7 +476,7 @@ func TestDecodeDepthLimit(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/mapfmt/ -run TestDecode -v`
+Run: `go test ./server/internal/mapfmt/ -run TestDecode -v`
 Expected: FAIL, `undefined: Decode`
 
 - [ ] **Шаг 3: Реализация**
@@ -624,7 +624,7 @@ func checkFinite(v reflect.Value, path string) error {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/mapfmt/ -run TestDecode -v`
+Run: `go test ./server/internal/mapfmt/ -run TestDecode -v`
 Expected: PASS по всем подтестам
 
 - [ ] **Шаг 5: Коммит**
@@ -639,8 +639,8 @@ git commit -m "feat: строгий разбор карты - дубликаты
 ## Задача 4: проверки формы
 
 **Files:**
-- Create: `internal/mapfmt/validate.go`
-- Test: `internal/mapfmt/validate_test.go`
+- Create: `server/internal/mapfmt/validate.go`
+- Test: `server/internal/mapfmt/validate_test.go`
 
 **Interfaces:**
 - Consumes: `*Map` из `Decode`.
@@ -746,7 +746,7 @@ func TestValidateRejects(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/mapfmt/ -run TestValidate -v`
+Run: `go test ./server/internal/mapfmt/ -run TestValidate -v`
 Expected: FAIL, `undefined: Validate`
 
 - [ ] **Шаг 3: Реализация**
@@ -1136,7 +1136,7 @@ func (m *Map) validateAnchors(ports map[string]Port) error {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/mapfmt/ -v`
+Run: `go test ./server/internal/mapfmt/ -v`
 Expected: PASS
 
 - [ ] **Шаг 5: Коммит**
@@ -1151,8 +1151,8 @@ git commit -m "feat: проверки формы карты - домены, kind
 ## Задача 5: вертикальный профиль и отображение `u → s`
 
 **Files:**
-- Create: `internal/track/profile.go`
-- Test: `internal/track/profile_test.go`
+- Create: `server/internal/track/profile.go`
+- Test: `server/internal/track/profile_test.go`
 
 **Interfaces:**
 - Consumes: `mapfmt.Alignments`, `units.Distance`.
@@ -1311,7 +1311,7 @@ func arcLenLinear(g0, g1, l float64) float64 {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/track/ -run TestProfile -v`
+Run: `go test ./server/internal/track/ -run TestProfile -v`
 Expected: FAIL, `undefined: ProfileFrom`
 
 - [ ] **Шаг 3: Реализация**
@@ -1483,7 +1483,7 @@ func (s Segment) spatialLen() float64 {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/track/ -run TestProfile -v`
+Run: `go test ./server/internal/track/ -run TestProfile -v`
 Expected: PASS по всем подтестам
 
 - [ ] **Шаг 5: Коммит**
@@ -1498,8 +1498,8 @@ git commit -m "feat: вертикальный профиль и u->s в замк
 ## Задача 6: распространение поз и замыкание циклов
 
 **Files:**
-- Create: `internal/track/propagate.go`
-- Test: `internal/track/propagate_test.go`
+- Create: `server/internal/track/propagate.go`
+- Test: `server/internal/track/propagate_test.go`
 
 **Interfaces:**
 - Consumes: `*mapfmt.Map`, `geom.Pose`, `geom.Chain`, `Profile`.
@@ -1672,7 +1672,7 @@ func TestPropagateClosureMismatch(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/track/ -run TestPropagate -v`
+Run: `go test ./server/internal/track/ -run TestPropagate -v`
 Expected: FAIL, `undefined: Propagate`
 
 - [ ] **Шаг 3: Реализация**
@@ -1929,7 +1929,7 @@ func buildElements(m *mapfmt.Map) (map[string]Element, error) {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/track/ -v`
+Run: `go test ./server/internal/track/ -v`
 Expected: PASS
 
 - [ ] **Шаг 5: Коммит**
@@ -1944,8 +1944,8 @@ git commit -m "feat: распространение поз от якоря и з
 ## Задача 7: компиляция в `CompiledTrack` и `RenderGeometry`
 
 **Files:**
-- Create: `internal/track/compile.go`
-- Test: `internal/track/compile_test.go`
+- Create: `server/internal/track/compile.go`
+- Test: `server/internal/track/compile_test.go`
 
 **Interfaces:**
 - Consumes: `Propagate`, `Profile`, `mapfmt.Map`.
@@ -2053,7 +2053,7 @@ func TestCompileDeterministic(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/track/ -run TestCompile -v`
+Run: `go test ./server/internal/track/ -run TestCompile -v`
 Expected: FAIL, `undefined: Compile`
 
 - [ ] **Шаг 3: Реализация**
@@ -2224,7 +2224,7 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/track/ -v`
+Run: `go test ./server/internal/track/ -v`
 Expected: PASS
 
 - [ ] **Шаг 5: Коммит**
@@ -2239,8 +2239,8 @@ git commit -m "feat: компиляция в CompiledTrack и RenderGeometry [Cl
 ## Задача 8: хеши и манифест ревизии
 
 **Files:**
-- Create: `internal/track/hash.go`
-- Test: `internal/track/hash_test.go`
+- Create: `server/internal/track/hash.go`
+- Test: `server/internal/track/hash_test.go`
 
 **Interfaces:**
 - Consumes: `*mapfmt.Map`, `*CompiledTrack`, `*RenderGeometry`.
@@ -2297,7 +2297,7 @@ func TestManifestChangesOnGeometry(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/track/ -run TestManifest -v`
+Run: `go test ./server/internal/track/ -run TestManifest -v`
 Expected: FAIL, `undefined: BuildManifest`
 
 - [ ] **Шаг 3: Реализация**
@@ -2400,7 +2400,7 @@ func writeRenderModel(w io.Writer, rg *RenderGeometry) {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/track/ -v`
+Run: `go test ./server/internal/track/ -v`
 Expected: PASS
 
 - [ ] **Шаг 5: Коммит**
@@ -2415,10 +2415,10 @@ git commit -m "feat: хеши по нормализованной модели �
 ## Задача 9: контракт с клиентом и барьер валидации
 
 **Files:**
-- Create: `internal/protocol/protocol.go`
-- Create: `internal/rpc/dispatch.go`
-- Test: `internal/rpc/dispatch_test.go`
-- Test: `internal/rpc/barrier_test.go`
+- Create: `server/internal/protocol/protocol.go`
+- Create: `server/internal/rpc/dispatch.go`
+- Test: `server/internal/rpc/dispatch_test.go`
+- Test: `server/internal/rpc/barrier_test.go`
 
 **Interfaces:**
 - Consumes: —
@@ -2437,7 +2437,7 @@ git commit -m "feat: хеши по нормализованной модели �
   содержит неэкспортируемые методы и реализуем только внутри `protocol`.
 - Невалидный вход даёт ошибку до вызова обработчика; обработчик не вызывается —
   проверяется тестом со счётчиком вызовов.
-- Тест барьера обходит AST и падает, если вне `internal/rpc` встречается
+- Тест барьера обходит AST и падает, если вне `server/internal/rpc` встречается
   `PathValue`, `json.Unmarshal`, `json.NewDecoder`, `r.Body` или `r.URL.Query`.
 - Неизвестный метод — ошибка, а не паника.
 
@@ -2529,8 +2529,8 @@ func TestDispatchRejectsGarbageBody(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/rpc/ -v`
-Expected: FAIL, `no required module provides package .../internal/protocol`
+Run: `go test ./server/internal/rpc/ -v`
+Expected: FAIL, `no required module provides package .../server/internal/protocol`
 
 - [ ] **Шаг 3: Контракт**
 
@@ -2734,7 +2734,7 @@ func TestBarrierNoRawInputOutsideRPC(t *testing.T) {
 
 - [ ] **Шаг 6: Тесты проходят**
 
-Run: `go test ./internal/rpc/ ./internal/protocol/ -v`
+Run: `go test ./server/internal/rpc/ ./server/internal/protocol/ -v`
 Expected: PASS
 
 - [ ] **Шаг 7: Коммит**
@@ -2749,9 +2749,9 @@ git commit -m "feat: контракт с клиентом и барьер вал
 ## Задача 10: HTTP-ручка геометрии и бинарь
 
 **Files:**
-- Create: `internal/httpapi/geometry.go`
-- Create: `cmd/clearahead/main.go`
-- Test: `internal/httpapi/geometry_test.go`
+- Create: `server/internal/httpapi/geometry.go`
+- Create: `server/cmd/clearahead/main.go`
+- Test: `server/internal/httpapi/geometry_test.go`
 
 **Interfaces:**
 - Consumes: `track.RenderGeometry`, `track.Manifest`, `rpc.Mux`, `protocol.GeometryRequest`.
@@ -2849,7 +2849,7 @@ func TestGeometryRejects(t *testing.T) {
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
 
-Run: `go test ./internal/httpapi/ -v`
+Run: `go test ./server/internal/httpapi/ -v`
 Expected: FAIL, `undefined: NewHandler`
 
 - [ ] **Шаг 3: Реализация ручки**
@@ -2907,7 +2907,7 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 
 - [ ] **Шаг 4: Тесты проходят**
 
-Run: `go test ./internal/httpapi/ -v`
+Run: `go test ./server/internal/httpapi/ -v`
 Expected: PASS
 
 - [ ] **Шаг 5: Бинарь**
@@ -2929,7 +2929,7 @@ import (
 )
 
 func main() {
-	mapPath := flag.String("map", "maps/st_a.json", "путь к файлу карты")
+	mapPath := flag.String("map", "server/maps/st_a.json", "путь к файлу карты")
 	addr := flag.String("addr", ":8080", "адрес прослушивания")
 	flag.Parse()
 
@@ -2989,8 +2989,8 @@ git commit -m "feat: HTTP-ручка геометрии с ETag и immutable, б
 ## Задача 11: карта станции руками и сквозной приёмочный тест
 
 **Files:**
-- Create: `maps/st_a.json`
-- Test: `internal/track/acceptance_test.go`
+- Create: `server/server/maps/st_a.json`
+- Test: `server/internal/track/acceptance_test.go`
 
 **Interfaces:**
 - Consumes: весь конвейер.
@@ -2999,7 +2999,7 @@ git commit -m "feat: HTTP-ручка геометрии с ETag и immutable, б
 **Acceptance Criteria:**
 - Станция содержит: четыре пути, две горловины, тупик отстоя локомотивов,
   подъездной путь предприятия с одной стрелкой примыкания.
-- `maps/st_a.json` проходит разбор, валидацию и компиляцию без ошибок.
+- `server/server/maps/st_a.json` проходит разбор, валидацию и компиляцию без ошибок.
 - Замыкание всех циклов сходится в пределах допуска.
 - Сквозной тест грузит настоящий файл из репозитория, а не строку в коде.
 - `go run ./cmd/clearahead` поднимается и отдаёт геометрию по `curl`.
@@ -3014,7 +3014,7 @@ git commit -m "feat: HTTP-ручка геометрии с ETag и immutable, б
 
 - [ ] **Шаг 1: Написать карту**
 
-Создать `maps/st_a.json` по образцу §11 спеки, развернув его до полной станции.
+Создать `server/server/maps/st_a.json` по образцу §11 спеки, развернув его до полной станции.
 Порядок построения, чтобы позы сходились:
 
 1. Западная граница `ST_A_W.P1` — якорь в (0, 0, 142, heading 0).
@@ -3095,7 +3095,7 @@ Expected: PASS во всех пакетах
 - [ ] **Шаг 4: Проверка живьём**
 
 ```bash
-go run ./cmd/clearahead -map maps/st_a.json &
+go run ./cmd/clearahead -map server/maps/st_a.json &
 sleep 1
 curl -sD- http://localhost:8080/maps/ST_A/revisions/1/geometry | head -20
 ```

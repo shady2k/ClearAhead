@@ -3,19 +3,19 @@
 Сначала прочитай `.internal/briefs/COMMON.md` — общие правила, они обязательны.
 
 ## Ты владеешь
-- `internal/mapfmt/limits.go`
-- `internal/mapfmt/schema.go`
-- `internal/mapfmt/decode.go`
-- `internal/mapfmt/validate.go`
-- `internal/mapfmt/decode_test.go`
-- `internal/mapfmt/validate_test.go`
+- `server/internal/mapfmt/limits.go`
+- `server/internal/mapfmt/schema.go`
+- `server/internal/mapfmt/decode.go`
+- `server/internal/mapfmt/validate.go`
+- `server/internal/mapfmt/decode_test.go`
+- `server/internal/mapfmt/validate_test.go`
 
-Каталога `internal/mapfmt/` ещё нет — создай его.
+Каталога `server/internal/mapfmt/` ещё нет — создай его.
 
 ## Чужое, не трогать
-`internal/geom/**` (воркер A), `internal/protocol/**` и `internal/rpc/**` (воркер C),
-`internal/track/**`, `internal/httpapi/**`, `cmd/**`, `maps/**`.
-`internal/units/**` — только читать, не править.
+`server/internal/geom/**` (воркер A), `server/internal/protocol/**` и `server/internal/rpc/**` (воркер C),
+`server/internal/track/**`, `server/internal/httpapi/**`, `server/cmd/**`, `server/maps/**`.
+`server/internal/units/**` — только читать, не править.
 
 ## Что сделать
 Задачи 2, 3 и 4 из `.internal/plans/2026-08-08-b1-server-half.md`, по порядку.
@@ -53,6 +53,6 @@
 
 ## Проверка (строго эта, не шире)
 ```
-go build ./internal/mapfmt/ && go vet ./internal/mapfmt/ && go test ./internal/mapfmt/ -v
+go build ./server/internal/mapfmt/ && go vet ./server/internal/mapfmt/ && go test ./server/internal/mapfmt/ -v
 ```
 Сообщи в отчёте: сколько тестов, сколько прошло, какие случаи отказа покрыты.

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/shady2k/ClearAhead/internal/units"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Pose — положение и направление точки пути. Метры и радианы.

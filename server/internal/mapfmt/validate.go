@@ -5,7 +5,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/shady2k/ClearAhead/internal/units"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // domainEpsilon — допуск на совпадение доменов трёх выравниваний. Один

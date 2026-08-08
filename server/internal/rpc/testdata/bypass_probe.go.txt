@@ -3,8 +3,8 @@ package probe
 import (
 	"context"
 
-	"github.com/shady2k/ClearAhead/internal/protocol"
-	"github.com/shady2k/ClearAhead/internal/rpc"
+	"github.com/shady2k/ClearAhead/server/internal/protocol"
+	"github.com/shady2k/ClearAhead/server/internal/rpc"
 )
 
 // hole — попытка обойти барьер валидации встраиванием: sealed() наследуется

@@ -4,8 +4,8 @@ import (
 	"math"
 	"testing"
 
-	"github.com/shady2k/ClearAhead/internal/geom"
-	"github.com/shady2k/ClearAhead/internal/units"
+	"github.com/shady2k/ClearAhead/server/internal/geom"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Эталоны здесь посчитаны из геометрии окружности вручную, а не той функцией,

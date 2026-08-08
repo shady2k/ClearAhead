@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/shady2k/ClearAhead/internal/protocol"
+	"github.com/shady2k/ClearAhead/server/internal/protocol"
 )
 
 type route func(context.Context, protocol.Input) (any, error)

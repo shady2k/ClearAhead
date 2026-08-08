@@ -3,16 +3,16 @@
 Сначала прочитай `.internal/briefs/COMMON.md` — общие правила, они обязательны.
 
 ## Ты владеешь
-- `internal/protocol/protocol.go`
-- `internal/rpc/dispatch.go`
-- `internal/rpc/dispatch_test.go`
-- `internal/rpc/barrier_test.go`
+- `server/internal/protocol/protocol.go`
+- `server/internal/rpc/dispatch.go`
+- `server/internal/rpc/dispatch_test.go`
+- `server/internal/rpc/barrier_test.go`
 
 Каталогов ещё нет — создай их.
 
 ## Чужое, не трогать
-`internal/geom/**` (воркер A), `internal/mapfmt/**` (воркер B), `internal/units/**`,
-`internal/track/**`, `internal/httpapi/**`, `cmd/**`, `maps/**`.
+`server/internal/geom/**` (воркер A), `server/internal/mapfmt/**` (воркер B), `server/internal/units/**`,
+`server/internal/track/**`, `server/internal/httpapi/**`, `server/cmd/**`, `server/maps/**`.
 
 ## Что сделать
 Задача 9 из `.internal/plans/2026-08-08-b1-server-half.md`. Полный код в плане.
@@ -41,15 +41,15 @@
 неоткуда взять**.
 
 ## Тест барьера на AST
-Второй слой: `barrier_test.go` обходит AST пакетов вне `internal/rpc` и падает, если
+Второй слой: `barrier_test.go` обходит AST пакетов вне `server/internal/rpc` и падает, если
 встречает `PathValue`, `Unmarshal`, `NewDecoder`, `ParseForm` — то есть чтение сырого
 внешнего входа мимо барьера.
 
-**Важно:** каталогов `internal/httpapi`, `internal/track` и `cmd` на момент твоей работы
+**Важно:** каталогов `server/internal/httpapi`, `server/internal/track` и `cmd` на момент твоей работы
 может ещё не быть — их делают другие воркеры позже. `filepath.Glob` по несуществующему
 каталогу вернёт пустой список без ошибки, тест просто пройдёт вхолостую. Это ожидаемо,
 не считай это провалом и не создавай эти каталоги.
-`internal/mapfmt` из проверки исключён сознательно: он разбирает файл карты с диска, а не
+`server/internal/mapfmt` из проверки исключён сознательно: он разбирает файл карты с диска, а не
 внешний вызов, и у него свой строгий разбор.
 
 ## Критерии приёмки
@@ -62,7 +62,7 @@
 
 ## Проверка (строго эта, не шире)
 ```
-go build ./internal/protocol/ ./internal/rpc/ && go vet ./internal/protocol/ ./internal/rpc/ && go test ./internal/rpc/ -v
+go build ./server/internal/protocol/ ./server/internal/rpc/ && go vet ./server/internal/protocol/ ./server/internal/rpc/ && go test ./server/internal/rpc/ -v
 ```
 В отчёте отдельно ответь: **можно ли в текущем коде зарегистрировать метод без разбора?**
 Если да — где дыра. Это главный вопрос задачи, не отвечай на него «нет» не проверив.

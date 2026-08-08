@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/shady2k/ClearAhead/internal/protocol"
+	"github.com/shady2k/ClearAhead/server/internal/protocol"
 )
 
 func TestDispatchParsesBeforeHandler(t *testing.T) {

@@ -3,12 +3,12 @@
 Сначала прочитай `.internal/briefs/COMMON.md` — общие правила, они обязательны.
 
 ## Ты владеешь
-- `internal/geom/geom.go`
-- `internal/geom/geom_test.go`
+- `server/internal/geom/geom.go`
+- `server/internal/geom/geom_test.go`
 
 ## Чужое, не трогать
-`internal/mapfmt/**` (воркер B), `internal/protocol/**` и `internal/rpc/**` (воркер C),
-`internal/track/**`, `internal/httpapi/**`, `cmd/**`, `maps/**`.
+`server/internal/mapfmt/**` (воркер B), `server/internal/protocol/**` и `server/internal/rpc/**` (воркер C),
+`server/internal/track/**`, `server/internal/httpapi/**`, `server/cmd/**`, `server/maps/**`.
 
 ## Что сделать
 Задача 1 из `.internal/plans/2026-08-08-b1-server-half.md`. Там полный код — бери оттуда.
@@ -38,10 +38,10 @@
 - `Chain.End(start) == Compose(start, Chain.End(нулевая поза))` с точностью 1e-9 на цепочке
   из прямой и двух дуг с разными знаками углов.
 - По конечной позе восстанавливается начальная с точностью 1e-9.
-- Все существующие тесты `internal/geom` продолжают проходить — их 272 строки, не сломай.
+- Все существующие тесты `server/internal/geom` продолжают проходить — их 272 строки, не сломай.
 
 ## Проверка (строго эта, не шире)
 ```
-go build ./internal/geom/ && go vet ./internal/geom/ && go test ./internal/geom/ -v
+go build ./server/internal/geom/ && go vet ./server/internal/geom/ && go test ./server/internal/geom/ -v
 ```
 Сообщи в отчёте: сколько тестов было до тебя, сколько стало, сколько прошло.
