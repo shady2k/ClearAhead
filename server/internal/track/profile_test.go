@@ -118,3 +118,65 @@ func arcLenLinear(g0, g1, l float64) float64 {
 	f := func(g float64) float64 { return (g*math.Sqrt(1+g*g) + math.Asinh(g)) / 2 }
 	return (f(g1) - f(g0)) / k
 }
+
+// TestProfileUToSAgainstNumericIntegration — эталон, посчитанный ДРУГИМ методом.
+//
+// Остальные тесты профиля сверяют замкнутую форму с той же замкнутой формой,
+// переписанной в тест: общая алгебраическая ошибка продублировалась бы в обе
+// стороны и осталась незамеченной. Здесь эталон берётся численным
+// интегрированием s = ∫√(1+g²)du по Симпсону — независимо от первообразной.
+//
+// Заодно это единственный тест, который упадёт, если UToS подменить на s=u:
+// проверка монотонности такую подмену пропускает.
+func TestProfileUToSAgainstNumericIntegration(t *testing.T) {
+	a := mapfmt.Alignments{Vertical: []mapfmt.VPrim{
+		{Kind: "grade", Length: 100, SlopePermille: 5},
+		{Kind: "vertical_curve", Length: 300, EndSlopePermille: 35},
+		{Kind: "grade", Length: 100, SlopePermille: 35},
+	}}
+	p, err := ProfileFrom(a, 500*units.Meter)
+	if err != nil {
+		t.Fatalf("профиль: %v", err)
+	}
+	// g(u) кусочно: 0.005 на [0,100]; линейно 0.005→0.035 на [100,400]; 0.035 далее.
+	g := func(u float64) float64 {
+		switch {
+		case u <= 100:
+			return 0.005
+		case u <= 400:
+			return 0.005 + (0.035-0.005)*(u-100)/300
+		default:
+			return 0.035
+		}
+	}
+	simpson := func(upTo float64) float64 {
+		const n = 200000 // чётное
+		h := upTo / n
+		sum := math.Sqrt(1 + g(0)*g(0))
+		for i := 1; i < n; i++ {
+			w := 4.0
+			if i%2 == 0 {
+				w = 2.0
+			}
+			x := float64(i) * h
+			sum += w * math.Sqrt(1+g(x)*g(x))
+		}
+		sum += math.Sqrt(1 + g(upTo)*g(upTo))
+		return sum * h / 3
+	}
+	for _, um := range []float64{50, 100, 250, 400, 500} {
+		u, _ := units.MetersToDistance(um)
+		got, err := p.UToS(u)
+		if err != nil {
+			t.Fatalf("UToS(%v м): %v", um, err)
+		}
+		want := simpson(um)
+		if math.Abs(got.Meters()-want) > 1e-4 {
+			t.Fatalf("u=%v м: s=%.6f, независимый эталон %.6f (расхождение %.2e м)",
+				um, got.Meters(), want, math.Abs(got.Meters()-want))
+		}
+		if math.Abs(got.Meters()-um) < 1e-9 {
+			t.Fatalf("u=%v м: s совпало с u — отображение выродилось", um)
+		}
+	}
+}

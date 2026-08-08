@@ -6,7 +6,6 @@ package httpapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -30,7 +29,10 @@ import (
 // Тело геометрии сериализуется один раз при создании, дальше только пишется в
 // сокет: внутри запроса нет ни чтения с диска, ни перекомпиляции, ни сети.
 func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
-	body, err := json.Marshal(rg)
+	// Байты берутся из track.RenderBody — того же места, по которому считается
+	// render_geometry_hash. Своя сериализация здесь означала бы, что ETag
+	// когда-нибудь опишет не то тело, которое ушло.
+	body, err := track.RenderBody(rg)
 	if err != nil {
 		panic("httpapi: геометрия не сериализуется: " + err.Error())
 	}

@@ -118,6 +118,11 @@ func validateAlignments(id string, a Alignments) error {
 	}
 
 	if len(a.Vertical) == 0 {
+		// Лимит примитивов проверяется ДО выхода: ранний return здесь делал его
+		// декоративным ровно для плоских карт, то есть для всех нынешних.
+		if nPrim > MaxPrimitives {
+			return fmt.Errorf("mapfmt: %s: примитивов больше %d", id, MaxPrimitives)
+		}
 		return nil
 	}
 	if a.Vertical[0].Kind != "grade" {
@@ -254,6 +259,12 @@ func (m *Map) collectElements() (map[string]bool, error) {
 func (m *Map) validateEdgeEnds(ports map[string]Port) error {
 	used := map[string]int{}
 	for _, e := range m.Topology.Edges {
+		// Оба конца в одном порту: Incidence{Port, Element} у такого ребра
+		// вырождается в один ключ, и компилятор не может представить его концы
+		// раздельно. Отвергаем здесь, а не роняем компилятор ниже.
+		if e.From == e.To {
+			return fmt.Errorf("mapfmt: ребро %s начинается и кончается в одном порту %s", e.ID, e.From)
+		}
 		for _, end := range []string{e.From, e.To} {
 			if _, ok := ports[end]; !ok {
 				return fmt.Errorf("mapfmt: ребро %s ссылается на несуществующий порт %s", e.ID, end)
@@ -369,7 +380,13 @@ func horizontalLengthU(a Alignments) (units.Distance, error) {
 	return u, nil
 }
 
-// validateAnchors требует ровно один якорь на связную компоненту.
+// validateAnchors проверяет, что якоря существуют и указывают на существующие
+// порты.
+//
+// «Ровно один якорь на связную компоненту» здесь НЕ проверяется: валидатор не
+// строит компонент связности. Инвариант держит компилятор (track.Propagate),
+// который отвергает и компоненту без якоря, и два якоря в одной. Комментарий
+// первой редакции обещал проверку, которой не было, — исправлено на правду.
 func (m *Map) validateAnchors(ports map[string]Port) error {
 	if len(m.Anchors) == 0 {
 		return fmt.Errorf("mapfmt: нет ни одного якоря")

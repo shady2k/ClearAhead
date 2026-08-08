@@ -138,9 +138,16 @@ func renderStation(t *testing.T) []byte {
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	out, err := json.MarshalIndent(rg, "", "  ")
+	// Байты берутся там же, где их берёт ручка и где считается ETag. Отступы
+	// добавляются только для читаемости диффа: эталон обязан быть выводим из
+	// отдаваемого тела, иначе он описывает не то, что уходит клиенту.
+	body, err := track.RenderBody(rg)
 	if err != nil {
 		t.Fatalf("сериализация: %v", err)
 	}
-	return out
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, body, "", "  "); err != nil {
+		t.Fatalf("форматирование: %v", err)
+	}
+	return pretty.Bytes()
 }

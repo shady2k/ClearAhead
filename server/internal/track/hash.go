@@ -3,6 +3,7 @@ package track
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"sort"
@@ -25,13 +26,28 @@ type Manifest struct {
 func BuildManifest(m *mapfmt.Map, ct *CompiledTrack, rg *RenderGeometry) (Manifest, error) {
 	th := sha256.New()
 	writeTrackModel(th, m, ct)
-	rh := sha256.New()
-	writeRenderModel(rh, rg)
+
+	// RenderGeometryHash считается по ТЕМ САМЫМ БАЙТАМ, которые уедут клиенту,
+	// а не по рукописной модели рядом с ними.
+	//
+	// Первая редакция писала свою текстовую выжимку и не включала в неё Slope,
+	// хотя он сериализуется в JSON. Тело менялось, хеш — нет, и клиент с
+	// Cache-Control: immutable получал 304 и НАВСЕГДА сохранял устаревшую
+	// геометрию. Ошибка не давала отказа: сервер стартовал, всё выглядело
+	// исправным.
+	//
+	// Пока хешируется выжимка, любое новое поле провода надо не забыть добавить
+	// и туда. Забудут. Байты ответа забыть нельзя: они и есть ответ.
+	body, err := renderBody(rg)
+	if err != nil {
+		return Manifest{}, err
+	}
+	rh := sha256.Sum256(body)
 	return Manifest{
 		MapID:              m.MapID,
 		Revision:           m.MapRevision,
 		TrackHash:          hex.EncodeToString(th.Sum(nil)),
-		RenderGeometryHash: hex.EncodeToString(rh.Sum(nil)),
+		RenderGeometryHash: hex.EncodeToString(rh[:]),
 	}, nil
 }
 
@@ -81,13 +97,16 @@ func writeTrackModel(w io.Writer, m *mapfmt.Map, ct *CompiledTrack) {
 	}
 }
 
-func writeRenderModel(w io.Writer, rg *RenderGeometry) {
-	fmt.Fprintf(w, "%s|%d\n", rg.MapID, rg.Revision)
-	for _, e := range rg.Elements {
-		fmt.Fprintf(w, "el|%s|%.12g|%.12g|%.12g|%.12g\n",
-			e.ID, e.Start.Plan.X, e.Start.Plan.Y, e.Start.Plan.Heading, e.Start.Z)
-		for _, p := range e.Prims {
-			fmt.Fprintf(w, "  p|%s|%.12g|%.12g|%.12g\n", p.Kind, p.LengthM, p.Radius, p.Angle)
-		}
+// RenderBody сериализует геометрию ровно так, как её отдаёт ручка.
+//
+// Единственное место сериализации провода: и хеш, и HTTP-ответ обязаны брать
+// байты отсюда, иначе они разойдутся, а ETag начнёт лгать.
+func RenderBody(rg *RenderGeometry) ([]byte, error) { return renderBody(rg) }
+
+func renderBody(rg *RenderGeometry) ([]byte, error) {
+	b, err := json.Marshal(rg)
+	if err != nil {
+		return nil, fmt.Errorf("track: сериализация геометрии: %w", err)
 	}
+	return b, nil
 }
