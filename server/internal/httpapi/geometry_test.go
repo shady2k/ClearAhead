@@ -82,3 +82,18 @@ func TestGeometryBadPath(t *testing.T) {
 		}
 	}
 }
+
+// TestGeometryHead — HEAD обязателен наравне с GET (RFC 9110): на нём держится
+// проверка кэша прокси и клиентов. Первая редакция отвечала на него 405, и
+// поймано это было не тестом, а живым curl -I на гейте эпика.
+func TestGeometryHead(t *testing.T) {
+	h, man := newTestHandler(t)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("HEAD", "/maps/ST_A/revisions/1/geometry", nil))
+	if w.Code != 200 {
+		t.Fatalf("HEAD: код %d, ожидалось 200", w.Code)
+	}
+	if got, want := w.Header().Get("ETag"), `"`+man.RenderGeometryHash+`"`; got != want {
+		t.Fatalf("HEAD: ETag %q, ожидалось %q", got, want)
+	}
+}

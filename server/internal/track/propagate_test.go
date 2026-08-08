@@ -48,8 +48,8 @@ func TestPropagateChain(t *testing.T) {
 	if err != nil {
 		t.Fatalf("распространение: %v", err)
 	}
-	// N2.P1 — конец E1: 100 м по X. Heading смотрит внутрь E1, то есть назад.
-	p := poses["N2.P1"]
+	// Конец E1 в порту N2.P1: 100 м по X. Heading смотрит внутрь E1, то есть назад.
+	p := poses[Incidence{Port: "N2.P1", Element: "E1"}]
 	if math.Abs(p.Plan.X-100) > 1e-6 || math.Abs(p.Plan.Y) > 1e-6 {
 		t.Fatalf("N2.P1 в (%v, %v), ожидалось (100, 0)", p.Plan.X, p.Plan.Y)
 	}
@@ -87,7 +87,7 @@ func TestPropagateRejectsUnanchored(t *testing.T) {
 func ringWith(lastRadius string) string {
 	return `{
 	  "format_version": 1, "map_id": "C", "map_revision": 1,
-	  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+	  "anchors": { "N1.P1": { "element": "E1", "x": 0, "y": 0, "z": 0, "heading": 0 } },
 	  "topology": {
 	    "nodes": [
 	      { "id": "N1", "ports": [ { "id": "P1" } ] },

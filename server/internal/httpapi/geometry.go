@@ -46,9 +46,12 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 		})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			w.Header().Set("Allow", http.MethodGet)
-			http.Error(w, "только GET", http.StatusMethodNotAllowed)
+		// HEAD обязателен наравне с GET: RFC 9110 требует его от сервера общего
+		// назначения, и на нём держится проверка кэша прокси и клиентов. Тело
+		// для HEAD подавляет net/http сам, поэтому дальше ветвление не нужно.
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			w.Header().Set("Allow", "GET, HEAD")
+			http.Error(w, "только GET и HEAD", http.StatusMethodNotAllowed)
 			return
 		}
 		id, rev, ok := geometryPath(r.URL.Path)
