@@ -1,0 +1,25 @@
+package probe
+
+import (
+	"context"
+
+	"github.com/shady2k/ClearAhead/internal/protocol"
+	"github.com/shady2k/ClearAhead/internal/rpc"
+)
+
+// hole — попытка обойти барьер валидации встраиванием: sealed() наследуется
+// промоушеном от встроенного запроса, а экспортированный Parse переопределяется
+// заглушкой, которая ничего не проверяет.
+type hole struct {
+	protocol.GeometryRequest
+}
+
+func (h *hole) Parse(in protocol.Input) error { return nil }
+
+func Bypass() {
+	m := rpc.NewMux()
+	rpc.Register[hole](m, "hole", func(ctx context.Context, r hole) (string, error) {
+		return "обработчик получил неразобранный вход", nil
+	})
+	_, _ = m.Dispatch(context.Background(), "hole", protocol.Input{})
+}
