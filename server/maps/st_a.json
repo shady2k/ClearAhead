@@ -1,0 +1,153 @@
+{
+  "format_version": 1,
+  "map_id": "ST_A",
+  "map_revision": 1,
+
+  "georeference": {
+    "datum": "WGS84",
+    "origin": { "lat": 55.7558, "lon": 37.6173, "h": 150.0 },
+    "origin_height_kind": "ellipsoidal",
+    "x_axis_azimuth_deg": 90.0,
+    "ground_to_grid": 1.0,
+    "provenance": { "source": "hand-authored", "date": "2026-08-08" }
+  },
+
+  "anchors": {
+    "ST_A_W.P1": { "x": 0.0, "y": 0.0, "z": 142.0, "heading": 0.0 }
+  },
+
+  "topology": {
+    "nodes": [
+      { "id": "ST_A_W",     "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "ST_A_T4_E",  "ports": [ { "id": "P1" } ] },
+      { "id": "ST_A_E",     "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "ST_A_SIDING","ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
+      { "id": "ST_A_IND",   "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+
+    "turnouts": [
+      { "id": "ST_A_SW_1",   "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_2",   "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_3",   "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_SID", "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_IND", "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_E1",  "hand": "left", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_E2",  "hand": "left", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } },
+      { "id": "ST_A_SW_E3",  "hand": "left", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } }
+    ],
+
+    "edges": [
+      { "id": "ST_A_E_APPROACH", "from": "ST_A_W.P1",        "to": "ST_A_SW_1.C" },
+      { "id": "ST_A_E_W12",      "from": "ST_A_SW_1.D",      "to": "ST_A_SW_2.C" },
+      { "id": "ST_A_E_W23",      "from": "ST_A_SW_2.D",      "to": "ST_A_SW_3.C" },
+      { "id": "ST_A_E_W34",      "from": "ST_A_SW_3.D",      "to": "ST_A_SW_SID.C" },
+      { "id": "ST_A_E_W1IND",    "from": "ST_A_SW_1.S",      "to": "ST_A_SW_IND.C" },
+      { "id": "ST_A_E_IND",      "from": "ST_A_SW_IND.D",    "to": "ST_A_IND.P1" },
+      { "id": "ST_A_E_SID",      "from": "ST_A_SW_SID.D",    "to": "ST_A_SIDING.P1" },
+      { "id": "ST_A_E_T1",       "from": "ST_A_SW_IND.S",    "to": "ST_A_SW_E1.S" },
+      { "id": "ST_A_E_T2",       "from": "ST_A_SW_2.S",      "to": "ST_A_SW_E2.S" },
+      { "id": "ST_A_E_T3",       "from": "ST_A_SW_3.S",      "to": "ST_A_SW_E3.S" },
+      { "id": "ST_A_E_T4",       "from": "ST_A_SW_SID.S",    "to": "ST_A_T4_E.P1" },
+      { "id": "ST_A_E_E12",      "from": "ST_A_SW_E1.D",     "to": "ST_A_SW_E2.C" },
+      { "id": "ST_A_E_E23",      "from": "ST_A_SW_E2.D",     "to": "ST_A_SW_E3.C" },
+      { "id": "ST_A_E_E34",      "from": "ST_A_SW_E3.D",     "to": "ST_A_T4_E.P1" },
+      { "id": "ST_A_E_EXIT",     "from": "ST_A_SW_E1.C",     "to": "ST_A_E.P1" }
+    ],
+
+    "trackside": [
+      {
+        "id": "ST_A_PLAT_2",
+        "kind": "platform",
+        "span": [ { "element": "ST_A_E_T2", "from": 100.0, "to": 600.0 } ],
+        "side": "right"
+      },
+      {
+        "id": "ST_A_PLAT_3",
+        "kind": "platform",
+        "span": [ { "element": "ST_A_E_T3", "from": 100.0, "to": 600.0 } ],
+        "side": "left"
+      }
+    ]
+  },
+
+  "geometry": {
+    "turnouts": {
+      "ST_A_SW_1": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      },
+      "ST_A_SW_2": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      },
+      "ST_A_SW_3": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      },
+      "ST_A_SW_SID": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      },
+      "ST_A_SW_IND": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      },
+      "ST_A_SW_E1": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 0.1107 } ] }
+      },
+      "ST_A_SW_E2": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 0.1107 } ] }
+      },
+      "ST_A_SW_E3": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 0.1107 } ] }
+      }
+    },
+
+    "edges": {
+      "ST_A_E_APPROACH": { "horizontal": [ { "kind": "straight", "length": 300.0 } ] },
+      "ST_A_E_W12":      { "horizontal": [
+        { "kind": "straight", "length": 14.731 },
+        { "kind": "arc", "radius": 300.0, "angle": 0.1107 }
+      ] },
+      "ST_A_E_W23":      { "horizontal": [
+        { "kind": "straight", "length": 14.731 },
+        { "kind": "arc", "radius": 300.0, "angle": 0.1107 }
+      ] },
+      "ST_A_E_W34":      { "horizontal": [
+        { "kind": "straight", "length": 14.731 },
+        { "kind": "arc", "radius": 300.0, "angle": 0.1107 }
+      ] },
+      "ST_A_E_W1IND":    { "horizontal": [ { "kind": "straight", "length": 10.0 } ] },
+      "ST_A_E_IND":      { "horizontal": [ { "kind": "straight", "length": 400.0 } ] },
+      "ST_A_E_SID":      { "horizontal": [ { "kind": "straight", "length": 120.0 } ] },
+      "ST_A_E_T1":       { "horizontal": [ { "kind": "straight", "length": 850.0 } ] },
+      "ST_A_E_T2":       { "horizontal": [ { "kind": "straight", "length": 850.0 } ] },
+      "ST_A_E_T3":       { "horizontal": [ { "kind": "straight", "length": 850.0 } ] },
+      "ST_A_E_T4":       { "horizontal": [ { "kind": "straight", "length": 850.0 } ] },
+      "ST_A_E_E12":      { "horizontal": [
+        { "kind": "arc", "radius": 300.0, "angle": -0.1107 },
+        { "kind": "straight", "length": 14.731 }
+      ] },
+      "ST_A_E_E23":      { "horizontal": [
+        { "kind": "arc", "radius": 300.0, "angle": -0.1107 },
+        { "kind": "straight", "length": 14.731 }
+      ] },
+      "ST_A_E_E34":      { "horizontal": [
+        { "kind": "arc", "radius": 300.0, "angle": -0.1107 },
+        { "kind": "straight", "length": 14.731 }
+      ] },
+      "ST_A_E_EXIT":     { "horizontal": [ { "kind": "straight", "length": 100.0 } ] }
+    }
+  }
+}
