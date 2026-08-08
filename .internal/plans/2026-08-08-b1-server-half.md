@@ -46,22 +46,41 @@
 
 ---
 
-## Задача 1: правка комментария в `geom`
+## Задача 1: композиция поз и правка комментария в `geom`
 
 **Files:**
 - Modify: `internal/geom/geom.go:39`
+- Modify: `internal/geom/geom.go` — добавить `Compose` и `Invert`
+- Test: `internal/geom/geom_test.go` — дописать тесты композиции
 
 **Interfaces:**
 - Consumes: —
-- Produces: —
+- Produces: `func Compose(a, b Pose) Pose`, `func Invert(p Pose) Pose`
 
 **Acceptance Criteria:**
 - Комментарий к `Primitive.Length` называет величину длиной в плане (`u`), а не «длиной по оси пути».
+- `Compose(p, Invert(p))` даёт нулевую позу с точностью 1e-9.
+- `Chain.End(start) == Compose(start, Chain.End(нулевая поза))` для цепочки из прямых и дуг с точностью 1e-9.
 - `go test ./...` проходит.
 
-Обоснование: после введения двух координат старый комментарий стал ложью. `geom` считает план; при ненулевом уклоне пространственная длина оси больше.
+**Зачем `Compose` и `Invert`.** Обход графа приходит к элементу с обеих сторон.
+Если известен конец, а нужно начало, наивный путь — прокрутить цепочку задом
+наперёд, меняя знак угла у каждой дуги. Это требует правила разворота для
+каждого вида примитива и даёт зеркальную горловину при ошибке в знаке.
 
-- [ ] **Шаг 1: Правка**
+Вместо этого используется свойство, которое у цепочки есть и так: **цепочка —
+жёсткое движение плоскости.** Сколько бы в ней ни было звеньев, суммарно она
+сдвигает и поворачивает. Значит:
+
+```
+Δ = Chain.End(нулевая поза)      // суммарное движение цепочки
+конец = Compose(начало, Δ)        // ровно то, что делает Chain.End
+начало = Compose(конец, Invert(Δ))
+```
+
+Правила для отдельных кривых не нужны: клотоида, когда придёт, уже учтена в `Δ`.
+
+- [ ] **Шаг 1: Правка комментария**
 
 В `internal/geom/geom.go` заменить строку 39:
 
@@ -80,16 +99,99 @@
 
 Там же поправить комментарий к `Advance` (строка 75): «t измеряется вдоль оси пути» → «t измеряется в плане».
 
-- [ ] **Шаг 2: Тесты**
+- [ ] **Шаг 2: Падающий тест композиции**
+
+```go
+func TestComposeInvertRoundTrip(t *testing.T) {
+	for _, p := range []Pose{
+		{X: 100, Y: -50, Heading: 0.7},
+		{X: -3, Y: 0.5, Heading: -3.0},
+		{X: 0, Y: 0, Heading: 0},
+	} {
+		got := Compose(p, Invert(p))
+		if math.Abs(got.X) > 1e-9 || math.Abs(got.Y) > 1e-9 || math.Abs(got.Heading) > 1e-9 {
+			t.Fatalf("Compose(%v, Invert(%v)) = %v, ожидалась нулевая поза", p, p, got)
+		}
+	}
+}
+
+// TestChainIsRigidMotion — то свойство, ради которого Compose существует:
+// цепочка целиком есть одно движение, поэтому её можно применить и отменить,
+// не разбирая на звенья.
+func TestChainIsRigidMotion(t *testing.T) {
+	a, err := Straight(300 * units.Meter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Arc(300, -0.1107)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := Arc(300, 0.1107)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := Chain{a, b, c}
+	start := Pose{X: 17, Y: -4, Heading: 0.35}
+
+	delta := chain.End(Pose{})
+	direct := chain.End(start)
+	viaCompose := Compose(start, delta)
+	if math.Abs(direct.X-viaCompose.X) > 1e-9 ||
+		math.Abs(direct.Y-viaCompose.Y) > 1e-9 ||
+		math.Abs(direct.Heading-viaCompose.Heading) > 1e-9 {
+		t.Fatalf("цепочка не жёсткое движение: прямо %v, через Compose %v", direct, viaCompose)
+	}
+	// И обратно: по концу восстанавливается начало.
+	back := Compose(direct, Invert(delta))
+	if math.Abs(back.X-start.X) > 1e-9 || math.Abs(back.Y-start.Y) > 1e-9 {
+		t.Fatalf("восстановленное начало %v, ожидалось %v", back, start)
+	}
+}
+```
+
+Run: `go test ./internal/geom/ -run "TestCompose|TestChainIsRigid" -v`
+Expected: FAIL, `undefined: Compose`
+
+- [ ] **Шаг 3: Реализация**
+
+```go
+// Compose применяет движение b в системе координат позы a.
+//
+// Цепочка примитивов — жёсткое движение плоскости, поэтому Chain.End(start)
+// тождественно равно Compose(start, Chain.End(нулевая поза)). Это свойство и
+// позволяет восстанавливать начало элемента по его концу, не разворачивая
+// цепочку по звеньям.
+func Compose(a, b Pose) Pose {
+	c, s := math.Cos(a.Heading), math.Sin(a.Heading)
+	return Normalize(Pose{
+		X:       a.X + b.X*c - b.Y*s,
+		Y:       a.Y + b.X*s + b.Y*c,
+		Heading: a.Heading + b.Heading,
+	})
+}
+
+// Invert возвращает обратное движение: Compose(p, Invert(p)) — нулевая поза.
+func Invert(p Pose) Pose {
+	c, s := math.Cos(p.Heading), math.Sin(p.Heading)
+	return Normalize(Pose{
+		X:       -(p.X*c + p.Y*s),
+		Y:       p.X*s - p.Y*c,
+		Heading: -p.Heading,
+	})
+}
+```
+
+- [ ] **Шаг 4: Тесты**
 
 Run: `go test ./...`
 Expected: ok, все пакеты
 
-- [ ] **Шаг 3: Коммит**
+- [ ] **Шаг 5: Коммит**
 
 ```bash
-git add internal/geom/geom.go
-git commit -m "docs: Primitive.Length - длина в плане, не по оси пути [ClearAhead-0xc]"
+git add internal/geom/
+git commit -m "feat: композиция и обращение поз; Length - длина в плане [ClearAhead-0xc]"
 ```
 
 ---
@@ -745,17 +847,13 @@ func validateAlignments(id string, a Alignments) error {
 	if len(a.Horizontal) == 0 {
 		return fmt.Errorf("mapfmt: %s: пустая горизонтальная цепочка", id)
 	}
-	var uH units.Distance
-	nPrim := 0
+	nPrim := len(a.Horizontal)
 	for i, p := range a.Horizontal {
-		nPrim++
 		switch p.Kind {
 		case "straight":
-			d, err := units.MetersToDistance(p.Length)
-			if err != nil || d <= 0 {
+			if !(p.Length > 0) {
 				return fmt.Errorf("mapfmt: %s[%d]: длина прямой должна быть положительной, получено %v", id, i, p.Length)
 			}
-			uH += d
 		case "arc":
 			if !(p.Radius > 0) {
 				return fmt.Errorf("mapfmt: %s[%d]: радиус дуги должен быть положительным, получено %v", id, i, p.Radius)
@@ -763,14 +861,14 @@ func validateAlignments(id string, a Alignments) error {
 			if p.Angle == 0 || math.Abs(p.Angle) > 2*math.Pi {
 				return fmt.Errorf("mapfmt: %s[%d]: угол дуги %v вне (0, 2π]", id, i, p.Angle)
 			}
-			d, err := units.MetersToDistance(p.Radius * math.Abs(p.Angle))
-			if err != nil || d <= 0 {
-				return fmt.Errorf("mapfmt: %s[%d]: вырожденная дуга", id, i)
-			}
-			uH += d
 		default:
 			return fmt.Errorf("mapfmt: %s[%d]: неизвестный примитив плана %q", id, i, p.Kind)
 		}
+	}
+	// Длина считается единственной функцией — той же, что зовёт validateTrackside.
+	uH, err := horizontalLengthU(a)
+	if err != nil {
+		return fmt.Errorf("mapfmt: %s: %w", id, err)
 	}
 
 	if len(a.Vertical) == 0 {
@@ -915,8 +1013,12 @@ func (m *Map) validateEdgeEnds(ports map[string]Port) error {
 				return fmt.Errorf("mapfmt: ребро %s ссылается на несуществующий порт %s", e.ID, end)
 			}
 			used[end]++
-			if used[end] > 1 {
-				return fmt.Errorf("mapfmt: порт %s занят более чем одним ребром", end)
+			// Два ребра в одном порту — это обычный стык, и именно там
+			// проверяется замыкание. Три и больше — развилка, а развилка обязана
+			// быть оформлена стрелкой: у неё есть длина, остряк и конфликт
+			// маршрутов, которых у голого узла нет.
+			if used[end] > 2 {
+				return fmt.Errorf("mapfmt: порт %s обслуживает %d рёбер — развилку нужно оформить стрелкой", end, used[end])
 			}
 		}
 	}
@@ -963,9 +1065,18 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 			if !elements[iv.Element] {
 				return fmt.Errorf("mapfmt: путевой объект %s ссылается на несуществующий элемент %s", ts.ID, iv.Element)
 			}
-			u := alignmentLengthU(all[iv.Element])
-			from, _ := units.MetersToDistance(iv.From)
-			to, _ := units.MetersToDistance(iv.To)
+			u, err := horizontalLengthU(all[iv.Element])
+			if err != nil {
+				return fmt.Errorf("mapfmt: путевой объект %s: длина элемента %s: %w", ts.ID, iv.Element, err)
+			}
+			from, err := units.MetersToDistance(iv.From)
+			if err != nil {
+				return fmt.Errorf("mapfmt: путевой объект %s: начало интервала: %w", ts.ID, err)
+			}
+			to, err := units.MetersToDistance(iv.To)
+			if err != nil {
+				return fmt.Errorf("mapfmt: путевой объект %s: конец интервала: %w", ts.ID, err)
+			}
 			if from < 0 || to > u || from > to {
 				return fmt.Errorf("mapfmt: путевой объект %s: интервал [%v, %v] вне элемента %s длиной %s",
 					ts.ID, iv.From, iv.To, iv.Element, u)
@@ -975,19 +1086,35 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 	return nil
 }
 
-func alignmentLengthU(a Alignments) units.Distance {
+// horizontalLengthU — единственное место, где считается длина горизонтальной
+// цепочки. И validateAlignments, и validateTrackside зовут её: два независимых
+// расчёта одного и того же числа рано или поздно разойдутся.
+//
+// Правило округления спеки §3: сумма индивидуально округлённых длин.
+func horizontalLengthU(a Alignments) (units.Distance, error) {
 	var u units.Distance
-	for _, p := range a.Horizontal {
+	for i, p := range a.Horizontal {
+		var (
+			d   units.Distance
+			err error
+		)
 		switch p.Kind {
 		case "straight":
-			d, _ := units.MetersToDistance(p.Length)
-			u += d
+			d, err = units.MetersToDistance(p.Length)
 		case "arc":
-			d, _ := units.MetersToDistance(p.Radius * math.Abs(p.Angle))
-			u += d
+			d, err = units.MetersToDistance(p.Radius * math.Abs(p.Angle))
+		default:
+			return 0, fmt.Errorf("неизвестный примитив плана %q на позиции %d", p.Kind, i)
 		}
+		if err != nil {
+			return 0, fmt.Errorf("примитив %d: %w", i, err)
+		}
+		if d <= 0 {
+			return 0, fmt.Errorf("примитив %d: вырожденная длина", i)
+		}
+		u += d
 	}
-	return u
+	return u, nil
 }
 
 // validateAnchors требует ровно один якорь на связную компоненту.
@@ -1077,7 +1204,11 @@ func TestProfileFlat(t *testing.T) {
 	if err != nil {
 		t.Fatalf("плоский профиль: %v", err)
 	}
-	if got := p.LengthS(); got != 1000*units.Meter {
+	got, err := p.LengthS()
+	if err != nil {
+		t.Fatalf("длина плоского профиля: %v", err)
+	}
+	if got != 1000*units.Meter {
 		t.Fatalf("плоский профиль: s=%s, ожидалось %s", got, 1000*units.Meter)
 	}
 }
@@ -1091,11 +1222,15 @@ func TestProfileConstantGrade(t *testing.T) {
 		t.Fatalf("уклон 40‰: %v", err)
 	}
 	want, _ := units.MetersToDistance(1000 * math.Sqrt(1+0.04*0.04))
-	if got := p.LengthS(); absD(got-want) > um {
+	got, err := p.LengthS()
+	if err != nil {
+		t.Fatalf("длина: %v", err)
+	}
+	if absD(got-want) > um {
 		t.Fatalf("уклон 40‰: s=%s, ожидалось %s", got, want)
 	}
 	// Golden: то самое расхождение, ради которого введены две координаты.
-	if d := p.LengthS() - 1000*units.Meter; absD(d-799600*um) > 100*um {
+	if d := got - 1000*units.Meter; absD(d-799600*um) > 100*um {
 		t.Fatalf("расхождение s-u на 40‰ и километре: %s, ожидалось ≈0.7996m", d)
 	}
 }
@@ -1112,7 +1247,11 @@ func TestProfileVerticalCurve(t *testing.T) {
 	}
 	want := arcLen(0, 0) + arcLenLinear(0, 0.02, 200) + arcLen(0.02, 100)
 	wd, _ := units.MetersToDistance(100 + want)
-	if got := p.LengthS(); absD(got-wd) > 10*um {
+	got, err := p.LengthS()
+	if err != nil {
+		t.Fatalf("длина: %v", err)
+	}
+	if absD(got-wd) > 10*um {
 		t.Fatalf("кривая: s=%s, ожидалось %s", got, wd)
 	}
 	dz, slope, err := p.At(400 * units.Meter)
@@ -1248,16 +1387,19 @@ func (p Profile) LengthU() units.Distance {
 // Правило округления: длина каждого сегмента округляется отдельно, сумма берётся
 // по целым. Округление математической суммы дало бы другой результат, и сумма
 // частей перестала бы равняться целому.
-func (p Profile) LengthS() units.Distance {
+//
+// Ошибка возвращается, а не проглатывается: частичная сумма выглядит как
+// правдоподобная длина, и поезд поехал бы по ней, не заметив.
+func (p Profile) LengthS() (units.Distance, error) {
 	var s units.Distance
-	for _, seg := range p {
+	for i, seg := range p {
 		d, err := units.MetersToDistance(seg.spatialLen())
 		if err != nil {
-			return s
+			return 0, fmt.Errorf("track: сегмент профиля %d: %w", i, err)
 		}
 		s += d
 	}
-	return s
+	return s, nil
 }
 
 // UToS переводит авторское смещение в пространственное.
@@ -1389,20 +1531,21 @@ import (
 	"github.com/shady2k/ClearAhead/internal/mapfmt"
 )
 
-// twoEdges — N1 -P1--E1--P1- N2 -P2--E2--P1- N3, прямая 100 + прямая 50.
+// twoEdges — N1 --E1-- N2 --E2-- N3, прямая 100 + прямая 50.
+// N2.P1 — стык: им пользуются оба ребра, и именно там проверяется замыкание.
 const twoEdges = `{
   "format_version": 1, "map_id": "T", "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } },
   "topology": {
     "nodes": [
       { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1" }, { "id": "P2" } ] },
+      { "id": "N2", "ports": [ { "id": "P1" } ] },
       { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
     ],
     "turnouts": [], "trackside": [],
     "edges": [
       { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N2.P2", "to": "N3.P1" }
+      { "id": "E2", "from": "N2.P1", "to": "N3.P1" }
     ]
   },
   "geometry": { "turnouts": {}, "edges": {
@@ -1458,18 +1601,53 @@ func TestPropagateRejectsUnanchored(t *testing.T) {
 	}
 }
 
+// TestPropagateClosingCycle — положительный случай: кольцо, которое сходится.
+//
+// Без него тест на невязку бесполезен: проверка, которая отвергает всё подряд,
+// тоже «ловит расхождение». Квадрат 100×100: четыре прямые по 100 м и четыре
+// поворота на π/2 дугами радиуса 10 м, вписанными в углы, — цикл замыкается
+// точно, и распространение обязано это принять.
+func TestPropagateClosingCycle(t *testing.T) {
+	// Кольцо из четырёх дуг радиуса 50 м на π/2: замкнутая окружность.
+	const ring = `{
+	  "format_version": 1, "map_id": "C", "map_revision": 1,
+	  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+	  "topology": {
+	    "nodes": [
+	      { "id": "N1", "ports": [ { "id": "P1" } ] },
+	      { "id": "N2", "ports": [ { "id": "P1" } ] },
+	      { "id": "N3", "ports": [ { "id": "P1" } ] },
+	      { "id": "N4", "ports": [ { "id": "P1" } ] }
+	    ],
+	    "turnouts": [], "trackside": [],
+	    "edges": [
+	      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
+	      { "id": "E2", "from": "N2.P1", "to": "N3.P1" },
+	      { "id": "E3", "from": "N3.P1", "to": "N4.P1" },
+	      { "id": "E4", "from": "N4.P1", "to": "N1.P1" }
+	    ]
+	  },
+	  "geometry": { "turnouts": {}, "edges": {
+	    "E1": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
+	    "E2": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
+	    "E3": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
+	    "E4": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] }
+	  } }
+	}`
+	if _, _, err := Propagate(loadMap(t, ring)); err != nil {
+		t.Fatalf("замкнутое кольцо должно приниматься, получен отказ: %v", err)
+	}
+}
+
 func TestPropagateClosureMismatch(t *testing.T) {
 	// Треугольник, который не сходится: E3 короче, чем требуется, на 5 мм.
 	doc := strings.Replace(twoEdges,
-		`{ "id": "E2", "from": "N2.P2", "to": "N3.P1" }`,
-		`{ "id": "E2", "from": "N2.P2", "to": "N3.P1" },
-		 { "id": "E3", "from": "N3.P2", "to": "N1.P2" }`, 1)
+		`{ "id": "E2", "from": "N2.P1", "to": "N3.P1" }`,
+		`{ "id": "E2", "from": "N2.P1", "to": "N3.P1" },
+		 { "id": "E3", "from": "N3.P1", "to": "N1.P1" }`, 1)
 	doc = strings.Replace(doc,
 		`{ "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }`,
-		`{ "id": "N3", "ports": [ { "id": "P1" }, { "id": "P2" } ] }`, 1)
-	doc = strings.Replace(doc,
-		`{ "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] }`,
-		`{ "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" }, { "id": "P2" } ] }`, 1)
+		`{ "id": "N3", "ports": [ { "id": "P1" } ] }`, 1)
 	doc = strings.Replace(doc,
 		`"E2": { "horizontal": [ { "kind": "straight", "length": 50.0 } ] }`,
 		`"E2": { "horizontal": [ { "kind": "straight", "length": 50.0 } ] },
@@ -1562,8 +1740,8 @@ func Propagate(m *mapfmt.Map) (map[string]PortPose, map[string]Element, error) {
 		byPort[e.To] = append(byPort[e.To], id)
 	}
 
-	poses := map[string]PortPose{}
-	anchored := map[string]bool{}
+	poses := map[string]portState{}
+	visited := map[string]bool{}
 
 	anchorIDs := make([]string, 0, len(m.Anchors))
 	for id := range m.Anchors {
@@ -1572,93 +1750,118 @@ func Propagate(m *mapfmt.Map) (map[string]PortPose, map[string]Element, error) {
 	sort.Strings(anchorIDs)
 
 	for _, aID := range anchorIDs {
-		if _, seen := poses[aID]; seen {
-			return nil, nil, fmt.Errorf("track: в одной связной компоненте два якоря: %s", aID)
+		if visited[aID] {
+			return nil, nil, fmt.Errorf("track: в одной связной компоненте два якоря, второй — %s", aID)
 		}
 		a := m.Anchors[aID]
-		poses[aID] = PortPose{Plan: geom.Normalize(geom.Pose{X: a.X, Y: a.Y, Heading: a.Heading}), Z: a.Z}
+		// Якорь принадлежит первому элементу порта в отсортированном порядке —
+		// обход детерминирован, поэтому и владелец детерминирован.
+		if len(byPort[aID]) == 0 {
+			return nil, nil, fmt.Errorf("track: якорь %s не принадлежит ни одному элементу", aID)
+		}
+		poses[aID] = portState{
+			Pose:  PortPose{Plan: geom.Normalize(geom.Pose{X: a.X, Y: a.Y, Heading: a.Heading}), Z: a.Z},
+			Owner: byPort[aID][0],
+		}
 
 		queue := []string{aID}
 		for len(queue) > 0 {
 			port := queue[0]
 			queue = queue[1:]
-			anchored[port] = true
+			if visited[port] {
+				continue
+			}
+			visited[port] = true
+
 			for _, eID := range byPort[port] {
-				e := els[eID]
-				var far string
-				var start PortPose
-				if e.From == port {
-					far = e.To
-					start = poses[port]
-				} else {
-					far = e.From
-					// Идём против ориентации элемента: разворачиваем позу
-					// конца, проходим цепочку назад — то есть строим её от
-					// развёрнутого конца и разворачиваем результат.
-					start = PortPose{Plan: geom.Reverse(poses[port].Plan), Z: poses[port].Z}
-					start = walkReverse(e, start)
-					if err := settle(poses, e.From, start, eID); err != nil {
-						return nil, nil, err
-					}
-					if !anchored[e.From] {
-						queue = append(queue, e.From)
-					}
-					continue
-				}
-				end := advance(e, start)
-				if err := settle(poses, far, PortPose{Plan: geom.Reverse(end.Plan), Z: end.Z}, eID); err != nil {
+				at := poses[port].as(eID)
+				far, want, err := across(els[eID], port, at)
+				if err != nil {
 					return nil, nil, err
 				}
-				if !anchored[far] {
+				if err := settle(poses, far, want, eID); err != nil {
+					return nil, nil, err
+				}
+				if !visited[far] {
 					queue = append(queue, far)
 				}
 			}
 		}
 	}
 
+	out := make(map[string]PortPose, len(poses))
+	for id, st := range poses {
+		out[id] = st.Pose
+	}
 	for id, e := range els {
-		if _, ok := poses[e.From]; !ok {
+		st, ok := poses[e.From]
+		if !ok {
 			return nil, nil, fmt.Errorf("track: элемент %s в компоненте без якоря", id)
 		}
-		e.Start = PortPose{Plan: poses[e.From].Plan, Z: poses[e.From].Z}
+		e.Start = st.as(id)
 		els[id] = e
 	}
-	return poses, els, nil
+	return out, els, nil
 }
 
-// advance проводит позу через весь элемент: план цепочкой, высоту — профилем.
-func advance(e Element, start PortPose) PortPose {
-	dz, _, err := e.Prof.At(e.Prof.LengthU())
-	if err != nil {
-		dz = 0
-	}
-	return PortPose{Plan: e.Plan.End(start.Plan), Z: start.Z + dz}
+// portState — поза порта и элемент, для которого она записана.
+//
+// Поза порта всегда смотрит ВНУТРЬ элемента. У стыка элементов два, и смотрят
+// они в противоположные стороны, поэтому одного значения мало: надо помнить,
+// чьё оно. Соседний элемент получает то же значение, развёрнутое на π.
+type portState struct {
+	Pose  PortPose
+	Owner string
 }
 
-// walkReverse строит позу начала элемента по позе его конца.
-func walkReverse(e Element, endReversed PortPose) PortPose {
+// as возвращает позу в системе указанного элемента.
+func (s portState) as(element string) PortPose {
+	if s.Owner == element {
+		return s.Pose
+	}
+	return PortPose{Plan: geom.Reverse(s.Pose.Plan), Z: s.Pose.Z}
+}
+
+// across переносит позу с одного конца элемента на другой.
+//
+// Поза порта всегда смотрит ВНУТРЬ своего элемента. У From это совпадает с
+// направлением движения по цепочке, у To — противоположно ему, отсюда Reverse
+// в обе стороны.
+//
+// Обратный ход не разворачивает цепочку по звеньям: цепочка целиком есть одно
+// жёсткое движение Δ, и начало восстанавливается как Compose(конец, Invert(Δ)).
+func across(e Element, from string, at PortPose) (string, PortPose, error) {
 	dz, _, err := e.Prof.At(e.Prof.LengthU())
 	if err != nil {
-		dz = 0
+		return "", PortPose{}, fmt.Errorf("track: %s: подъём по профилю: %w", e.ID, err)
 	}
-	rev := make(geom.Chain, len(e.Plan))
-	for i, p := range e.Plan {
-		q := e.Plan[len(e.Plan)-1-i]
-		q.Angle = -q.Angle
-		rev[i] = q
-		_ = p
+	delta := e.Plan.End(geom.Pose{})
+
+	switch from {
+	case e.From:
+		end := geom.Compose(at.Plan, delta)
+		return e.To, PortPose{Plan: geom.Reverse(end), Z: at.Z + dz}, nil
+	case e.To:
+		travelEnd := geom.Reverse(at.Plan)
+		start := geom.Compose(travelEnd, geom.Invert(delta))
+		return e.From, PortPose{Plan: start, Z: at.Z - dz}, nil
+	default:
+		return "", PortPose{}, fmt.Errorf("track: порт %s не принадлежит элементу %s", from, e.ID)
 	}
-	p := rev.End(endReversed.Plan)
-	return PortPose{Plan: geom.Reverse(p), Z: endReversed.Z - dz}
 }
 
 // settle записывает позу порта или проверяет уже записанную на невязку.
-func settle(poses map[string]PortPose, port string, want PortPose, via string) error {
-	got, seen := poses[port]
+//
+// Второй элемент в порту — это стык, и именно здесь замыкание перестаёт быть
+// декоративным: до введения стыков порт принадлежал ровно одному ребру, два
+// пути никогда не сходились, и проверка не срабатывала ни разу.
+func settle(poses map[string]portState, port string, want PortPose, via string) error {
+	st, seen := poses[port]
 	if !seen {
-		poses[port] = want
+		poses[port] = portState{Pose: want, Owner: via}
 		return nil
 	}
+	got := st.as(via)
 	dx := got.Plan.X - want.Plan.X
 	dy := got.Plan.Y - want.Plan.Y
 	dz := got.Z - want.Z
@@ -1951,12 +2154,16 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 
 	for _, id := range ids {
 		e := els[id]
+		lengthS, err := e.Prof.LengthS()
+		if err != nil {
+			return nil, nil, fmt.Errorf("track: %s: %w", id, err)
+		}
 		ct.Elements[id] = CompiledElement{
 			ID:      id,
 			From:    e.From,
 			To:      e.To,
 			LengthU: e.Plan.Length(),
-			LengthS: e.Prof.LengthS(),
+			LengthS: lengthS,
 			Prof:    e.Prof,
 		}
 		re := RenderElement{ID: id, Start: e.Start, Prims: make([]RenderPrimitive, 0, len(e.Plan))}
@@ -2575,6 +2782,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/internal/track"
@@ -2597,7 +2805,7 @@ func TestGeometryOK(t *testing.T) {
 	if got, want := w.Header().Get("ETag"), `"`+man.RenderGeometryHash+`"`; got != want {
 		t.Fatalf("ETag %q, ожидалось %q", got, want)
 	}
-	if cc := w.Header().Get("Cache-Control"); cc == "" || !contains(cc, "immutable") {
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "immutable") {
 		t.Fatalf("Cache-Control %q не содержит immutable", cc)
 	}
 }
@@ -2635,18 +2843,6 @@ func TestGeometryRejects(t *testing.T) {
 	}
 }
 
-func contains(s, sub string) bool {
-	return len(s) >= len(sub) && (s == sub || len(s) > 0 && indexOf(s, sub) >= 0)
-}
-
-func indexOf(s, sub string) int {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return i
-		}
-	}
-	return -1
-}
 ```
 
 - [ ] **Шаг 2: Убедиться, что тест падает**
