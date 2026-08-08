@@ -1,0 +1,21 @@
+; ClearAhead — эскиз B0, Godot-половина.
+; Godot 4.3+. Открыть папку sketch/godot как проект, F5.
+
+config_version=5
+
+[application]
+
+config/name="ClearAhead — эскиз B0"
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.3", "Forward Plus")
+
+[display]
+
+window/size/viewport_width=1800
+window/size/viewport_height=760
+window/stretch/mode="canvas_items"
+window/stretch/aspect="expand"
+
+[rendering]
+
+environment/defaults/default_clear_color=Color(0.086, 0.094, 0.102, 1)
