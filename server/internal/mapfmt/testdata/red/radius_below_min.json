@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "map_id": "RED_RADIUS",
+  "map_revision": 1,
+  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+  "topology": {
+    "nodes": [
+      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+    "turnouts": [], "trackside": [],
+    "edges": [ { "id": "E1", "from": "N1.P1", "to": "N2.P1" } ]
+  },
+  "geometry": {
+    "turnouts": {},
+    "edges": { "E1": { "horizontal": [ { "kind": "arc", "radius": 100.0, "angle": 0.2 } ] } }
+  }
+}

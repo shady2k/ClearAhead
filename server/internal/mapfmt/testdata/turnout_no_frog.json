@@ -1,0 +1,35 @@
+{
+  "format_version": 1,
+  "map_id": "T",
+  "map_revision": 1,
+  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+  "topology": {
+    "nodes": [
+      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
+      { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+    "turnouts": [
+      { "id": "T1", "hand": "left", "ports": { "common": "C", "straight": "S", "diverging": "D" } }
+    ],
+    "trackside": [],
+    "edges": [
+      { "id": "E1", "from": "N1.P1", "to": "T1.C" },
+      { "id": "E2", "from": "T1.S", "to": "N2.P1" },
+      { "id": "E3", "from": "T1.D", "to": "N3.P1" }
+    ]
+  },
+  "geometry": {
+    "turnouts": {
+      "T1": {
+        "straight": { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      }
+    },
+    "edges": {
+      "E1": { "horizontal": [ { "kind": "straight", "length": 300.0 } ] },
+      "E2": { "horizontal": [ { "kind": "straight", "length": 400.0 } ] },
+      "E3": { "horizontal": [ { "kind": "straight", "length": 400.0 } ] }
+    }
+  }
+}

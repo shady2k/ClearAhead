@@ -69,11 +69,6 @@ func TestValidateRejects(t *testing.T) {
 				 "georeference": { "datum": "WGS84", "origin_height_kind": "geoid" },`, 1),
 			"origin_height_kind",
 		},
-		{
-			"стрелка без марки крестовины",
-			strings.Replace(turnoutMap, `"frog": "1/9", `, ``, 1),
-			"frog",
-		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -165,5 +160,12 @@ func TestValidateTurnoutPortUnconnected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "не соединён") {
 		t.Fatalf("ожидалась ошибка про не соединённый порт стрелки, получено: %v", err)
+	}
+}
+
+func TestTurnoutWithoutFrogIsValid(t *testing.T) {
+	m := loadTestMap(t, "testdata/turnout_no_frog.json")
+	if err := Validate(m); err != nil {
+		t.Fatalf("марка крестовины необязательна (§8), получен отказ: %v", err)
 	}
 }
