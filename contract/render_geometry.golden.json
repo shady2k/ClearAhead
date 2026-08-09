@@ -1,6 +1,6 @@
 {
   "map_id": "ST_A",
-  "map_revision": 1,
+  "map_revision": 2,
   "elements": [
     {
       "id": "ST_A_E_APPROACH",
@@ -115,8 +115,8 @@
       "start": {
         "plan": {
           "x": 376.64221294597223,
-          "y": -1.8362971100542635,
-          "heading": -0.11069999999999958
+          "y": 1.8362971100542635,
+          "heading": 0.11070000000000002
         },
         "z": 142,
         "slope": 0
@@ -624,13 +624,13 @@
           "kind": "arc",
           "length": 33.21,
           "radius": 300,
-          "angle": -0.1107
+          "angle": 0.1107
         }
       ],
       "role": {
         "turnout": "ST_A_SW_IND",
         "branch": "diverging",
-        "hand": "right",
+        "hand": "left",
         "frog": "1/9"
       }
     },
@@ -654,7 +654,7 @@
       "role": {
         "turnout": "ST_A_SW_IND",
         "branch": "straight",
-        "hand": "right",
+        "hand": "left",
         "frog": "1/9"
       }
     },

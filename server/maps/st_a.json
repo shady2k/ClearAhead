@@ -1,7 +1,7 @@
 {
   "format_version": 1,
   "map_id": "ST_A",
-  "map_revision": 1,
+  "map_revision": 2,
   "georeference": {
     "datum": "WGS84",
     "origin": {
@@ -115,7 +115,7 @@
       },
       {
         "id": "ST_A_SW_IND",
-        "hand": "right",
+        "hand": "left",
         "frog": "1/9",
         "ports": {
           "common": "C",
@@ -350,7 +350,7 @@
             {
               "kind": "arc",
               "radius": 300.0,
-              "angle": -0.1107
+              "angle": 0.1107
             }
           ]
         }
