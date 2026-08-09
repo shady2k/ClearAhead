@@ -7,12 +7,20 @@ extends RefCounted
 ##     "elements": [ { "id": str,
 ##       "start": { "plan": {"x": м, "y": м, "heading": рад}, "z": м, "slope": рад },
 ##       "primitives": [ {"kind":"straight","length": м}
-##                      | {"kind":"arc","length": м,"radius": м,"angle": рад} ] } ] }
+##                      | {"kind":"arc","length": м,"radius": м,"angle": рад} ],
+##       "role": { "turnout": str, "branch": "straight"|"diverging",
+##                 "hand": "right"|"left", "frog": str } — только у ветви стрелки } ],
+##     "trackside": [ { "id": str, "kind": "platform"|"buffer_stop",
+##       "side": str, "spans": [ { "element": str, "from": м, "to": м } ] } ] }
 ##
 ## Правила:
-##   - неизвестный kind — ОШИБКА, а не пропуск;
+##   - неизвестный kind (примитива ИЛИ путевого объекта) — ОШИБКА, не пропуск;
 ##   - нехватка обязательного поля или неверный тип — ОШИБКА;
 ##   - length > 0, radius > 0; angle — конечное число (знак: + = поворот влево);
+##   - спаны путевых объектов в координате u, from >= 0, to >= from;
+##   - role.frog обязателен: ветвь всегда несёт марку крестовины;
+##   - trackside необязателен (карта без путевых объектов его не шлёт);
+##   - role необязателен (есть только у ветвей стрелок);
 ##   - лишние поля игнорируются (сервер может добавить своё позже);
 ##   - z и slope в B1 не рисуются (станция плоская), но в контракте есть.
 ##
@@ -21,6 +29,11 @@ extends RefCounted
 
 const KIND_STRAIGHT := "straight"
 const KIND_ARC := "arc"
+const KIND_PLATFORM := "platform"
+const KIND_BUFFER_STOP := "buffer_stop"
+
+const BRANCH_STRAIGHT := "straight"
+const BRANCH_DIVERGING := "diverging"
 
 ## Текстовое тело -> { "ok": true, "geometry": {...} } | { "ok": false, "error": str }.
 static func parse(text: String) -> Dictionary:
@@ -65,12 +78,28 @@ static func parse_data(data: Variant) -> Dictionary:
 		seen_ids[elem.id] = true
 		elements.append(elem)
 
+	# Путевые объекты. Поле необязательно: карта без них его не шлёт.
+	var trackside: Array[Dictionary] = []
+	if root.has("trackside"):
+		if typeof(root["trackside"]) != TYPE_ARRAY:
+			return _fail("trackside — не массив")
+		var ts_raw: Array = root["trackside"]
+		for i in ts_raw.size():
+			var tv: Variant = ts_raw[i]
+			if typeof(tv) != TYPE_DICTIONARY:
+				return _fail("trackside[%d] — не объект" % i)
+			var parsed := _parse_trackside(tv as Dictionary, i)
+			if not parsed.ok:
+				return parsed
+			trackside.append(parsed.value)
+
 	return {
 		"ok": true,
 		"geometry": {
 			"map_id": map_id,
 			"map_revision": int(rev_v),
 			"elements": elements,
+			"trackside": trackside,
 		},
 	}
 
@@ -105,7 +134,13 @@ static func _parse_element(el: Dictionary, idx: int) -> Dictionary:
 			return po
 		prims.append(po.value)
 
-	return { "ok": true, "value": { "id": id, "start": start_ok.value, "primitives": prims } }
+	var value := { "id": id, "start": start_ok.value, "primitives": prims }
+	if el.has("role"):
+		var ro := _parse_role(el["role"], id)
+		if not ro.ok:
+			return ro
+		value["role"] = ro.value
+	return { "ok": true, "value": value }
 
 static func _parse_start(start: Dictionary, id: String) -> Dictionary:
 	if not start.has("plan"):
@@ -192,3 +227,83 @@ static func _as_int(v: Variant) -> Variant:
 
 static func _fail(msg: String) -> Dictionary:
 	return { "ok": false, "error": msg }
+
+static func _parse_role(r: Variant, id: String) -> Dictionary:
+	if typeof(r) != TYPE_DICTIONARY:
+		return _fail("%s: role — не объект" % id)
+	var role: Dictionary = r
+	for key in ["turnout", "branch", "hand"]:
+		if not role.has(key):
+			return _fail("%s: role.%s отсутствует" % [id, key])
+		if typeof(role[key]) != TYPE_STRING or (role[key] as String).is_empty():
+			return _fail("%s: role.%s должна быть непустой строкой" % [id, key])
+	var branch: String = role["branch"]
+	if branch != BRANCH_STRAIGHT and branch != BRANCH_DIVERGING:
+		return _fail("%s: role.branch «%s» — неизвестная ветвь" % [id, branch])
+	var hand: String = role["hand"]
+	if hand != "right" and hand != "left":
+		return _fail("%s: role.hand «%s» — неизвестная рукость" % [id, hand])
+	var value := {
+		"turnout": role["turnout"],
+		"branch": branch,
+		"hand": hand,
+	}
+	if not role.has("frog") or typeof(role["frog"]) != TYPE_STRING \
+			or (role["frog"] as String).is_empty():
+		return _fail("%s: role.frog отсутствует" % id)
+	value["frog"] = role["frog"]
+	return { "ok": true, "value": value }
+
+static func _parse_trackside(ts: Dictionary, idx: int) -> Dictionary:
+	if not ts.has("id") or typeof(ts["id"]) != TYPE_STRING \
+			or (ts["id"] as String).is_empty():
+		return _fail("trackside[%d]: id должна быть непустой строкой" % idx)
+	var id: String = ts["id"]
+
+	if not ts.has("kind") or typeof(ts["kind"]) != TYPE_STRING \
+			or (ts["kind"] as String).is_empty():
+		return _fail("%s: kind отсутствует" % id)
+	var kind: String = ts["kind"]
+	if kind != KIND_PLATFORM and kind != KIND_BUFFER_STOP:
+		return _fail("%s: неизвестный kind «%s»" % [id, kind])
+
+	if not ts.has("spans"):
+		return _fail("%s: нет spans" % id)
+	if typeof(ts["spans"]) != TYPE_ARRAY:
+		return _fail("%s: spans — не массив" % id)
+	var spans_raw: Array = ts["spans"]
+	if spans_raw.is_empty():
+		return _fail("%s: spans пуст — объект ничего не покрывает" % id)
+	var spans: Array[Dictionary] = []
+	for j in spans_raw.size():
+		var sv: Variant = spans_raw[j]
+		if typeof(sv) != TYPE_DICTIONARY:
+			return _fail("%s: spans[%d] — не объект" % [id, j])
+		var so := _parse_span(sv as Dictionary, id, j)
+		if not so.ok:
+			return so
+		spans.append(so.value)
+
+	var value := { "id": id, "kind": kind, "spans": spans }
+	if ts.has("side"):
+		if typeof(ts["side"]) != TYPE_STRING or (ts["side"] as String).is_empty():
+			return _fail("%s: side должна быть непустой строкой" % id)
+		value["side"] = ts["side"]
+	return { "ok": true, "value": value }
+
+static func _parse_span(s: Dictionary, id: String, j: int) -> Dictionary:
+	if not s.has("element") or typeof(s["element"]) != TYPE_STRING \
+			or (s["element"] as String).is_empty():
+		return _fail("%s: spans[%d]: element должна быть непустой строкой" % [id, j])
+	for key in ["from", "to"]:
+		if not s.has(key):
+			return _fail("%s: spans[%d]: нет %s" % [id, j, key])
+		if not _is_number(s[key]):
+			return _fail("%s: spans[%d]: %s должна быть числом" % [id, j, key])
+	var from := float(s["from"])
+	var to := float(s["to"])
+	if from < 0.0:
+		return _fail("%s: spans[%d]: from не может быть отрицательным" % [id, j])
+	if to < from:
+		return _fail("%s: spans[%d]: to (%v) меньше from (%v)" % [id, j, to, from])
+	return { "ok": true, "value": { "element": s["element"], "from": from, "to": to } }

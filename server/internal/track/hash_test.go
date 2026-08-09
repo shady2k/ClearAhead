@@ -84,6 +84,11 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 				ID:    "E1",
 				Start: PortPose{Plan: geom.Pose{X: 1, Y: 2, Heading: 0.3}, Z: 4, Slope: 0.005},
 				Prims: []RenderPrimitive{{Kind: "arc", LengthM: 10, Radius: 300, Angle: 0.11}},
+				Role:  &RenderRole{Turnout: "SW1", Branch: "diverging", Hand: "right", Frog: "1/9"},
+			}},
+			Trackside: []RenderTrackside{{
+				ID: "TSP", Kind: "platform", Side: "right",
+				Spans: []RenderSpan{{Element: "E1", FromM: 10, ToM: 150}},
 			}},
 		}
 	}
@@ -104,6 +109,19 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 		"primitive angle":    func(g *RenderGeometry) { g.Elements[0].Prims[0].Angle = -0.11 },
 		"добавлен element":   func(g *RenderGeometry) { g.Elements = append(g.Elements, g.Elements[0]) },
 		"добавлен primitive": func(g *RenderGeometry) { g.Elements[0].Prims = append(g.Elements[0].Prims, g.Elements[0].Prims[0]) },
+		"role.turnout":       func(g *RenderGeometry) { g.Elements[0].Role.Turnout = "SW2" },
+		"role.branch":        func(g *RenderGeometry) { g.Elements[0].Role.Branch = "straight" },
+		"role.hand":          func(g *RenderGeometry) { g.Elements[0].Role.Hand = "left" },
+		"role.frog":          func(g *RenderGeometry) { g.Elements[0].Role.Frog = "1/7" },
+		"роль снята":         func(g *RenderGeometry) { g.Elements[0].Role = nil },
+		"trackside id":       func(g *RenderGeometry) { g.Trackside[0].ID = "TSP2" },
+		"trackside kind":     func(g *RenderGeometry) { g.Trackside[0].Kind = "buffer_stop" },
+		"trackside side":     func(g *RenderGeometry) { g.Trackside[0].Side = "left" },
+		"span element":       func(g *RenderGeometry) { g.Trackside[0].Spans[0].Element = "E2" },
+		"span from":          func(g *RenderGeometry) { g.Trackside[0].Spans[0].FromM = 11 },
+		"span to":            func(g *RenderGeometry) { g.Trackside[0].Spans[0].ToM = 151 },
+		"добавлен trackside": func(g *RenderGeometry) { g.Trackside = append(g.Trackside, g.Trackside[0]) },
+		"добавлен span":      func(g *RenderGeometry) { g.Trackside[0].Spans = append(g.Trackside[0].Spans, g.Trackside[0].Spans[0]) },
 	}
 	for name, mutate := range mutations {
 		t.Run(name, func(t *testing.T) {

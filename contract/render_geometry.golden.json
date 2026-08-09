@@ -326,7 +326,13 @@
           "radius": 300,
           "angle": -0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_1",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_1:straight",
@@ -344,7 +350,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_1",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_2:diverging",
@@ -364,7 +376,13 @@
           "radius": 300,
           "angle": -0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_2",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_2:straight",
@@ -382,7 +400,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_2",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_3:diverging",
@@ -402,7 +426,13 @@
           "radius": 300,
           "angle": -0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_3",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_3:straight",
@@ -420,7 +450,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_3",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E1:diverging",
@@ -440,7 +476,13 @@
           "radius": 300,
           "angle": 0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E1",
+        "branch": "diverging",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E1:straight",
@@ -458,7 +500,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E1",
+        "branch": "straight",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E2:diverging",
@@ -478,7 +526,13 @@
           "radius": 300,
           "angle": 0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E2",
+        "branch": "diverging",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E2:straight",
@@ -496,7 +550,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E2",
+        "branch": "straight",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E3:diverging",
@@ -516,7 +576,13 @@
           "radius": 300,
           "angle": 0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E3",
+        "branch": "diverging",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_E3:straight",
@@ -534,7 +600,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_E3",
+        "branch": "straight",
+        "hand": "left",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_IND:diverging",
@@ -554,7 +626,13 @@
           "radius": 300,
           "angle": -0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_IND",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_IND:straight",
@@ -572,7 +650,13 @@
           "kind": "straight",
           "length": 33.5
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_IND",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_SID:diverging",
@@ -592,7 +676,13 @@
           "radius": 300,
           "angle": -0.1107
         }
-      ]
+      ],
+      "role": {
+        "turnout": "ST_A_SW_SID",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9"
+      }
     },
     {
       "id": "ST_A_SW_SID:straight",
@@ -609,6 +699,38 @@
         {
           "kind": "straight",
           "length": 33.5
+        }
+      ],
+      "role": {
+        "turnout": "ST_A_SW_SID",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9"
+      }
+    }
+  ],
+  "trackside": [
+    {
+      "id": "ST_A_PLAT_2",
+      "kind": "platform",
+      "side": "right",
+      "spans": [
+        {
+          "element": "ST_A_E_T2",
+          "from": 100,
+          "to": 600
+        }
+      ]
+    },
+    {
+      "id": "ST_A_PLAT_3",
+      "kind": "platform",
+      "side": "left",
+      "spans": [
+        {
+          "element": "ST_A_E_T3",
+          "from": 100,
+          "to": 600
         }
       ]
     }
