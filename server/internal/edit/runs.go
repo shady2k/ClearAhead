@@ -2,6 +2,7 @@ package edit
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 )
@@ -82,14 +83,28 @@ func extendRuns(m *mapfmt.Map, runs []mapfmt.ConstructionRun, port, newEdge stri
 
 // reverseRun разворачивает run: порядок спанов наоборот, направления
 // перевёрнуты. Фаза пересчитывается так, чтобы решётка шпал осталась той же
-// самой: новые координаты связаны со старыми как g' = L − g.
+// самой: координата точки связана со старой как g' = L − g, а фаза нового
+// run'а — нормализованный по шагу шпал остаток (L − phase) mod pitch: фаза
+// обязана лежать в [0, pitch) (валидатор), и именно эта нормализация
+// оставляет шпалы на тех же физических местах.
+//
+// Спаны копируются: run принимается по значению, но разворот на месте
+// мутировал бы общий с аргументом backing array — функция обязана вести
+// себя чисто.
 func reverseRun(m *mapfmt.Map, r mapfmt.ConstructionRun) mapfmt.ConstructionRun {
 	var L float64
 	for _, sp := range r.Spans {
 		L += sp.To - sp.From
 	}
-	// Фаза: g' = L − g — шпалы остаются на тех же физических местах.
-	r.Phase = L - r.Phase
+	if pitch := runPitch(m, r); pitch > 0 {
+		r.Phase = math.Mod(L-r.Phase, pitch)
+		if r.Phase < 0 {
+			r.Phase += pitch
+		}
+	}
+	spans := make([]mapfmt.RunSpan, len(r.Spans))
+	copy(spans, r.Spans)
+	r.Spans = spans
 	for i, j := 0, len(r.Spans)-1; i < j; i, j = i+1, j-1 {
 		r.Spans[i], r.Spans[j] = r.Spans[j], r.Spans[i]
 	}
@@ -101,6 +116,25 @@ func reverseRun(m *mapfmt.Map, r mapfmt.ConstructionRun) mapfmt.ConstructionRun 
 		}
 	}
 	return r
+}
+
+// runPitch — шаг шпал разрешённого типа run'а (r.Type или умолчание карты),
+// как у валидатора (mapfmt). reverseRun нужен m именно для этого: фаза после
+// разворота нормализуется по шагу. 0 — тип не разрешился (карта невалидна).
+func runPitch(m *mapfmt.Map, r mapfmt.ConstructionRun) float64 {
+	if m == nil || m.Construction == nil {
+		return 0
+	}
+	typ := r.Type
+	if typ == "" {
+		typ = m.Construction.DefaultType
+	}
+	for _, t := range m.Construction.Types {
+		if t.ID == typ {
+			return t.Sleeper.Pitch
+		}
+	}
+	return 0
 }
 
 // splitRuns делит ребро edgeID в точке реза: голова [0, headLen] остаётся на
@@ -134,7 +168,15 @@ func splitRuns(m *mapfmt.Map, runs []mapfmt.ConstructionRun, edgeID, tailID stri
 			done = true
 			head := mapfmt.RunSpan{Element: edgeID, From: 0, To: headLen.Meters(), Direction: sp.Direction}
 			tail := mapfmt.RunSpan{Element: tailID, From: 0, To: tailLen.Meters(), Direction: sp.Direction}
-			spans = append(spans, head, tail)
+			// Порядок зависит от направления: forward проходится от головы к
+			// хвосту, reverse — от хвоста к голове (въезд с конца ребра).
+			// Неверный порядок разрывает физическую непрерывность run'а и
+			// сдвигает кумулятивную длину в точках.
+			if sp.Direction == "reverse" {
+				spans = append(spans, tail, head)
+			} else {
+				spans = append(spans, head, tail)
+			}
 		}
 		r.Spans = spans
 		out = append(out, r)
