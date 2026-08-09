@@ -36,6 +36,11 @@ ZOOM   ?=
 GODOT ?= godot
 GO    ?= go
 
+# Параметры камеры эскиза 3D (только для sketch3d-shot).
+SIZE ?=
+AZ   ?=
+ELEV ?=
+
 # Порт отдельно от адреса: цель dev ждёт, пока он начнёт слушать.
 # lastword, а не strip двоеточия: SERVER_ADDR может быть и "127.0.0.1:8080".
 SERVER_PORT := $(lastword $(subst :, ,$(SERVER_ADDR)))
@@ -54,7 +59,21 @@ ifneq ($(strip $(ZOOM)),)
 SHOT_ARGS += --zoom $(ZOOM)
 endif
 
-.PHONY: help dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
+SK_ARGS :=
+ifneq ($(strip $(FOCUS)),)
+SK_ARGS += --focus $(FOCUS)
+endif
+ifneq ($(strip $(SIZE)),)
+SK_ARGS += --size $(SIZE)
+endif
+ifneq ($(strip $(AZ)),)
+SK_ARGS += --azimuth $(AZ)
+endif
+ifneq ($(strip $(ELEV)),)
+SK_ARGS += --elev $(ELEV)
+endif
+
+.PHONY: help sketch3d sketch3d-shot dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -66,6 +85,7 @@ help:
 	@echo '  make shot       снимок клиента в $(SHOT) — ЕДИНСТВЕННАЯ надёжная проверка'
 	@echo '  make contract   контрактный тест клиента против эталона (без сервера)'
 	@echo '  make test       всё: go test ./... + контрактный тест клиента'
+	@echo '  make sketch3d   ЭСКИЗ: тот же путь мешами в 3D, орто-камера'
 	@echo '  make vnc        напомнить, куда смотреть и где пароль'
 	@echo
 	@echo 'Переменные: MAP, SERVER_ADDR, SHOT, FOCUS="x,y", ZOOM=<пикс/м>, DISPLAY_ID'
@@ -139,6 +159,25 @@ shot:
 shot-offline:
 	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script tests/smoke_screenshot.gd -- \
 		--geometry-file=../contract/render_geometry.golden.json $(SHOT_ARGS)
+	@echo "снимок: $(SHOT)"
+
+## sketch3d — ЭСКИЗ: тот же путь, но мешами в 3D под ортографической камерой.
+## Читает эталон напрямую, сервер не нужен. Камера статична: угол и охват
+## задаются переменными, интерактивного вращения в эскизе нет.
+##   make sketch3d                       общий план
+##   make sketch3d FOCUS=160,-3.5 SIZE=46   горловина крупно
+##   make sketch3d ELEV=80               почти сверху, для сравнения с 2D
+## Живьём сцена запускается напрямую: скрипт снимка всегда снимает и выходит,
+## режима показа у него нет. Камера тогда берёт умолчания сцены (автоохват,
+## азимут 45, наклон 35) — переменные действуют только на sketch3d-shot.
+sketch3d:
+	@echo 'Эскиз 3D на $(DISPLAY_ID). Смотреть: $(VNC_URL) (Ctrl-C — стоп)'
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client res://scenes/sketch3d.tscn
+
+## sketch3d-shot — снимок эскиза в $(SHOT).
+sketch3d-shot:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script res://scripts/sketch3d_shot.gd -- \
+		--shot $(SHOT) $(SK_ARGS)
 	@echo "снимок: $(SHOT)"
 
 ## contract — клиент разбирает эталон БОЕВЫМ парсером. Сцену не поднимает,
