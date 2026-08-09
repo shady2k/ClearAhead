@@ -126,7 +126,10 @@ func _apply_geometry(text: String) -> void:
 		return
 	var geo: Dictionary = res.geometry
 	world.set_geometry(geo)
-	var bounds := world.get_server_bounds()
+	# Тип пишется явно: узлы объявлены базовыми классами (Node2D и т.п.), скрипты
+	# на них без class_name, поэтому возврат метода для парсера — Variant, и `:=`
+	# вывести тип не может.
+	var bounds: Rect2 = world.get_server_bounds()
 	camera.fit_to(GM.server_rect_to_godot(bounds))
 	debug.set_geometry(geo, bounds)
 	ui.set_status("%s · rev %d · %d элементов (%s)" % [
