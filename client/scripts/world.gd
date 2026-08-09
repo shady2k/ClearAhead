@@ -12,17 +12,25 @@ extends Node2D
 
 const GM := preload("res://scripts/geometry_math.gd")
 const SleeperLayer := preload("res://scripts/sleeper_layer.gd")
+const TracksideDrawer := preload("res://scripts/trackside_layer.gd")
+const TurnoutDrawer := preload("res://scripts/turnout_layer.gd")
 
 enum Lod { SIMPLE = 0, MID = 1, FULL = 2 }
 
 const LOD_MID_ZOOM := 1.5    # px/м — ниже: одна линия на путь
 const LOD_FULL_ZOOM := 5.0   # px/м — выше: добавляются шпалы
-
 const BALLAST_HALF_W := 1.75  # м — полоса балласта
 const GAUGE_HALF := 0.7175    # м — половина колеи 1435 мм
 const SLEEPER_HALF := 1.25    # м — шпала поперёк пути
 const SLEEPER_STEP := 0.6     # м — шаг шпал
 const SLEEPER_WIDTH := 0.28   # м — толщина шпалы
+
+const PLATFORM_OFFSET := 1.75 # м — ближняя кромка платформы от оси пути
+const PLATFORM_WIDTH := 3.0   # м — ширина платформы
+const PLATFORM_COLOR := Color(0.70, 0.70, 0.72)
+const FROG_WING := 1.5        # м — длина крыла крестовины (V)
+const FROG_PX := 3.0          # экранные px — толщина крыла (чуть толще нитки)
+const SPAN_JOIN_EPS := 0.05   # м — допуск смежности спанов платформы
 
 const RAIL_PX := 2.0          # экранные px — толщина нитки (не метры!)
 const SIMPLE_PX := 2.5        # экранные px — упрощённая линия
@@ -35,7 +43,7 @@ const SLEEPER_COLOR := Color(0.36, 0.36, 0.36)
 ## Порядок слоёв СНИЗУ ВВЕРХ: дети рисуются в порядке добавления, поэтому
 ## порядок имён здесь и есть порядок отрисовки. Новые слои (платформы,
 ## стрелки) добавляются в список и получают свой проход в rebuild().
-const LAYER_ORDER: Array[String] = ["ballast", "sleepers", "rails"]
+const LAYER_ORDER: Array[String] = ["ballast", "sleepers", "platforms", "rails"]
 
 var geometry: Dictionary = { "elements": [] }  # пустая станция до загрузки: зум до прихода геометрии не падает
 var _zoom := 1.0
@@ -77,7 +85,9 @@ func rebuild() -> void:
 	_track_lines.clear()
 	_lod = _lod_for(_zoom)
 	if _lod == Lod.SIMPLE:
-		# Упрощённый уровень — одна линия на путь, слои не нужны.
+		# Упрощённый уровень — одна линия на путь, слои не нужны. Стрелки и
+		# платформы здесь не детализируются: у стрелки это две линии от носка
+		# (ветвь за ветвью), что и есть «одна линия на путь».
 		for el in geometry.elements:
 			_add_line(self, GM.sample_chain(el.start, el.primitives), SIMPLE_COLOR, SIMPLE_PX)
 		return
@@ -85,14 +95,37 @@ func rebuild() -> void:
 	# шпалы всех, затем нитки всех. Поэлементная отрисовка красила балласт
 	# стрелок (их id ST_A_SW_* идут после путей ST_A_E_*) поверх ниток и шпал
 	# уже нарисованных путей.
+	#
+	# Стрелка (пара ветвей с role) — ОДИН объект: общий балласт, одна шпальная
+	# решётка, рамные рельсы, остряки и крестовина (TurnoutDrawer). Её ветви
+	# исключены из поэлементных проходов, иначе поверх общего слоя остались бы
+	# старые два балласта/решётки/нитки.
 	var layers := _make_layers()
+	var turnouts := _collect_turnouts()
+	var elements := {}
 	for el in geometry.elements:
+		elements[el.id] = el
+	for el in geometry.elements:
+		if _is_turnout_branch(el, turnouts):
+			continue
 		_draw_ballast(layers.ballast, el)
+	for t in turnouts.values():
+		TurnoutDrawer.draw_ballast(self, layers.ballast, t)
+	for obj in geometry.get("trackside", []):
+		TracksideDrawer.draw(self, layers.platforms, obj, elements)
 	if _lod == Lod.FULL:
 		for el in geometry.elements:
+			if _is_turnout_branch(el, turnouts):
+				continue
 			_draw_sleepers(layers.sleepers, el)
+		for t in turnouts.values():
+			TurnoutDrawer.draw_sleepers(self, layers.sleepers, t)
 	for el in geometry.elements:
+		if _is_turnout_branch(el, turnouts):
+			continue
 		_draw_rails(layers.rails, el)
+	for t in turnouts.values():
+		TurnoutDrawer.draw_rails(self, layers.rails, t)
 
 ## Создаёт пустые контейнеры слоёв под World в порядке LAYER_ORDER.
 func _make_layers() -> Dictionary:
@@ -143,6 +176,36 @@ func _draw_sleepers(parent: Node2D, el: Dictionary) -> void:
 	var layer := SleeperLayer.new()
 	layer.setup(segs, SLEEPER_COLOR, SLEEPER_WIDTH)
 	parent.add_child(layer)
+
+## Группирует ветви стрелок по role.turnout. Полная пара (straight+diverging)
+## рисуется как один объект; неполная — остаётся обычными путями, ошибка видна.
+func _collect_turnouts() -> Dictionary:
+	var turnouts := {}
+	for el in geometry.elements:
+		if not el.has("role"):
+			continue
+		var role: Dictionary = el.role
+		var tid: String = role.turnout
+		if not turnouts.has(tid):
+			turnouts[tid] = {"straight": null, "diverging": null, "role": role}
+		var bucket: Dictionary = turnouts[tid]
+		if bucket[role.branch] != null:
+			printerr("TURNOUT %s: дубликат ветви %s (%s)" % [tid, role.branch, el.id])
+		bucket[role.branch] = el
+	var complete := {}
+	for tid in turnouts:
+		var bucket: Dictionary = turnouts[tid]
+		if bucket.straight != null and bucket.diverging != null:
+			complete[tid] = bucket
+		else:
+			printerr("TURNOUT %s: нет пары ветвей — рисуется обычными путями" % tid)
+	return complete
+
+## Ветвь стрелки с ПОЛНОЙ парой не рисуется поэлементно (её рисует TurnoutDrawer).
+func _is_turnout_branch(el: Dictionary, turnouts: Dictionary) -> bool:
+	if not el.has("role"):
+		return false
+	return turnouts.has(el.role.turnout)
 
 ## Охват станции в координатах СЕРВЕРА. Камера живёт вне перевёрнутого
 ## поддерева, поэтому main переводит границы GM.server_rect_to_godot().
