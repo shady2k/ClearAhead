@@ -89,8 +89,8 @@ func turnoutWithTrackside(t *testing.T) string {
 		`"EA": { "horizontal": [ { "kind": "straight", "length": 100.0 } ],
 		  "vertical": [
 		    { "kind": "grade", "length": 20.0, "slope_permille": 0.0 },
-		    { "kind": "vertical_curve", "length": 60.0, "end_slope_permille": 60.0 },
-		    { "kind": "grade", "length": 10.0, "slope_permille": 60.0 },
+		    { "kind": "vertical_curve", "length": 60.0, "end_slope_permille": 20.0 },
+		    { "kind": "grade", "length": 10.0, "slope_permille": 20.0 },
 		    { "kind": "vertical_curve", "length": 10.0, "end_slope_permille": 0.0 }
 		  ] }`, 1)
 	doc = strings.Replace(doc, `"trackside": [],`,

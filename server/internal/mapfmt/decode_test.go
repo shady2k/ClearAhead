@@ -6,7 +6,7 @@ import (
 )
 
 const minimalMap = `{
-  "format_version": 1,
+  "format_version": 2,
   "map_id": "T",
   "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
@@ -41,12 +41,15 @@ func TestDecodeRejects(t *testing.T) {
 		// pending родителя обязан сброситься, иначе ключ принимается за значение.
 		{"дубликат ключа после вложенного объекта", `{"a":{"b":1},"a":2}`, "дублирующийся ключ"},
 		{"не объект", `"x"`, "объект"},
-		{"неизвестное поле", `{"format_version":1,"nope":1}`, "неизвестн"},
-		{"не число", `{"format_version":1,"map_revision":1,"map_id":"T",
+		{"неизвестное поле", `{"format_version": 2,"nope":1}`, "неизвестн"},
+		{"не число", `{"format_version": 2,"map_revision":1,"map_id":"T",
 			"anchors":{"N1.P1":{"x":1e400,"y":0,"z":0,"heading":0}},
 			"topology":{"nodes":[],"turnouts":[],"edges":[],"trackside":[]},
 			"geometry":{"turnouts":{},"edges":{}}}`, ""},
-		{"чужая версия", `{"format_version":2}`, "версия"},
+		// Версия заведомо чужая с обеих сторон: 1 больше не поддерживается
+		// (формат поднят до 2 вместе с блоком construction), 99 не наступит.
+		{"устаревшая версия", `{"format_version":1}`, "версия"},
+		{"будущая версия", `{"format_version":99}`, "версия"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

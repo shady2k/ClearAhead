@@ -104,9 +104,9 @@ func ringWith(lastRadius string) string {
 	    ]
 	  },
 	  "geometry": { "turnouts": {}, "edges": {
-	    "E1": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
-	    "E2": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
-	    "E3": { "horizontal": [ { "kind": "arc", "radius": 50.0, "angle": 1.5707963267948966 } ] },
+	    "E1": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
+	    "E2": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
+	    "E3": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
 	    "E4": { "horizontal": [ { "kind": "arc", "radius": ` + lastRadius + `, "angle": 1.5707963267948966 } ] }
 	  } }
 	}`
@@ -117,7 +117,7 @@ func ringWith(lastRadius string) string {
 // Без него тест на невязку бесполезен: проверка, которая отвергает всё подряд,
 // тоже «ловит расхождение».
 func TestPropagateClosingCycle(t *testing.T) {
-	if _, _, err := Propagate(loadMap(t, ringWith("50.0"))); err != nil {
+	if _, _, err := Propagate(loadMap(t, ringWith("300.0"))); err != nil {
 		t.Fatalf("замкнутое кольцо должно приниматься, получен отказ: %v", err)
 	}
 }
@@ -128,7 +128,7 @@ func TestPropagateClosingCycle(t *testing.T) {
 // него допуск мог бы быть нулевым, и проверка отвергала бы любую честную карту.
 // ΔR = 0,5 мм даёт невязку 0,5·√2 ≈ 0,71 мм — под допуском 1 мм.
 func TestPropagateClosureWithinTolerance(t *testing.T) {
-	if _, _, err := Propagate(loadMap(t, ringWith("50.0005"))); err != nil {
+	if _, _, err := Propagate(loadMap(t, ringWith("300.0005"))); err != nil {
 		t.Fatalf("невязка 0,71 мм под допуском 1 мм должна приниматься, получен отказ: %v", err)
 	}
 }
@@ -142,7 +142,7 @@ func TestPropagateClosureWithinTolerance(t *testing.T) {
 //
 // ΔR = 5 мм даёт невязку 5·√2 ≈ 7,07 мм — семь допусков, а не триста тысяч.
 func TestPropagateClosureMismatch(t *testing.T) {
-	_, _, err := Propagate(loadMap(t, ringWith("50.005")))
+	_, _, err := Propagate(loadMap(t, ringWith("300.005")))
 	if err == nil {
 		t.Fatal("ожидался отказ по невязке замыкания")
 	}

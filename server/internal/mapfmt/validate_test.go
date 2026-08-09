@@ -93,7 +93,7 @@ func TestValidateRejects(t *testing.T) {
 // turnoutMap — горловина из примера спеки §11 в миниатюре: вход, стрелка,
 // два пути. Все три порта стрелки соединены, концы путей объявлены.
 const turnoutMap = `{
-  "format_version": 1,
+  "format_version": 2,
   "map_id": "T",
   "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },

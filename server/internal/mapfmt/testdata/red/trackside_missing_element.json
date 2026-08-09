@@ -1,5 +1,5 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "map_id": "RED_REF",
   "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
