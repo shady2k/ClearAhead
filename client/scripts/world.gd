@@ -32,6 +32,11 @@ const RAIL_COLOR := Color(0.95, 0.95, 0.95)
 const SIMPLE_COLOR := Color(0.80, 0.80, 0.80)
 const SLEEPER_COLOR := Color(0.36, 0.36, 0.36)
 
+## Порядок слоёв СНИЗУ ВВЕРХ: дети рисуются в порядке добавления, поэтому
+## порядок имён здесь и есть порядок отрисовки. Новые слои (платформы,
+## стрелки) добавляются в список и получают свой проход в rebuild().
+const LAYER_ORDER: Array[String] = ["ballast", "sleepers", "rails"]
+
 var geometry: Dictionary = { "elements": [] }  # пустая станция до загрузки: зум до прихода геометрии не падает
 var _zoom := 1.0
 var _lod := -1
@@ -71,24 +76,49 @@ func rebuild() -> void:
 			child.queue_free()
 	_track_lines.clear()
 	_lod = _lod_for(_zoom)
-	for el in geometry.elements:
-		_draw_element(el)
-
-func _draw_element(el: Dictionary) -> void:
-	var pts: PackedVector2Array = GM.sample_chain(el.start, el.primitives)
 	if _lod == Lod.SIMPLE:
-		_add_line(pts, SIMPLE_COLOR, SIMPLE_PX)
+		# Упрощённый уровень — одна линия на путь, слои не нужны.
+		for el in geometry.elements:
+			_add_line(self, GM.sample_chain(el.start, el.primitives), SIMPLE_COLOR, SIMPLE_PX)
 		return
+	# Рисуем СЛОЯМИ, а не поэлементно: сперва балласт всех элементов, затем
+	# шпалы всех, затем нитки всех. Поэлементная отрисовка красила балласт
+	# стрелок (их id ST_A_SW_* идут после путей ST_A_E_*) поверх ниток и шпал
+	# уже нарисованных путей.
+	var layers := _make_layers()
+	for el in geometry.elements:
+		_draw_ballast(layers.ballast, el)
+	if _lod == Lod.FULL:
+		for el in geometry.elements:
+			_draw_sleepers(layers.sleepers, el)
+	for el in geometry.elements:
+		_draw_rails(layers.rails, el)
+
+## Создаёт пустые контейнеры слоёв под World в порядке LAYER_ORDER.
+func _make_layers() -> Dictionary:
+	var layers := {}
+	for name in LAYER_ORDER:
+		var layer := Node2D.new()
+		layer.name = name
+		add_child(layer)
+		layers[name] = layer
+	return layers
+
+## Балласт элемента — один Polygon2D в слой балласта.
+func _draw_ballast(parent: Node2D, el: Dictionary) -> void:
+	var pts: PackedVector2Array = GM.sample_chain(el.start, el.primitives)
 	var ballast := Polygon2D.new()
 	ballast.polygon = GM.offset_polygon(pts, BALLAST_HALF_W)
 	ballast.color = BALLAST_COLOR
-	add_child(ballast)
-	for sign in [1.0, -1.0]:
-		_add_line(GM.offset_polyline(pts, GAUGE_HALF * sign), RAIL_COLOR, RAIL_PX)
-	if _lod == Lod.FULL:
-		_add_sleepers(pts)
+	parent.add_child(ballast)
 
-func _add_line(points: PackedVector2Array, color: Color, px: float) -> void:
+## Две нитки элемента — Line2D в слой ниток (ширины живут в _track_lines).
+func _draw_rails(parent: Node2D, el: Dictionary) -> void:
+	var pts: PackedVector2Array = GM.sample_chain(el.start, el.primitives)
+	for sign in [1.0, -1.0]:
+		_add_line(parent, GM.offset_polyline(pts, GAUGE_HALF * sign), RAIL_COLOR, RAIL_PX)
+
+func _add_line(parent: Node2D, points: PackedVector2Array, color: Color, px: float) -> void:
 	var line := Line2D.new()
 	line.points = points
 	line.default_color = color
@@ -96,10 +126,12 @@ func _add_line(points: PackedVector2Array, color: Color, px: float) -> void:
 	line.joint_mode = Line2D.LINE_JOINT_ROUND
 	line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	add_child(line)
+	parent.add_child(line)
 	_track_lines.append({ "line": line, "px": px })
 
-func _add_sleepers(pts: PackedVector2Array) -> void:
+## Шпалы элемента — один SleeperLayer (пачка draw_multiline) в слой шпал.
+func _draw_sleepers(parent: Node2D, el: Dictionary) -> void:
+	var pts: PackedVector2Array = GM.sample_chain(el.start, el.primitives)
 	var resampled := GM.resample_uniform(pts, SLEEPER_STEP)
 	var ns := GM.normals(resampled)
 	var segs := PackedVector2Array()
@@ -110,7 +142,7 @@ func _add_sleepers(pts: PackedVector2Array) -> void:
 		segs.append(p + n * SLEEPER_HALF)
 	var layer := SleeperLayer.new()
 	layer.setup(segs, SLEEPER_COLOR, SLEEPER_WIDTH)
-	add_child(layer)
+	parent.add_child(layer)
 
 ## Охват станции в координатах СЕРВЕРА. Камера живёт вне перевёрнутого
 ## поддерева, поэтому main переводит границы GM.server_rect_to_godot().
