@@ -11,6 +11,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/httpapi"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
@@ -357,7 +358,24 @@ func TestManifestFromFixture(t *testing.T) {
 	if err != nil {
 		t.Fatalf("манифест: %v", err)
 	}
-	h := httpapi.NewHandler(rg, man)
+	// Фикстура попадает в каталог карт и в память сервера через реальный путь
+	// загрузки — манифест ручки обязан совпасть с посчитанным напрямую.
+	dir := t.TempDir()
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("сериализация фикстуры: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "fixture_station.json"), b, 0o644); err != nil {
+		t.Fatalf("запись фикстуры: %v", err)
+	}
+	s, err := mapstore.Open(dir)
+	if err != nil {
+		t.Fatalf("каталог карт: %v", err)
+	}
+	if _, err := s.Load("fixture_station.json"); err != nil {
+		t.Fatalf("загрузка фикстуры: %v", err)
+	}
+	h := httpapi.NewHandler(s)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/manifest", nil))
 	if w.Code != 200 {

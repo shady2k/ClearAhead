@@ -4,23 +4,39 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
+// geometryURL — URL геометрии текущей карты: id и ревизия берутся из
+// манифеста, как их берёт клиент.
+func geometryURL(man track.Manifest) string {
+	return "/maps/" + man.MapID + "/revisions/" + strconv.Itoa(man.Revision) + "/geometry"
+}
+
+// newTestHandler поднимает сервер над свежим каталогом карт с картой-затравкой
+// в памяти: ручки геометрии и манифеста обслуживают ровно её.
 func newTestHandler(t *testing.T) (http.Handler, track.Manifest) {
 	t.Helper()
-	rg := &track.RenderGeometry{MapID: "ST_A", Revision: 1}
-	man := track.Manifest{MapID: "ST_A", Revision: 1, TrackHash: "cafebabe", RenderGeometryHash: "deadbeef"}
-	return NewHandler(rg, man), man
+	s, err := mapstore.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("каталог карт: %v", err)
+	}
+	st, err := s.New()
+	if err != nil {
+		t.Fatalf("новая карта: %v", err)
+	}
+	return NewHandler(s), st.Manifest
 }
 
 func TestGeometryOK(t *testing.T) {
 	h, man := newTestHandler(t)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/maps/ST_A/revisions/1/geometry", nil))
+	h.ServeHTTP(w, httptest.NewRequest("GET", geometryURL(man), nil))
 	if w.Code != 200 {
 		t.Fatalf("код %d, ожидалось 200", w.Code)
 	}
@@ -37,7 +53,7 @@ func TestGeometryOK(t *testing.T) {
 
 func TestGeometryNotModified(t *testing.T) {
 	h, man := newTestHandler(t)
-	r := httptest.NewRequest("GET", "/maps/ST_A/revisions/1/geometry", nil)
+	r := httptest.NewRequest("GET", geometryURL(man), nil)
 	r.Header.Set("If-None-Match", `"`+man.RenderGeometryHash+`"`)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
@@ -90,7 +106,7 @@ func TestGeometryBadPath(t *testing.T) {
 func TestGeometryHead(t *testing.T) {
 	h, man := newTestHandler(t)
 	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("HEAD", "/maps/ST_A/revisions/1/geometry", nil))
+	h.ServeHTTP(w, httptest.NewRequest("HEAD", geometryURL(man), nil))
 	if w.Code != 200 {
 		t.Fatalf("HEAD: код %d, ожидалось 200", w.Code)
 	}
