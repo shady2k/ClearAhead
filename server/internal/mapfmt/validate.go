@@ -225,9 +225,10 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 		if t.Hand != "left" && t.Hand != "right" {
 			return nil, fmt.Errorf("mapfmt: стрелка %s: рукость должна быть left или right, получено %q", t.ID, t.Hand)
 		}
-		if t.Frog == "" {
-			return nil, fmt.Errorf("mapfmt: стрелка %s: пустая марка крестовины (frog) — по ней клиент строит крестовину", t.ID)
-		}
+		// Марка крестовины НЕ проверяется намеренно: §8 объявляет её
+		// происхождением, а не ограничением, ради импорта реальных станций с
+		// произвольными радиусами. Клиент строит крестовину из геометрии, а не
+		// из марки.
 		for _, p := range []string{t.Ports.Common, t.Ports.Straight, t.Ports.Diverging} {
 			if p == "" {
 				return nil, fmt.Errorf("mapfmt: стрелка %s: не заняты все три порта", t.ID)

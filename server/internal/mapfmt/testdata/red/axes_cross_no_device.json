@@ -1,0 +1,26 @@
+{
+  "format_version": 1,
+  "map_id": "RED_CROSS",
+  "map_revision": 1,
+  "anchors": {
+    "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 },
+    "N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }
+  },
+  "topology": {
+    "nodes": [
+      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
+      { "id": "N3", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "N4", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+    "turnouts": [], "trackside": [],
+    "edges": [
+      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
+      { "id": "E2", "from": "N3.P1", "to": "N4.P1" }
+    ]
+  },
+  "geometry": { "turnouts": {}, "edges": {
+    "E1": { "horizontal": [ { "kind": "straight", "length": 300.0 } ] },
+    "E2": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] }
+  } }
+}
