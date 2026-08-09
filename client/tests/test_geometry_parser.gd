@@ -26,6 +26,50 @@ func _run() -> void:
 	_expect_ok('{"map_id":"M","map_revision":1,"elements":[],"extra_field":42}', "лишние поля игнорируются")
 	_expect_ok('{"map_id":"M","map_revision":1,"elements":[{"id":"a","start":{"plan":{"x":0,"y":0,"heading":-3.14159},"z":142,"slope":-0},"primitives":[{"kind":"arc","length":33.21,"radius":300,"angle":-0.1107}]}]}',
 		"отрицательные heading/angle допустимы")
+	_expect_ok('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28},"ballast":{"half_width":1.75}}],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[{"element":"a","from":0,"to":100,"direction":"forward"},{"element":"b","from":20,"to":80,"direction":"reverse"}]}],"features":[{"owner":"SW_1","kind":"frog","point":{"x":1.5,"y":-0.7},"addresses":[{"element":"SW_1:straight","u":29.3,"tangent":{"x":1,"y":0}},{"element":"SW_1:diverging","u":29.2,"tangent":{"x":0.995,"y":-0.11}}]}],"placement_algorithm":"placement-v1"}',
+		"полный контракт с конструкцией и крестовиной")
+	_expect_ok('{"map_id":"M","map_revision":1,"elements":[],"track_types":[],"construction_runs":[],"features":[],"placement_algorithm":""}',
+		"пустые новые массивы допустимы")
+
+	# --- track_types ---
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":0,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28},"ballast":{"half_width":1.75}}]}',
+		"gauge == 0")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"pitch":0,"length":2.5,"width":0.28},"ballast":{"half_width":1.75}}]}',
+		"sleeper.pitch == 0")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"length":2.5,"width":0.28},"ballast":{"half_width":1.75}}]}',
+		"нет sleeper.pitch")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28}}]}',
+		"нет ballast")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28},"ballast":{"half_width":-1.75}}]}',
+		"ballast.half_width < 0")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"track_types":[{"id":"T1","gauge":1.435,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28},"ballast":{"half_width":1.75}},{"id":"T1","gauge":1.520,"sleeper":{"pitch":0.6,"length":2.5,"width":0.28},"ballast":{"half_width":1.75}}]}',
+		"дубликат id типа")
+
+	# --- construction_runs ---
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","coordinate":"u","phase":0,"spans":[{"element":"a","from":0,"to":10,"direction":"forward"}]}]}',
+		"run без type (в проводе ссылка всегда явная)")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"s","phase":0,"spans":[{"element":"a","from":0,"to":10,"direction":"forward"}]}]}',
+		"coordinate не u")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":-0.1,"spans":[{"element":"a","from":0,"to":10,"direction":"forward"}]}]}',
+		"phase < 0")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[]}]}',
+		"run с пустыми спанами")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[{"element":"a","from":0,"to":10,"direction":"diagonal"}]}]}',
+		"неизвестное направление спана")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[{"element":"a","from":10,"to":5,"direction":"forward"}]}]}',
+		"to < from")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"construction_runs":[{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[{"element":"a","from":0,"to":10,"direction":"forward"}]},{"id":"R1","type":"T1","coordinate":"u","phase":0,"spans":[{"element":"a","from":0,"to":10,"direction":"forward"}]}]}',
+		"дубликат id run")
+
+	# --- features ---
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"features":[{"owner":"SW_1","kind":"switch_toe","point":{"x":0,"y":0},"addresses":[{"element":"a","u":1,"tangent":{"x":1,"y":0}},{"element":"b","u":1,"tangent":{"x":1,"y":0}}]}]}',
+		"неизвестный вид особенности")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"features":[{"owner":"SW_1","kind":"frog","point":{"x":0,"y":0},"addresses":[{"element":"a","u":1,"tangent":{"x":1,"y":0}}]}]}',
+		"у крестовины один адрес")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"features":[{"owner":"SW_1","kind":"frog","point":{"x":"0","y":0},"addresses":[{"element":"a","u":1,"tangent":{"x":1,"y":0}},{"element":"b","u":1,"tangent":{"x":1,"y":0}}]}]}',
+		"point.x — строка")
+	_expect_fail('{"map_id":"M","map_revision":1,"elements":[],"features":[{"owner":"SW_1","kind":"frog","point":{"x":0,"y":0},"addresses":[{"element":"a","u":1,"tangent":{"x":1}},{"element":"b","u":1,"tangent":{"x":1,"y":0}}]}]}',
+		"tangent.y отсутствует")
 
 	# --- корень ---
 	_expect_fail("", "пустое тело")

@@ -1,11 +1,11 @@
 extends SceneTree
 ## Структурная проверка отрисовки: грузит эталон, собирает World на полном
 ## LOD и считает узлы по слоям. Ожидания при 31 элементе (15 обычных, 16
-## ветвей = 8 пар стрелок) и 2 путевых объектах:
+## ветвей = 8 пар стрелок), 14 run'ах решётки и 2 путевых объектах:
 ##   ballast:   15 обычных + 8 общих (стрелки) = 23
-##   sleepers:  15 + 8 = 23
+##   sleepers:  14 run'ов + 8 стрелочных решёток = 22
 ##   platforms: 2 (по одному узлу на объект)
-##   rails:     15*2 + 8*(4 нитки + 2 крыла крестовины) = 78
+##   rails:     15*2 + 8*(4 нитки + 2 крыла крестовины) + 8 подписей марки = 86
 func _initialize() -> void:
 	const Parser := preload("res://scripts/geometry_parser.gd")
 	var text := FileAccess.get_file_as_string("../contract/render_geometry.golden.json")

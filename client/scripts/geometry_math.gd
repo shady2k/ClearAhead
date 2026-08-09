@@ -76,6 +76,102 @@ static func normals(points: PackedVector2Array) -> PackedVector2Array:
 		ns.append(Vector2(-t.y, t.x))
 	return ns
 
+## Поза на осевой линии цепочки в координате u (м от начала элемента).
+## Аналитическая, НЕ тесселированная: тесселяция — клиентская деталь и на
+## позиции влиять не должна (спека §4 «Позиция считается от аналитической
+## pose(u), не от тесселированной полилинии»). Возврат:
+## { ok, x, y, heading } — координаты сервера (Y вверх), heading — угол
+## касательной по ходу возрастания u.
+static func pose_at(start: Dictionary, primitives: Array[Dictionary], u: float) -> Dictionary:
+	var x := float(start.plan.x)
+	var y := float(start.plan.y)
+	var h := float(start.plan.heading)
+	if not is_finite(u) or u < 0.0:
+		return {"ok": false, "x": x, "y": y, "heading": h,
+			"error": "pose_at: u вне домена: %v" % u}
+	var remaining := u
+	for p in primitives:
+		var len := float(p.length)
+		if remaining <= len:
+			if p.kind == "straight":
+				return {"ok": true, "x": x + cos(h) * remaining,
+					"y": y + sin(h) * remaining, "heading": h}
+			var kappa := float(p.angle) / len
+			if absf(kappa) < 1e-12:
+				return {"ok": true, "x": x + cos(h) * remaining,
+					"y": y + sin(h) * remaining, "heading": h}
+			# интеграл касательной: x = x0 + (sin(h+ks)-sin h)/k, y аналогично
+			return {
+				"ok": true,
+				"x": x + (sin(h + kappa * remaining) - sin(h)) / kappa,
+				"y": y + (cos(h) - cos(h + kappa * remaining)) / kappa,
+				"heading": h + kappa * remaining,
+			}
+		# примитив целиком до u — перемотать позу к его концу
+		if p.kind == "straight":
+			x += cos(h) * len
+			y += sin(h) * len
+		else:
+			var angle := float(p.angle)
+			var kappa := angle / len
+			if absf(kappa) < 1e-12:
+				x += cos(h) * len
+				y += sin(h) * len
+			else:
+				x += (sin(h + angle) - sin(h)) / kappa
+				y += (cos(h) - cos(h + angle)) / kappa
+			h += angle
+		remaining -= len
+	# u за концом цепочки: последняя поза (домен гарантируют спаны run'а)
+	return {"ok": true, "x": x, "y": y, "heading": h}
+
+## Длина run: сумма длин спанов (спека §4).
+static func run_length(run: Dictionary) -> float:
+	var total := 0.0
+	for span in run.spans:
+		total += float(span.to) - float(span.from)
+	return total
+
+## Отображение накопленной координаты run r в локальный u спана (спека §4):
+## forward — u = from + (r − r₀), reverse — u = to − (r − r₀). Граница между
+## спанами принадлежит следующему спану; r == run_length — за пределами
+## (полуоткрытое правило [0, run_length)).
+## { ok: true, element, u } | { ok: false, error }.
+static func run_to_local(run: Dictionary, r: float) -> Dictionary:
+	if not is_finite(r) or r < 0.0:
+		return {"ok": false, "error": "координата run вне домена: %v" % r}
+	var r0 := 0.0
+	for span in run.spans:
+		var span_len := float(span.to) - float(span.from)
+		if r >= r0 + span_len:
+			r0 += span_len
+			continue
+		if span.direction == "reverse":
+			return {"ok": true, "element": span.element,
+				"u": float(span.to) - (r - r0)}
+		return {"ok": true, "element": span.element,
+			"u": float(span.from) + (r - r0)}
+	return {"ok": false, "error": "координата run %v за пределами [0, %v)" % [r, r0]}
+
+## Моменты размещения шпал run по рецепту (спека §4): полуоткрытое правило
+## phase + n×pitch ∈ [0, run_length). Шпала в конечной точке НЕ ставится —
+## на стыке спанов/элементов сдвоенной шпалы не возникает. Неположительный
+## шаг или нечисловые параметры — пусто, а не зацикливание.
+static func run_sleeper_offsets(phase: float, pitch: float, length: float) -> PackedFloat64Array:
+	if not is_finite(phase) or not is_finite(pitch) or not is_finite(length):
+		return PackedFloat64Array()
+	if pitch <= 0.0 or length <= 0.0:
+		return PackedFloat64Array()
+	var out := PackedFloat64Array()
+	var n := 0
+	while true:
+		var r := phase + float(n) * pitch
+		if r >= length:
+			break
+		out.append(r)
+		n += 1
+	return out
+
 ## Полилиния, смещённая на offset влево от движения (отрицательный — вправо).
 static func offset_polyline(points: PackedVector2Array, offset: float) -> PackedVector2Array:
 	var ns := normals(points)
@@ -98,6 +194,9 @@ static func offset_polygon(points: PackedVector2Array, half_width: float) -> Pac
 static func resample_uniform(points: PackedVector2Array, step: float) -> PackedVector2Array:
 	var out := PackedVector2Array()
 	if points.is_empty():
+		return out
+	if not is_finite(step) or step <= 0.0:
+		printerr("resample_uniform: шаг %v неположителен — выборка не строится" % step)
 		return out
 	out.append(points[0])
 	var total := 0.0
