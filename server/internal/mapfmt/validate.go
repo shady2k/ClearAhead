@@ -58,7 +58,17 @@ func Validate(m *Map) error {
 	if err := m.validateAnchors(ports); err != nil {
 		return err
 	}
-	return m.validateAxisIntersections()
+	if err := m.validateAxisIntersections(); err != nil {
+		return err
+	}
+	// Модули валидатора. Порядок значим: сперва структура, потом конструкция,
+	// потом нормы — иначе на сломанной топологии отказ придёт не по той
+	// причине. Каждый модуль живёт в своём файле и называет себя в тексте
+	// отказа («отрисовка: …», «нормы: …»).
+	if err := m.validateConstruction(); err != nil {
+		return err
+	}
+	return m.validateProfile(DefaultProfile())
 }
 
 // validateGeoreference проверяет блок привязки по форме. Компилятор его не
