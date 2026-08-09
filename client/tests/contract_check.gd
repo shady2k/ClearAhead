@@ -83,19 +83,83 @@ func _initialize() -> void:
 		platforms += 1
 	_check(platforms == 2, "2 платформы в контракте, получили %d" % platforms)
 
+	# Конструкция пути (спека §3–4): один тип, 14 run'ов, полное покрытие
+	# обычных рёбер, крестовины из features.
+	_check(geo.track_types.size() == 1, "1 тип, получили %d" % geo.track_types.size())
+	var tt: Dictionary = geo.track_types[0]
+	_check(tt.id == "TRACK_MAIN_1435", "тип TRACK_MAIN_1435, получили «%s»" % tt.id)
+	_approx(tt.gauge, 1.435, "gauge 1.435")
+	_approx(tt.sleeper.pitch, 0.6, "шаг шпал 0.6")
+	_approx(tt.sleeper.length, 2.5, "длина шпалы 2.5")
+	_approx(tt.sleeper.width, 0.28, "ширина шпалы 0.28")
+	_approx(tt.ballast.half_width, 1.75, "полуширина балласта 1.75")
+	_check(geo.construction_runs.size() == 14, "14 run'ов, получили %d" % geo.construction_runs.size())
+	var covered := {}
+	var joint_run: Dictionary = {}
+	for run in geo.construction_runs:
+		_check(run.has("type") and not (run.type as String).is_empty(), "%s: type явный" % run.id)
+		_check(run.coordinate == "u", "%s: coordinate == u" % run.id)
+		for span in run.spans:
+			covered[span.element] = covered.get(span.element, 0) + 1
+		if run.id == "RUN_ST_A_E_E34_T4":
+			joint_run = run
+	var uncovered := 0
+	var overlapped := 0
+	for el in geo.elements:
+		if el.has("role"):
+			continue
+		var c: int = covered.get(el.id, 0)
+		if c == 0:
+			uncovered += 1
+		elif c > 1:
+			overlapped += 1
+	_check(uncovered == 0, "обычные рёбра покрыты run'ами (непокрыто %d)" % uncovered)
+	_check(overlapped == 0, "перекрытий покрытия нет (их %d)" % overlapped)
+	_check(joint_run.spans.size() == 2, "run E34/T4 из двух спанов (их %d)" % joint_run.spans.size())
+	_check(joint_run.spans[0].element == "ST_A_E_E34" and joint_run.spans[1].element == "ST_A_E_T4",
+		"run E34/T4 покрывает E34 и T4")
+	_check(geo.placement_algorithm == "placement-v1", "placement_algorithm == placement-v1, получили «%s»" % geo.placement_algorithm)
+
+	# Крестовины (спека §5): 8 стрелок, точка и адреса из эталона.
+	var frogs := 0
+	for f in geo.features:
+		_check(f.kind == Parser.KIND_FEATURE_FROG, "%s: kind frog, получили «%s»" % [f.owner, f.kind])
+		frogs += 1
+	_check(frogs == 8, "8 крестовин, получили %d" % frogs)
+	var sw1: Dictionary = {}
+	for f in geo.features:
+		if f.owner == "ST_A_SW_1":
+			sw1 = f
+	_check(not sw1.is_empty(), "есть крестовина ST_A_SW_1")
+	if not sw1.is_empty():
+		_approx(sw1.point.x, 329.3428015022417, "SW_1: point.x")
+		_approx(sw1.point.y, -0.7175, "SW_1: point.y")
+		_check(sw1.addresses.size() == 2, "SW_1: два адреса (их %d)" % sw1.addresses.size())
+		_check(sw1.addresses[0].element == "ST_A_SW_1:straight", "SW_1: адрес 0 — прямой проход")
+		_check(sw1.addresses[1].element == "ST_A_SW_1:diverging", "SW_1: адрес 1 — боковой проход")
+		_approx(sw1.addresses[0].u, 29.342801502241677, "SW_1: u прямого прохода")
+		_approx(sw1.addresses[1].u, 29.31944228015446, "SW_1: u бокового прохода")
+		_approx(sw1.addresses[0].tangent.x, 1.0, "SW_1: касательная прямого прохода")
+		_approx(sw1.addresses[0].tangent.y, 0.0, "SW_1: касательная прямого прохода y")
+
 	if _failures == 0:
-		print("CONTRACT CHECK OK: %s · %s rev %d · %d элементов · %d дуг · %d ролей · %d объектов" % [
-			golden, geo.map_id, geo.map_revision, geo.elements.size(), arcs, roles, platforms])
+		print("CONTRACT CHECK OK: %s · %s rev %d · %d элементов · %d дуг · %d ролей · %d объектов · %d run'ов · %d крестовин" % [
+			golden, geo.map_id, geo.map_revision, geo.elements.size(), arcs, roles, platforms,
+			geo.construction_runs.size(), geo.features.size()])
 		quit(0)
 	else:
 		printerr("CONTRACT CHECK FAIL: %d проверок не сошлось" % _failures)
 		quit(1)
+
+func _approx(a: float, b: float, what: String) -> void:
+	_check(absf(a - b) < 1e-6, "%s: %v != %v" % [what, a, b])
 
 func _check(cond: bool, what: String) -> void:
 	if cond:
 		return
 	_failures += 1
 	printerr("CONTRACT CHECK: не сошлось: %s" % what)
+
 
 func _arg_value(name: String, default: String) -> String:
 	for arg in OS.get_cmdline_user_args():

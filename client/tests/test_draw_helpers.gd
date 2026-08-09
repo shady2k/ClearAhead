@@ -57,29 +57,39 @@ func _run() -> void:
 	_approx(pts[pts.size() - 1], Vector2(333.14221294597223, -1.8362971100542635),
 		"дуга из эталона попадает в старт W12")
 
-	# --- frog: марка ---
-	var mark := Turnout.parse_frog_mark("1/9")
-	_check(mark.ok, "марка 1/9 разбирается", mark)
-	_approx_f(mark.value, atan(1.0 / 9.0), "1/9 -> atan(1/9)")
-	mark = Turnout.parse_frog_mark(" 1 / 9 ")
-	_check(mark.ok and absf(mark.value - atan(1.0 / 9.0)) < 1e-9, "пробелы вокруг дроби допустимы", mark)
-	mark = Turnout.parse_frog_mark("1/12")
-	_check(mark.ok and absf(mark.value - atan(1.0 / 12.0)) < 1e-9, "1/12 -> atan(1/12)", mark)
-	for bad in ["1/0", "0/9", "1.5/9", "9", "1/", "/9", "abc", "", "1\\9"]:
-		var r := Turnout.parse_frog_mark(bad)
-		_check(not r.ok, "неразбираемая марка «%s» — ошибка" % bad, r)
-
-	# --- frog: точка расхождения из эталона SW_1 (toe 300,0, hand=right) ---
-	start = {"plan": {"x": 300.0, "y": 0.0, "heading": 0.0}}
-	var straight_pts := PackedVector2Array([Vector2(300, 0), Vector2(333.5, 0)])
-	prims = [{"kind": "arc", "length": 33.21, "radius": 300.0, "angle": -0.1107}]
-	var div_pts := Trackside.sample_range(start, prims, 0.0, 33.21)
-	var frog := Turnout._frog_point(straight_pts, div_pts, -1.0, 1.435, 0.7175)
-	_check(frog.ok, "точка крестовины найдена", frog)
-	if frog.ok:
-		# крестовина — точка ВСТРЕЧИ ниток: на южном рамном рельсе прямой ветви
-		_approx_f(frog.point.y, -0.7175, "крестовина SW_1: y на рамном рельсе")
-		_approx_f(frog.point.x, 329.38, "крестовина SW_1: x в точке расхождения (s*~29.3)")
+	# --- frog: крылья из особенности контракта (спека §5) ---
+	var feature := {
+		"owner": "SW_1",
+		"kind": "frog",
+		"point": {"x": 329.34, "y": -0.7175},
+		"addresses": [
+			{"element": "SW_1:straight", "u": 29.34, "tangent": {"x": 1.0, "y": 0.0}},
+			{"element": "SW_1:diverging", "u": 29.32, "tangent": {"x": 0.995, "y": -0.110}},
+		],
+	}
+	var wings := Turnout.frog_wings(feature, 1.5)
+	_check(wings.size() == 2, "frog_wings: два крыла", wings.size())
+	_approx(wings[0][0], Vector2(329.34, -0.7175), "frog: крыло 1 начинается в point")
+	_approx(wings[0][1], Vector2(329.34 + 1.5, -0.7175), "frog: крыло 1 по касательной прямого прохода")
+	_approx(wings[1][1], Vector2(329.34 + 1.5 * 0.995, -0.7175 + 1.5 * (-0.110)),
+		"frog: крыло 2 по касательной бокового прохода")
+	# карта без особенности — рисование пропускается до frog_wings (is_empty
+	# в _draw_frog); крылья строятся только из валидной особенности
+	# точка из эталона SW_1: (329.3428, -0.7175); адреса — прямой, затем боковой
+	var golden := {
+		"owner": "ST_A_SW_1",
+		"kind": "frog",
+		"point": {"x": 329.3428015022417, "y": -0.7175},
+		"addresses": [
+			{"element": "ST_A_SW_1:straight", "u": 29.342801502241677, "tangent": {"x": 1.0, "y": 0.0}},
+			{"element": "ST_A_SW_1:diverging", "u": 29.31944228015446, "tangent": {"x": 0.9952280796009604, "y": -0.09756897454695994}},
+		],
+	}
+	var gwings := Turnout.frog_wings(golden, 1.5)
+	_approx(gwings[0][0], Vector2(329.3428015022417, -0.7175), "frog: точка из эталона")
+	_approx(gwings[0][1], Vector2(330.8428015022417, -0.7175), "frog: крыло прямого прохода по эталону")
+	_approx(gwings[1][1], Vector2(329.3428015022417 + 1.5 * 0.9952280796009604, -0.7175 + 1.5 * (-0.09756897454695994)),
+		"frog: крыло бокового прохода по эталону")
 
 func _approx(a: Vector2, b: Vector2, what: String) -> void:
 	_total += 1
