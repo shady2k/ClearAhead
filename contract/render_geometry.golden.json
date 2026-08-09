@@ -1,6 +1,6 @@
 {
   "map_id": "ST_A",
-  "map_revision": 2,
+  "map_revision": 3,
   "elements": [
     {
       "id": "ST_A_E_APPROACH",
@@ -734,5 +734,434 @@
         }
       ]
     }
-  ]
+  ],
+  "track_types": [
+    {
+      "id": "TRACK_MAIN_1435",
+      "gauge": 1.435,
+      "sleeper": {
+        "pitch": 0.6,
+        "length": 2.5,
+        "width": 0.28
+      },
+      "ballast": {
+        "half_width": 1.75
+      }
+    }
+  ],
+  "construction_runs": [
+    {
+      "id": "RUN_ST_A_E_APPROACH",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_APPROACH",
+          "from": 0,
+          "to": 300,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_E12",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_E12",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_E23",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_E23",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_E34_T4",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_E34",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        },
+        {
+          "element": "ST_A_E_T4",
+          "from": 0,
+          "to": 883.5,
+          "direction": "reverse"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_EXIT",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_EXIT",
+          "from": 0,
+          "to": 100,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_IND",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_IND",
+          "from": 0,
+          "to": 400,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_SID",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_SID",
+          "from": 0,
+          "to": 120,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_T1",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_T1",
+          "from": 0,
+          "to": 1292.051,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_T2",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_T2",
+          "from": 0,
+          "to": 1173.701,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_T3",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_T3",
+          "from": 0,
+          "to": 1011.85,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_W12",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_W12",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_W1IND",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_W1IND",
+          "from": 0,
+          "to": 10,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_W23",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_W23",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_ST_A_E_W34",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0,
+      "spans": [
+        {
+          "element": "ST_A_E_W34",
+          "from": 0,
+          "to": 47.941,
+          "direction": "forward"
+        }
+      ]
+    }
+  ],
+  "features": [
+    {
+      "owner": "ST_A_SW_1",
+      "kind": "frog",
+      "point": {
+        "x": 329.3428015022417,
+        "y": -0.7175
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_1:straight",
+          "u": 29.342801502241677,
+          "tangent": {
+            "x": 1,
+            "y": 0
+          }
+        },
+        {
+          "element": "ST_A_SW_1:diverging",
+          "u": 29.31944228015446,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": -0.0975759682185349
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_2",
+      "kind": "frog",
+      "point": {
+        "x": 410.2680590850921,
+        "y": -6.017487349798898
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_2:straight",
+          "u": 29.34280150224166,
+          "tangent": {
+            "x": 1,
+            "y": 4.440892098500626e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_2:diverging",
+          "u": 29.31944228015446,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": -0.09757596821853445
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_3",
+      "kind": "frog",
+      "point": {
+        "x": 491.19331666794324,
+        "y": -11.317474699597794
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_3:straight",
+          "u": 29.342801502242402,
+          "tangent": {
+            "x": 1,
+            "y": 4.440892098500626e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_3:diverging",
+          "u": 29.319442280155194,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": -0.09757596821853445
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_E1",
+      "kind": "frog",
+      "point": {
+        "x": 1673.2081984977576,
+        "y": -0.7175000000000006
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_E1:straight",
+          "u": 29.342801502242384,
+          "tangent": {
+            "x": -1,
+            "y": 1.2246467991473515e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_E1:diverging",
+          "u": 29.319442280155062,
+          "tangent": {
+            "x": -0.9952280796009604,
+            "y": -0.09757596821853512
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_E2",
+      "kind": "frog",
+      "point": {
+        "x": 1592.2834560806089,
+        "y": -6.017487349798373
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_E2:straight",
+          "u": 29.34280150224162,
+          "tangent": {
+            "x": -1,
+            "y": -5.665538897647978e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_E2:diverging",
+          "u": 29.31944228015446,
+          "tangent": {
+            "x": -0.9952280796009603,
+            "y": -0.09757596821853556
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_E3",
+      "kind": "frog",
+      "point": {
+        "x": 1511.3577136634592,
+        "y": -11.317474699597339
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_E3:straight",
+          "u": 29.34280150224162,
+          "tangent": {
+            "x": -1,
+            "y": -5.665538897647978e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_E3:diverging",
+          "u": 29.319442280154394,
+          "tangent": {
+            "x": -0.9952280796009603,
+            "y": -0.09757596821853556
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_IND",
+      "kind": "frog",
+      "point": {
+        "x": 372.8428015022417,
+        "y": 0.7175
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_IND:straight",
+          "u": 29.342801502241677,
+          "tangent": {
+            "x": 1,
+            "y": 0
+          }
+        },
+        {
+          "element": "ST_A_SW_IND:diverging",
+          "u": 29.31944228015446,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": 0.0975759682185349
+          }
+        }
+      ]
+    },
+    {
+      "owner": "ST_A_SW_SID",
+      "kind": "frog",
+      "point": {
+        "x": 572.1185742507929,
+        "y": -16.61746204939669
+      },
+      "addresses": [
+        {
+          "element": "ST_A_SW_SID:straight",
+          "u": 29.34280150224166,
+          "tangent": {
+            "x": 1,
+            "y": 4.440892098500626e-16
+          }
+        },
+        {
+          "element": "ST_A_SW_SID:diverging",
+          "u": 29.319442280154394,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": -0.09757596821853445
+          }
+        }
+      ]
+    }
+  ],
+  "placement_algorithm": "placement-v1"
 }

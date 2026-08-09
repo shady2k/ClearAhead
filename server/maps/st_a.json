@@ -1,7 +1,7 @@
 {
-  "format_version": 1,
+  "format_version": 2,
   "map_id": "ST_A",
-  "map_revision": 2,
+  "map_revision": 3,
   "georeference": {
     "datum": "WGS84",
     "origin": {
@@ -565,5 +565,212 @@
         ]
       }
     }
+  },
+  "construction": {
+    "default_type": "TRACK_MAIN_1435",
+    "types": [
+      {
+        "id": "TRACK_MAIN_1435",
+        "gauge": 1.435,
+        "sleeper": {
+          "pitch": 0.6,
+          "length": 2.5,
+          "width": 0.28
+        },
+        "ballast": {
+          "half_width": 1.75
+        }
+      }
+    ],
+    "runs": [
+      {
+        "id": "RUN_ST_A_E_APPROACH",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_APPROACH",
+            "from": 0,
+            "to": 300,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_E12",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_E12",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_E23",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_E23",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_EXIT",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_EXIT",
+            "from": 0,
+            "to": 100,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_IND",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_IND",
+            "from": 0,
+            "to": 400,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_SID",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_SID",
+            "from": 0,
+            "to": 120,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_T1",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_T1",
+            "from": 0,
+            "to": 1292.051,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_T2",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_T2",
+            "from": 0,
+            "to": 1173.701,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_T3",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_T3",
+            "from": 0,
+            "to": 1011.85,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_W12",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_W12",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_W1IND",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_W1IND",
+            "from": 0,
+            "to": 10,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_W23",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_W23",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_W34",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_W34",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          }
+        ]
+      },
+      {
+        "id": "RUN_ST_A_E_E34_T4",
+        "coordinate": "u",
+        "phase": 0,
+        "spans": [
+          {
+            "element": "ST_A_E_E34",
+            "from": 0,
+            "to": 47.941,
+            "direction": "forward"
+          },
+          {
+            "element": "ST_A_E_T4",
+            "from": 0,
+            "to": 883.5,
+            "direction": "reverse"
+          }
+        ]
+      }
+    ]
   }
 }

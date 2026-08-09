@@ -9,6 +9,11 @@ type Map struct {
 	Anchors       map[string]Anchor `json:"anchors"`
 	Topology      Topology          `json:"topology"`
 	Geometry      Geometry          `json:"geometry"`
+	// Construction — рецепт путевой решётки (спека контракта отрисовки §3–4).
+	// Блок соседствует с topology и geometry; отсутствие блока означает, что
+	// авторинг ещё не породил решётку, и валидатор пропускает модуль (решение
+	// зафиксировано в construction.go).
+	Construction *Construction `json:"construction,omitempty"`
 }
 
 // Georeference — метаданные привязки. В В1 сохраняется и проверяется по форме,
@@ -63,9 +68,14 @@ type Port struct {
 }
 
 type Turnout struct {
-	ID    string       `json:"id"`
-	Hand  string       `json:"hand"`
-	Frog  string       `json:"frog,omitempty"`
+	ID   string `json:"id"`
+	Hand string `json:"hand"`
+	Frog string `json:"frog,omitempty"`
+	// Type — тип путевой конструкции самого устройства (спека §4): опущен —
+	// применяется construction.default_type, компилятор разрешает умолчание и в
+	// проводе ссылка всегда явная. Крестовина (§5) считается по колее ИМЕННО
+	// этого типа, а не типов примыкающих run'ов.
+	Type  string       `json:"type,omitempty"`
 	Ports TurnoutPorts `json:"ports"`
 }
 
@@ -130,4 +140,67 @@ type VPrim struct {
 	Length           float64 `json:"length"`
 	SlopePermille    float64 `json:"slope_permille,omitempty"`
 	EndSlopePermille float64 `json:"end_slope_permille,omitempty"`
+}
+
+// Construction — блок рецепта путевой решётки (спека контракта отрисовки §3–4).
+//
+// Типы, run'ы и умолчание живут в файле карты, а не отдельным ресурсом и не в
+// коде сервера: привязка к ревизии получается по построению — правка типа
+// меняет тело геометрии и обязана сменить ревизию карты.
+type Construction struct {
+	// DefaultType — тип по умолчанию: применяется к run'у с опущенным type и к
+	// устройству с опущенным type. В проводе ссылка всегда явная — умолчание
+	// разрешает компилятор, клиент скрытого умолчания не применяет никогда.
+	DefaultType string            `json:"default_type"`
+	Types       []TrackType       `json:"types"`
+	Runs        []ConstructionRun `json:"runs"`
+}
+
+// TrackType — тип путевой конструкции (спека §3).
+//
+// Семантика чисел задана точно, иначе два рендерера реализуют разное:
+// gauge — между внутренними рабочими гранями головок рельсов; символические
+// нитки схемы ставятся на ±gauge/2 от осевой; sleeper.length — поперёк пути,
+// sleeper.width — вдоль; ballast.half_width — по верху призмы.
+// shoulder_slope и sleeper.type сознательно НЕ заводятся (спека §8).
+type TrackType struct {
+	ID      string       `json:"id"`
+	Gauge   float64      `json:"gauge"`
+	Sleeper TrackSleeper `json:"sleeper"`
+	Ballast TrackBallast `json:"ballast"`
+}
+
+type TrackSleeper struct {
+	Pitch  float64 `json:"pitch"`
+	Length float64 `json:"length"`
+	Width  float64 `json:"width"`
+}
+
+type TrackBallast struct {
+	HalfWidth float64 `json:"half_width"`
+}
+
+// ConstructionRun — run размещения решётки (спека §4).
+//
+// Run — авторитетный факт о физической решётке, независимый от нарезки на
+// RenderElement: смена внутренней сегментации карты не должна переставлять
+// шпалы. Пишет run'ы строитель (инструмент), а не человек.
+type ConstructionRun struct {
+	// Type необязателен в карте: опущен — применяется Construction.DefaultType.
+	// Компилятор обязан разрешить умолчание ДО провода.
+	ID         string    `json:"id"`
+	Type       string    `json:"type,omitempty"`
+	Coordinate string    `json:"coordinate"`
+	Phase      float64   `json:"phase"`
+	Spans      []RunSpan `json:"spans"`
+}
+
+// RunSpan — участок run'а на одном элементе. Координата размещения — только u:
+// клиент не имеет цепочки вертикального профиля и восстановить размещение по s
+// не способен (спека §4). Спаны внутри run — в авторском порядке прохождения.
+type RunSpan struct {
+	Element   string  `json:"element"`
+	From      float64 `json:"from"`
+	To        float64 `json:"to"`
+	Direction string  `json:"direction"` // "forward" | "reverse"
 }

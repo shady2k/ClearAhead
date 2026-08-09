@@ -34,7 +34,7 @@ func TestCompileFlatLengths(t *testing.T) {
 // разошлись бы.
 func TestCompileRoundingRule(t *testing.T) {
 	const doc = `{
-	  "format_version": 1, "map_id": "R", "map_revision": 1,
+	  "format_version": 2, "map_id": "R", "map_revision": 1,
 	  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
 	  "topology": {
 	    "nodes": [
@@ -165,18 +165,133 @@ func TestCompileTracksideSpansInU(t *testing.T) {
 	}
 }
 
-// TestCompileRequiresFrog — роль ветви в RenderGeometry обязана нести марку
-// крестовины. Валидатор карты frog тоже требует (mapfmt), но Compile можно
-// позвать и минуя Validate — и тогда роль без марки не должна уйти клиенту.
-func TestCompileRequiresFrog(t *testing.T) {
+// TestCompileFrogOptional — марка крестовины необязательна и в карте, и в
+// проводе (спека §7): роль ветви с опущенной маркой уходит клиенту, крестовина
+// строится из особенности frog (§5), марка показывается подписью, если есть.
+func TestCompileFrogOptional(t *testing.T) {
 	doc := strings.Replace(oneTurnout("to"), `"frog": "1/9",`, ``, 1)
 	m, err := mapfmt.Decode(strings.NewReader(doc))
 	if err != nil {
 		t.Fatalf("разбор: %v", err)
 	}
-	if _, _, err := Compile(m); err == nil {
-		t.Fatal("стрелка без frog скомпилировалась, а роль обязана нести марку крестовины")
-	} else if !strings.Contains(err.Error(), "frog") {
-		t.Fatalf("ошибка не про frog: %v", err)
+	_, rg, err := Compile(m)
+	if err != nil {
+		t.Fatalf("стрелка без марки обязана компилироваться: %v", err)
+	}
+	for _, e := range rg.Elements {
+		if e.ID != "SW1:straight" && e.ID != "SW1:diverging" {
+			continue
+		}
+		if e.Role == nil {
+			t.Fatalf("%s: роль не назначена", e.ID)
+		}
+		if e.Role.Frog != "" {
+			t.Fatalf("%s: марка %q должна была остаться опущенной", e.ID, e.Role.Frog)
+		}
+	}
+}
+
+// constructionTrackMap — oneTurnout("to") плюс блок construction: один тип,
+// по run'у на каждое ребро. Проверяет перенос рецепта в провод.
+const constructionTrackMap = `{
+  "format_version": 2,
+  "map_id": "T2",
+  "map_revision": 1,
+  "anchors": { "NW.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+  "topology": {
+    "nodes": [
+      { "id": "NW", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "NS", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
+      { "id": "ND", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+    "turnouts": [
+      { "id": "SW1", "hand": "right", "frog": "1/9",
+        "ports": { "common": "C", "straight": "S", "diverging": "D" } }
+    ],
+    "trackside": [],
+    "edges": [
+      { "id": "EA", "from": "NW.P1", "to": "SW1.C" },
+      { "id": "ES", "from": "SW1.S", "to": "NS.P1" },
+      { "id": "ED", "from": "SW1.D", "to": "ND.P1" }
+    ]
+  },
+  "geometry": { "turnouts": {
+      "SW1": {
+        "straight":  { "horizontal": [ { "kind": "straight", "length": 33.5 } ] },
+        "diverging": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": -0.1107 } ] }
+      }
+    },
+    "edges": {
+      "EA": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
+      "ES": { "horizontal": [ { "kind": "straight", "length": 200.0 } ] },
+      "ED": { "horizontal": [ { "kind": "straight", "length": 200.0 } ] }
+    }
+  },
+  "construction": {
+    "default_type": "TRACK_MAIN",
+    "types": [ {
+      "id": "TRACK_MAIN",
+      "gauge": 1.435,
+      "sleeper": { "pitch": 0.6, "length": 2.5, "width": 0.28 },
+      "ballast": { "half_width": 1.75 }
+    } ],
+    "runs": [
+      { "id": "RUN_B", "coordinate": "u", "phase": 0.0,
+        "spans": [ { "element": "ES", "from": 0, "to": 200, "direction": "forward" } ] },
+      { "id": "RUN_A", "coordinate": "u", "phase": 0.1,
+        "spans": [ { "element": "EA", "from": 0, "to": 100, "direction": "forward" } ] },
+      { "id": "RUN_C", "coordinate": "u", "phase": 0.2,
+        "spans": [ { "element": "ED", "from": 0, "to": 200, "direction": "forward" } ] }
+    ]
+  }
+}`
+
+// TestCompileConstructionWire — типы и run'ы уезжают в провод: умолчание
+// разрешено компилятором (в проводе у каждого run явный type), run'ы
+// отсортированы по id, спаны — в авторском порядке, пустые массивы карты без
+// блока — «[]», а не null.
+func TestCompileConstructionWire(t *testing.T) {
+	_, rg, err := Compile(loadMap(t, constructionTrackMap))
+	if err != nil {
+		t.Fatalf("компиляция: %v", err)
+	}
+	if len(rg.TrackTypes) != 1 || rg.TrackTypes[0].ID != "TRACK_MAIN" {
+		t.Fatalf("типы в проводе %+v", rg.TrackTypes)
+	}
+	tt := rg.TrackTypes[0]
+	if tt.Gauge != 1.435 || tt.Sleeper.Pitch != 0.6 || tt.Sleeper.Length != 2.5 ||
+		tt.Sleeper.Width != 0.28 || tt.Ballast.HalfWidth != 1.75 {
+		t.Fatalf("тип в проводе %+v, ожидались числа из карты", tt)
+	}
+	if rg.PlacementAlgorithm != PlacementAlgorithm {
+		t.Fatalf("placement_algorithm %q, ожидалось %q", rg.PlacementAlgorithm, PlacementAlgorithm)
+	}
+	if len(rg.ConstructionRuns) != 3 {
+		t.Fatalf("run'ов в проводе %d, ожидалось 3", len(rg.ConstructionRuns))
+	}
+	// Сортировка по id, несмотря на авторский порядок в карте.
+	if rg.ConstructionRuns[0].ID != "RUN_A" || rg.ConstructionRuns[2].ID != "RUN_C" {
+		t.Fatalf("run'ы не отсортированы по id: %s, %s, %s",
+			rg.ConstructionRuns[0].ID, rg.ConstructionRuns[1].ID, rg.ConstructionRuns[2].ID)
+	}
+	for _, r := range rg.ConstructionRuns {
+		if r.Type != "TRACK_MAIN" {
+			t.Fatalf("run %s: type %q в проводе неявный", r.ID, r.Type)
+		}
+		if r.Coordinate != "u" || len(r.Spans) != 1 || r.Spans[0].Direction != "forward" {
+			t.Fatalf("run %s: %+v", r.ID, r)
+		}
+	}
+	// Карта без блока: массивы пустые, но не null (форма контракта).
+	_, rg2, err := Compile(loadMap(t, twoEdges))
+	if err != nil {
+		t.Fatalf("компиляция: %v", err)
+	}
+	if rg2.TrackTypes == nil || rg2.ConstructionRuns == nil || rg2.Features == nil {
+		t.Fatal("массивы рецепта обязаны быть пустыми, а не null")
+	}
+	if len(rg2.TrackTypes) != 0 || len(rg2.ConstructionRuns) != 0 || len(rg2.Features) != 0 {
+		t.Fatalf("карта без construction дала рецепт: %d типов, %d run'ов, %d особенностей",
+			len(rg2.TrackTypes), len(rg2.ConstructionRuns), len(rg2.Features))
 	}
 }

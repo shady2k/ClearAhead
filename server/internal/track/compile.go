@@ -56,13 +56,14 @@ type RenderPrimitive struct {
 
 // RenderRole — роль элемента в схеме. У обычного пути отсутствует; у ветви
 // стрелки несёт всё, что клиенту нужно для остряков и крестовины: к какой
-// стрелке относится ветвь, какая она, рука и марка крестовины. Frog
-// обязателен: ветвь без марки не нарисует крестовину.
+// стрелке относится ветвь, какая она, рука и марка крестовины. Марка
+// необязательна и в карте, и в проводе (спека §7): крестовина строится из
+// особенности frog (§5), марка показывается подписью, если есть.
 type RenderRole struct {
-	Turnout string `json:"turnout"` // ID стрелки, напр. ST_A_SW_1
-	Branch  string `json:"branch"`  // "straight" | "diverging"
-	Hand    string `json:"hand"`    // "right" | "left"
-	Frog    string `json:"frog"`    // марка крестовины, напр. "1/9"
+	Turnout string `json:"turnout"`        // ID стрелки, напр. ST_A_SW_1
+	Branch  string `json:"branch"`         // "straight" | "diverging"
+	Hand    string `json:"hand"`           // "right" | "left"
+	Frog    string `json:"frog,omitempty"` // марка крестовины, напр. "1/9"
 }
 
 // RenderElement — элемент с абсолютной стартовой позой: клиент рисует цепочку
@@ -92,12 +93,90 @@ type RenderTrackside struct {
 }
 
 // RenderGeometry — вход клиента и инструментов.
+//
+// Четыре новых корневых поля — типы, run'ы, особенности и версия алгоритма
+// размещения (спека §4): клиент больше не выдумывает решётку, а рисует по
+// рецепту. Массивы непустые даже для карты без блока construction: форма
+// контракта — «[]», а не null.
 type RenderGeometry struct {
-	MapID     string            `json:"map_id"`
-	Revision  int               `json:"map_revision"`
-	Elements  []RenderElement   `json:"elements"`
-	Trackside []RenderTrackside `json:"trackside,omitempty"`
+	MapID              string            `json:"map_id"`
+	Revision           int               `json:"map_revision"`
+	Elements           []RenderElement   `json:"elements"`
+	Trackside          []RenderTrackside `json:"trackside,omitempty"`
+	TrackTypes         []RenderTrackType `json:"track_types"`
+	ConstructionRuns   []RenderRun       `json:"construction_runs"`
+	Features           []RenderFeature   `json:"features"`
+	PlacementAlgorithm string            `json:"placement_algorithm"`
 }
+
+// RenderTrackType — тип путевой конструкции в проводе (спека §3).
+type RenderTrackType struct {
+	ID      string        `json:"id"`
+	Gauge   float64       `json:"gauge"`
+	Sleeper RenderSleeper `json:"sleeper"`
+	Ballast RenderBallast `json:"ballast"`
+}
+
+type RenderSleeper struct {
+	Pitch  float64 `json:"pitch"`
+	Length float64 `json:"length"`
+	Width  float64 `json:"width"`
+}
+
+type RenderBallast struct {
+	HalfWidth float64 `json:"half_width"`
+}
+
+// RenderRun — run размещения в проводе (спека §4). Type всегда явный:
+// умолчание разрешил компилятор, клиент скрытого умолчания не применяет
+// никогда. Спаны — в авторском порядке прохождения.
+type RenderRun struct {
+	ID         string          `json:"id"`
+	Type       string          `json:"type"`
+	Coordinate string          `json:"coordinate"`
+	Phase      float64         `json:"phase"`
+	Spans      []RenderRunSpan `json:"spans"`
+}
+
+type RenderRunSpan struct {
+	Element   string  `json:"element"`
+	From      float64 `json:"from"`
+	To        float64 `json:"to"`
+	Direction string  `json:"direction"`
+}
+
+// RenderFeature — особенность уровня 2 (спека §5): один канонический ответ на
+// вопрос «где именно». Сейчас единственный вид — крестовина (frog).
+type RenderFeature struct {
+	Owner     string          `json:"owner"`
+	Kind      string          `json:"kind"`
+	Point     RenderPoint     `json:"point"`
+	Addresses []RenderAddress `json:"addresses"`
+}
+
+// RenderPoint — физическая точка особенности. Для крестовины это пересечение
+// офсетных ниток, а не поза ни одной из осевых линий (спека §5).
+type RenderPoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// RenderAddress — адрес особенности на осевой линии прохода: u — позиция,
+// tangent — единичный, по ходу возрастания u, направленный внутрь адреса.
+type RenderAddress struct {
+	Element string    `json:"element"`
+	U       float64   `json:"u"`
+	Tangent RenderVec `json:"tangent"`
+}
+
+type RenderVec struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+// PlacementAlgorithm — версия алгоритма размещения решётки, часть артефакта:
+// смена алгоритма не должна молча менять старую ревизию (спека §4).
+const PlacementAlgorithm = "placement-v1"
 
 // Compile строит оба артефакта из одной карты.
 func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
@@ -130,7 +209,14 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		passage[t.ID+mapfmt.PassageStraight] = passageRole{t, "straight"}
 		passage[t.ID+mapfmt.PassageDiverging] = passageRole{t, "diverging"}
 	}
-	rg := &RenderGeometry{MapID: m.MapID, Revision: m.MapRevision}
+	rg := &RenderGeometry{
+		MapID:              m.MapID,
+		Revision:           m.MapRevision,
+		TrackTypes:         []RenderTrackType{},
+		ConstructionRuns:   []RenderRun{},
+		Features:           []RenderFeature{},
+		PlacementAlgorithm: PlacementAlgorithm,
+	}
 
 	for _, id := range ids {
 		e := els[id]
@@ -169,12 +255,6 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 	}
 
 	for _, t := range m.Topology.Turnouts {
-		// Роль ветви обязана нести марку крестовины. Валидатор карты её требует
-		// (mapfmt), а здесь она проверяется ещё раз: Compile можно позвать и
-		// минуя Validate, и роль без марки не должна уйти клиенту.
-		if t.Frog == "" {
-			return nil, nil, fmt.Errorf("track: стрелка %s: нет марки крестовины (frog), а ветвь в RenderGeometry обязана её нести", t.ID)
-		}
 		ct.Turnouts[t.ID] = CompiledTurnout{
 			ID:        t.ID,
 			Hand:      t.Hand,
@@ -183,6 +263,16 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 			Diverging: t.ID + "." + t.Ports.Diverging,
 			Resource:  "RES_" + t.ID,
 		}
+	}
+
+	// Рецепт решётки и особенности устройств (спека §3–5): типы, run'ы и
+	// крестовины уезжают в контракт. Компилятор разрешает умолчание типа —
+	// в проводе у каждого run ссылка всегда явная.
+	if err := fillConstruction(m, rg); err != nil {
+		return nil, nil, err
+	}
+	if err := buildFrogFeatures(m, els, rg); err != nil {
+		return nil, nil, err
 	}
 
 	for _, ts := range m.Topology.Trackside {

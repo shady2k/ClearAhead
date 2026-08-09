@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,10 +19,64 @@ import (
 // DisallowUnknownFields, поэтому лишнее поле в ответе сервера роняет тест, а не
 // доезжает до клиента незамеченным.
 type wireGeometry struct {
-	MapID     string          `json:"map_id"`
-	Revision  int             `json:"map_revision"`
-	Elements  []wireElement   `json:"elements"`
-	Trackside []wireTrackside `json:"trackside"`
+	MapID              string          `json:"map_id"`
+	Revision           int             `json:"map_revision"`
+	Elements           []wireElement   `json:"elements"`
+	Trackside          []wireTrackside `json:"trackside"`
+	TrackTypes         []wireTrackType `json:"track_types"`
+	ConstructionRuns   []wireRun       `json:"construction_runs"`
+	Features           []wireFeature   `json:"features"`
+	PlacementAlgorithm string          `json:"placement_algorithm"`
+}
+
+type wireTrackType struct {
+	ID      string      `json:"id"`
+	Gauge   float64     `json:"gauge"`
+	Sleeper wireSleeper `json:"sleeper"`
+	Ballast wireBallast `json:"ballast"`
+}
+
+type wireSleeper struct {
+	Pitch  float64 `json:"pitch"`
+	Length float64 `json:"length"`
+	Width  float64 `json:"width"`
+}
+
+type wireBallast struct {
+	HalfWidth float64 `json:"half_width"`
+}
+
+type wireRun struct {
+	ID         string        `json:"id"`
+	Type       string        `json:"type"`
+	Coordinate string        `json:"coordinate"`
+	Phase      float64       `json:"phase"`
+	Spans      []wireRunSpan `json:"spans"`
+}
+
+type wireRunSpan struct {
+	Element   string  `json:"element"`
+	From      float64 `json:"from"`
+	To        float64 `json:"to"`
+	Direction string  `json:"direction"`
+}
+
+type wireFeature struct {
+	Owner     string        `json:"owner"`
+	Kind      string        `json:"kind"`
+	Point     wirePoint     `json:"point"`
+	Addresses []wireAddress `json:"addresses"`
+}
+
+type wirePoint struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+}
+
+type wireAddress struct {
+	Element string    `json:"element"`
+	U       float64   `json:"u"`
+	Tangent wirePoint `json:"tangent"`
 }
 
 type wireElement struct {
@@ -35,7 +90,7 @@ type wireRole struct {
 	Turnout string `json:"turnout"`
 	Branch  string `json:"branch"`
 	Hand    string `json:"hand"`
-	Frog    string `json:"frog"`
+	Frog    string `json:"frog,omitempty"`
 }
 
 type wireTrackside struct {
@@ -147,8 +202,8 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 		}
 		roles++
 		r := e.Role
-		if r.Turnout == "" || r.Branch == "" || r.Hand == "" || r.Frog == "" {
-			t.Fatalf("роль без стрелки/ветви/руки/марки крестовины: %+v", r)
+		if r.Turnout == "" || r.Branch == "" || r.Hand == "" {
+			t.Fatalf("роль без стрелки/ветви/руки: %+v", r)
 		}
 		switch r.Branch {
 		case "straight", "diverging":
@@ -185,6 +240,60 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 		for _, s := range ts.Spans {
 			if s.Element == "" || s.From < 0 || s.To < s.From {
 				t.Fatalf("путевой объект %s: неверный спан %+v", ts.ID, s)
+			}
+		}
+	}
+
+	// Рецепт решётки (спека §3–4): типы и run'ы с ЯВНЫМ типом, версия
+	// алгоритма размещения. Клиент скрытого умолчания не применяет никогда.
+	if w.PlacementAlgorithm == "" {
+		t.Fatal("в контракте нет placement_algorithm")
+	}
+	if len(w.TrackTypes) == 0 {
+		t.Fatal("в контракте нет типов путевой конструкции")
+	}
+	for _, tt := range w.TrackTypes {
+		if tt.ID == "" || tt.Gauge <= 0 || tt.Sleeper.Pitch <= 0 ||
+			tt.Sleeper.Length <= 0 || tt.Sleeper.Width <= 0 || tt.Ballast.HalfWidth <= 0 {
+			t.Fatalf("тип без формы: %+v", tt)
+		}
+	}
+	if len(w.ConstructionRuns) == 0 {
+		t.Fatal("в контракте нет run'ов размещения")
+	}
+	for _, r := range w.ConstructionRuns {
+		if r.ID == "" || r.Type == "" || r.Coordinate != "u" {
+			t.Fatalf("run без явного типа или не в координате u: %+v", r)
+		}
+		if r.Phase < 0 || len(r.Spans) == 0 {
+			t.Fatalf("run с неверной фазой или без спанов: %+v", r)
+		}
+		for _, s := range r.Spans {
+			if s.Element == "" || s.From < 0 || s.To <= s.From {
+				t.Fatalf("run %s: неверный спан %+v", r.ID, s)
+			}
+			switch s.Direction {
+			case "forward", "reverse":
+			default:
+				t.Fatalf("run %s: направление %q", r.ID, s.Direction)
+			}
+		}
+	}
+
+	// Особенности уровня 2 (спека §5): крестовины с адресами и касательными.
+	if len(w.Features) == 0 {
+		t.Fatal("в контракте нет особенностей")
+	}
+	for _, f := range w.Features {
+		if f.Owner == "" || f.Kind != "frog" || len(f.Addresses) != 2 {
+			t.Fatalf("особенность без формы: %+v", f)
+		}
+		for _, a := range f.Addresses {
+			if a.Element == "" || a.U < 0 {
+				t.Fatalf("адрес особенности без формы: %+v", a)
+			}
+			if norm := a.Tangent.X*a.Tangent.X + a.Tangent.Y*a.Tangent.Y; math.Abs(norm-1) > 1e-6 {
+				t.Fatalf("касательная адреса не единичная: %+v (норма %g)", a.Tangent, norm)
 			}
 		}
 	}
