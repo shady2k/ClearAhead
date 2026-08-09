@@ -36,6 +36,14 @@ ZOOM   ?=
 GODOT ?= godot
 GO    ?= go
 
+# Порт отдельно от адреса: цель dev ждёт, пока он начнёт слушать.
+# lastword, а не strip двоеточия: SERVER_ADDR может быть и "127.0.0.1:8080".
+SERVER_PORT := $(lastword $(subst :, ,$(SERVER_ADDR)))
+
+# Собранный сервер для цели dev. Собираем, а не `go run`: у `go run` свой
+# процесс-обёртка, и убийство его PID оставляет настоящий сервер жить на порту.
+DEV_BIN ?= /tmp/clearahead-dev
+
 # Общий план ST_A — волосок: 1800 м на 18 м. Детали видны только через
 # --focus/--zoom, поэтому они вынесены в переменные, а не зашиты.
 SHOT_ARGS := --shot $(SHOT) --frames $(FRAMES)
@@ -46,13 +54,15 @@ ifneq ($(strip $(ZOOM)),)
 SHOT_ARGS += --zoom $(ZOOM)
 endif
 
-.PHONY: help serve client shot contract test test-go test-client vnc build fmt clean
+.PHONY: help dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
 
 help:
 	@echo 'ClearAhead — цели разработки'
 	@echo
-	@echo '  make serve      сервер карты на $(SERVER_ADDR) (передний план, Ctrl-C — стоп)'
-	@echo '  make client     клиент на $(DISPLAY_ID); смотреть в браузере: $(VNC_URL)'
+	@echo '  make dev        СЕРВЕР И КЛИЕНТ разом — обычный способ запустить редактор'
+	@echo '  make dev-shot   то же, но снимок вместо показа, и оба гасятся'
+	@echo '  make serve      только сервер на $(SERVER_ADDR) (передний план, Ctrl-C — стоп)'
+	@echo '  make client     только клиент на $(DISPLAY_ID); смотреть: $(VNC_URL)'
 	@echo '  make shot       снимок клиента в $(SHOT) — ЕДИНСТВЕННАЯ надёжная проверка'
 	@echo '  make contract   контрактный тест клиента против эталона (без сервера)'
 	@echo '  make test       всё: go test ./... + контрактный тест клиента'
@@ -64,7 +74,48 @@ help:
 	@echo '  make serve MAP=server/internal/mapfmt/testdata/fixture_station.json'
 	@echo '  make shot FOCUS=400,0 ZOOM=30      # горловина крупно'
 
-## serve — сервер карты. Держит порт, поэтому в переднем плане.
+## dev — сервер И клиент одной командой. Обычный способ запустить редактор.
+##
+## Сервер уходит в фон, цель ждёт, пока порт начнёт слушать, и только потом
+## поднимает клиента: иначе клиент успевает спросить раньше, чем есть кого
+## спрашивать, и штатно показывает отказ — выглядит как поломка, но это гонка.
+##
+## trap на EXIT/INT/TERM: закрыли клиента или нажали Ctrl-C — сервер уходит
+## следом. Осиротевший сервер держит порт, и следующий запуск падает на
+## «address already in use», а причина уже не видна.
+dev: dev-bin
+	@echo 'Клиент на $(DISPLAY_ID). Смотреть: $(VNC_URL)'
+	@$(DEV_BIN) -map $(MAP) -addr $(SERVER_ADDR) & \
+	srv=$$!; \
+	trap 'kill $$srv 2>/dev/null || true' EXIT INT TERM; \
+	for i in $$(seq 1 50); do \
+		(exec 3<>/dev/tcp/127.0.0.1/$(SERVER_PORT)) 2>/dev/null && break; \
+		kill -0 $$srv 2>/dev/null || { echo 'сервер не поднялся — смотрите вывод выше'; exit 1; }; \
+		sleep 0.1; \
+	done; \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client -- --server=$(SERVER_URL)
+
+## dev-shot — то же, но вместо показа снимает снимок и гасит обоих.
+## Годится для быстрой проверки «что там сейчас на экране».
+dev-shot: dev-bin
+	@$(DEV_BIN) -map $(MAP) -addr $(SERVER_ADDR) & \
+	srv=$$!; \
+	trap 'kill $$srv 2>/dev/null || true' EXIT INT TERM; \
+	for i in $$(seq 1 50); do \
+		(exec 3<>/dev/tcp/127.0.0.1/$(SERVER_PORT)) 2>/dev/null && break; \
+		kill -0 $$srv 2>/dev/null || { echo 'сервер не поднялся'; exit 1; }; \
+		sleep 0.1; \
+	done; \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script tests/smoke_screenshot.gd -- \
+		--server=$(SERVER_URL) $(SHOT_ARGS)
+	@echo "снимок: $(SHOT) — посмотрите на него, логу верить нельзя"
+
+# Всегда пересобираем: файловая цель кэшировалась бы, и dev молча запускал бы
+# вчерашний сервер. Go-сборка инкрементальна, это дёшево.
+dev-bin:
+	@cd server && $(GO) build -o $(DEV_BIN) ./cmd/clearahead
+
+## serve — только сервер. Держит порт, поэтому в переднем плане.
 serve:
 	$(GO) run ./server/cmd/clearahead -map $(MAP) -addr $(SERVER_ADDR)
 
