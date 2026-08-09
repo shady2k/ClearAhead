@@ -30,7 +30,10 @@ func _initialize() -> void:
 
 	# Явные ожидания по эталону — дополнительно к проверкам парсера.
 	_check(geo.map_id == "ST_A", "map_id == ST_A, получили «%s»" % geo.map_id)
-	_check(geo.map_revision == 1, "map_revision == 1, получили %s" % geo.map_revision)
+	# Ревизию НЕ пиним числом: она растёт при каждой правке раскладки (карту
+	# уже правили — ClearAhead-sn5), и прибитое число делает сверку контракта
+	# красной по причине, к контракту отношения не имеющей.
+	_check(geo.map_revision >= 1, "map_revision >= 1, получили %s" % geo.map_revision)
 	_check(geo.elements.size() == 31, "31 элемент, получили %d" % geo.elements.size())
 	var arcs := 0
 	var unknowns := 0
