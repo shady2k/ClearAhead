@@ -242,7 +242,9 @@
             "to": 600.0
           }
         ],
-        "side": "right"
+        "side": "right",
+        "offset": 1.75,
+        "width": 3.0
       },
       {
         "id": "ST_A_PLAT_3",
@@ -254,7 +256,9 @@
             "to": 600.0
           }
         ],
-        "side": "left"
+        "side": "left",
+        "offset": 1.75,
+        "width": 3.0
       }
     ]
   },

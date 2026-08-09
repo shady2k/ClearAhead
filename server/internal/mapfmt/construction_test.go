@@ -320,3 +320,86 @@ func TestConstructionUnknownTurnoutType(t *testing.T) {
 	doc := strings.Replace(constructionTurnoutMap, `"type": "TRACK_MAIN"`, `"type": "NOPE"`, 1)
 	mustRejectConstruction(t, doc, "стрелка")
 }
+
+// platformSizesDoc — constructionMap с платформой PLAT на ребре E2. Размеры
+// вставляются строкой fields: каждый тест мутирует одно поле.
+func platformSizesDoc(fields string) string {
+	return strings.Replace(constructionMap,
+		`"turnouts": [], "trackside": [],`,
+		`"turnouts": [], "trackside": [ { "id": "PLAT", "kind": "platform", `+fields+`
+		  "span": [ { "element": "E2", "from": 0, "to": 50 } ] } ],`, 1)
+}
+
+// withoutConstruction вырезает блок construction — последний ключ документа.
+func withoutConstruction(doc string) string {
+	i := strings.Index(doc, `,
+  "construction": {`)
+	if i < 0 {
+		panic("в документе нет блока construction")
+	}
+	return doc[:i] + "\n}"
+}
+
+func TestConstructionPlatformSizesValid(t *testing.T) {
+	doc := platformSizesDoc(`"side": "right", "offset": 1.75, "width": 3.0,`)
+	if err := loadConstruction(t, doc).validateConstruction(); err != nil {
+		t.Fatalf("платформа с размерами отвергнута: %v", err)
+	}
+}
+
+// TestConstructionPlatformSizes — размеры обязательны и в правдоподобных
+// пределах (спека §3). Пропущенное поле — ноль, а ноль вне диапазона: отказ
+// приходит по той же формуле !(v >= min && v <= max), что и у типа (§3), —
+// валидатор не обязан полагаться на checkFinite.
+func TestConstructionPlatformSizes(t *testing.T) {
+	cases := []struct {
+		name, fields, want string
+	}{
+		{"offset пропущен", `"side": "right", "width": 3.0,`, "offset"},
+		{"offset слишком мал", `"side": "right", "offset": 0.5, "width": 3.0,`, "offset"},
+		{"offset слишком велик", `"side": "right", "offset": 10.0, "width": 3.0,`, "offset"},
+		{"width пропущена", `"side": "right", "offset": 1.75,`, "width"},
+		{"width слишком мала", `"side": "right", "offset": 1.75, "width": 0.3,`, "width"},
+		{"width слишком велика", `"side": "right", "offset": 1.75, "width": 30.0,`, "width"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			mustRejectConstruction(t, platformSizesDoc(c.fields), c.want)
+		})
+	}
+}
+
+// TestConstructionPlatformSizesWithoutBlock — размеры платформы проверяются и
+// на карте без блока construction: они часть контракта отрисовки, а не блока
+// рецепта, и карта с голой платформой не должна выйти наружу.
+func TestConstructionPlatformSizesWithoutBlock(t *testing.T) {
+	// Без размеров — отказ, хотя блока construction нет.
+	doc := withoutConstruction(platformSizesDoc(`"side": "right",`))
+	m := loadConstruction(t, doc)
+	if m.Construction != nil {
+		t.Fatal("блок не должен был разобраться")
+	}
+	err := m.validateConstruction()
+	if err == nil {
+		t.Fatal("платформа без размеров прошла, ожидался отказ")
+	}
+	if !strings.Contains(err.Error(), "offset") {
+		t.Fatalf("отказ по не той причине: %v", err)
+	}
+	// С размерами — проходит.
+	doc = withoutConstruction(platformSizesDoc(`"side": "right", "offset": 1.75, "width": 3.0,`))
+	if err := loadConstruction(t, doc).validateConstruction(); err != nil {
+		t.Fatalf("карта без блока, но с размерами платформы отвергнута: %v", err)
+	}
+}
+
+// TestConstructionBufferStopNoSizes — buffer_stop точечный, размеров не несёт.
+func TestConstructionBufferStopNoSizes(t *testing.T) {
+	doc := strings.Replace(constructionMap,
+		`"turnouts": [], "trackside": [],`,
+		`"turnouts": [], "trackside": [ { "id": "BS", "kind": "buffer_stop",
+		  "span": [ { "element": "E2", "from": 25, "to": 25 } ] } ],`, 1)
+	if err := loadConstruction(t, doc).validateConstruction(); err != nil {
+		t.Fatalf("buffer_stop без размеров отвергнут: %v", err)
+	}
+}

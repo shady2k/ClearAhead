@@ -94,10 +94,12 @@ type wireRole struct {
 }
 
 type wireTrackside struct {
-	ID    string     `json:"id"`
-	Kind  string     `json:"kind"`
-	Side  string     `json:"side"`
-	Spans []wireSpan `json:"spans"`
+	ID     string     `json:"id"`
+	Kind   string     `json:"kind"`
+	Side   string     `json:"side"`
+	Offset float64    `json:"offset,omitempty"`
+	Width  float64    `json:"width,omitempty"`
+	Spans  []wireSpan `json:"spans"`
 }
 
 type wireSpan struct {
@@ -233,6 +235,9 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 		case "platform", "buffer_stop":
 		default:
 			t.Fatalf("неизвестный kind путевого объекта: %q", ts.Kind)
+		}
+		if ts.Kind == "platform" && (ts.Offset <= 0 || ts.Width <= 0) {
+			t.Fatalf("платформа %s без размеров: offset %g, width %g", ts.ID, ts.Offset, ts.Width)
 		}
 		if len(ts.Spans) == 0 {
 			t.Fatalf("путевой объект %s без спанов", ts.ID)

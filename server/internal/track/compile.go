@@ -85,11 +85,18 @@ type RenderSpan struct {
 }
 
 // RenderTrackside — путевой объект на плане (платформа и пр.).
+//
+// Размеры платформы — offset (от оси пути до ближней кромки) и width (поперёк)
+// — едут на самом объекте (спека §3): платформа — самостоятельный путевой
+// объект, тип решётки её размеры не определяет. Точечные объекты (buffer_stop)
+// размеров не несут.
 type RenderTrackside struct {
-	ID    string       `json:"id"`
-	Kind  string       `json:"kind"`
-	Side  string       `json:"side,omitempty"`
-	Spans []RenderSpan `json:"spans"`
+	ID     string       `json:"id"`
+	Kind   string       `json:"kind"`
+	Side   string       `json:"side,omitempty"`
+	Offset float64      `json:"offset,omitempty"`
+	Width  float64      `json:"width,omitempty"`
+	Spans  []RenderSpan `json:"spans"`
 }
 
 // RenderGeometry — вход клиента и инструментов.
@@ -277,10 +284,12 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 
 	for _, ts := range m.Topology.Trackside {
 		rt := RenderTrackside{
-			ID:    ts.ID,
-			Kind:  ts.Kind,
-			Side:  ts.Side,
-			Spans: make([]RenderSpan, 0, len(ts.Span)),
+			ID:     ts.ID,
+			Kind:   ts.Kind,
+			Side:   ts.Side,
+			Offset: ts.Offset,
+			Width:  ts.Width,
+			Spans:  make([]RenderSpan, 0, len(ts.Span)),
 		}
 		spans := make([]TrackSpanS, 0, len(ts.Span))
 		for _, iv := range ts.Span {

@@ -95,6 +95,7 @@ func turnoutWithTrackside(t *testing.T) string {
 		  ] }`, 1)
 	doc = strings.Replace(doc, `"trackside": [],`,
 		`"trackside": [ { "id": "TSP", "kind": "platform", "side": "right",
+		  "offset": 1.75, "width": 3.0,
 		  "span": [ { "element": "EA", "from": 10.0, "to": 90.0 } ] } ],`, 1)
 	return doc
 }
@@ -145,6 +146,9 @@ func TestCompileTracksideSpansInU(t *testing.T) {
 	ts := rg.Trackside[0]
 	if ts.ID != "TSP" || ts.Kind != "platform" || ts.Side != "right" {
 		t.Fatalf("объект %+v, ожидался TSP platform right", ts)
+	}
+	if ts.Offset != 1.75 || ts.Width != 3.0 {
+		t.Fatalf("размеры платформы (%v, %v) — ожидались (1.75, 3.0) из карты", ts.Offset, ts.Width)
 	}
 	if len(ts.Spans) != 1 {
 		t.Fatalf("у %s %d спанов, ожидался 1", ts.ID, len(ts.Spans))
