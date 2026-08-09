@@ -714,6 +714,8 @@
       "id": "ST_A_PLAT_2",
       "kind": "platform",
       "side": "right",
+      "offset": 1.75,
+      "width": 3,
       "spans": [
         {
           "element": "ST_A_E_T2",
@@ -726,6 +728,8 @@
       "id": "ST_A_PLAT_3",
       "kind": "platform",
       "side": "left",
+      "offset": 1.75,
+      "width": 3,
       "spans": [
         {
           "element": "ST_A_E_T3",

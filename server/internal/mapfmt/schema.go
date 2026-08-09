@@ -92,10 +92,12 @@ type Edge struct {
 }
 
 type Trackside struct {
-	ID   string         `json:"id"`
-	Kind string         `json:"kind"`
-	Span []SpanInterval `json:"span"`
-	Side string         `json:"side,omitempty"`
+	ID     string         `json:"id"`
+	Kind   string         `json:"kind"`
+	Span   []SpanInterval `json:"span"`
+	Side   string         `json:"side,omitempty"`
+	Offset float64        `json:"offset,omitempty"`
+	Width  float64        `json:"width,omitempty"`
 }
 
 // SpanInterval — интервал в координате u на одном элементе. Список интервалов
