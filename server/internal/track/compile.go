@@ -169,9 +169,9 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 	}
 
 	for _, t := range m.Topology.Turnouts {
-		// Валидатор карты frog не требует (проверяет только hand и порты),
-		// а роль ветви в RenderGeometry обязана нести марку крестовины —
-		// отказываем здесь, а не отдаём клиенту роль без неё.
+		// Роль ветви обязана нести марку крестовины. Валидатор карты её требует
+		// (mapfmt), а здесь она проверяется ещё раз: Compile можно позвать и
+		// минуя Validate, и роль без марки не должна уйти клиенту.
 		if t.Frog == "" {
 			return nil, nil, fmt.Errorf("track: стрелка %s: нет марки крестовины (frog), а ветвь в RenderGeometry обязана её нести", t.ID)
 		}

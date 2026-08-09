@@ -69,6 +69,11 @@ func TestValidateRejects(t *testing.T) {
 				 "georeference": { "datum": "WGS84", "origin_height_kind": "geoid" },`, 1),
 			"origin_height_kind",
 		},
+		{
+			"стрелка без марки крестовины",
+			strings.Replace(turnoutMap, `"frog": "1/9", `, ``, 1),
+			"frog",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,7 +109,7 @@ const turnoutMap = `{
       { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
     ],
     "turnouts": [
-      { "id": "T1", "hand": "left", "ports": { "common": "C", "straight": "S", "diverging": "D" } }
+      { "id": "T1", "hand": "left", "frog": "1/9", "ports": { "common": "C", "straight": "S", "diverging": "D" } }
     ],
     "trackside": [],
     "edges": [

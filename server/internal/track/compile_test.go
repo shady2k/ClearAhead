@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -164,12 +165,16 @@ func TestCompileTracksideSpansInU(t *testing.T) {
 	}
 }
 
-// TestCompileRequiresFrog — валидатор карты frog не требует, а роль ветви в
-// RenderGeometry обязана нести марку крестовины. Компилятор отказывает, а не
-// отдаёт клиенту роль без неё.
+// TestCompileRequiresFrog — роль ветви в RenderGeometry обязана нести марку
+// крестовины. Валидатор карты frog тоже требует (mapfmt), но Compile можно
+// позвать и минуя Validate — и тогда роль без марки не должна уйти клиенту.
 func TestCompileRequiresFrog(t *testing.T) {
 	doc := strings.Replace(oneTurnout("to"), `"frog": "1/9",`, ``, 1)
-	if _, _, err := Compile(loadMap(t, doc)); err == nil {
+	m, err := mapfmt.Decode(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("разбор: %v", err)
+	}
+	if _, _, err := Compile(m); err == nil {
 		t.Fatal("стрелка без frog скомпилировалась, а роль обязана нести марку крестовины")
 	} else if !strings.Contains(err.Error(), "frog") {
 		t.Fatalf("ошибка не про frog: %v", err)

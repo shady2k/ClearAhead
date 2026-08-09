@@ -55,7 +55,10 @@ func Validate(m *Map) error {
 	if err := validateGeoreference(m.Georeference); err != nil {
 		return err
 	}
-	return m.validateAnchors(ports)
+	if err := m.validateAnchors(ports); err != nil {
+		return err
+	}
+	return m.validateAxisIntersections()
 }
 
 // validateGeoreference проверяет блок привязки по форме. Компилятор его не
@@ -211,6 +214,9 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 	for _, t := range m.Topology.Turnouts {
 		if t.Hand != "left" && t.Hand != "right" {
 			return nil, fmt.Errorf("mapfmt: стрелка %s: рукость должна быть left или right, получено %q", t.ID, t.Hand)
+		}
+		if t.Frog == "" {
+			return nil, fmt.Errorf("mapfmt: стрелка %s: пустая марка крестовины (frog) — по ней клиент строит крестовину", t.ID)
 		}
 		for _, p := range []string{t.Ports.Common, t.Ports.Straight, t.Ports.Diverging} {
 			if p == "" {
