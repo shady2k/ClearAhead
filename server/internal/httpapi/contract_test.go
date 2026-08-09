@@ -18,15 +18,37 @@ import (
 // DisallowUnknownFields, поэтому лишнее поле в ответе сервера роняет тест, а не
 // доезжает до клиента незамеченным.
 type wireGeometry struct {
-	MapID    string        `json:"map_id"`
-	Revision int           `json:"map_revision"`
-	Elements []wireElement `json:"elements"`
+	MapID     string          `json:"map_id"`
+	Revision  int             `json:"map_revision"`
+	Elements  []wireElement   `json:"elements"`
+	Trackside []wireTrackside `json:"trackside"`
 }
 
 type wireElement struct {
 	ID    string          `json:"id"`
 	Start wireStart       `json:"start"`
 	Prims []wirePrimitive `json:"primitives"`
+	Role  *wireRole       `json:"role"`
+}
+
+type wireRole struct {
+	Turnout string `json:"turnout"`
+	Branch  string `json:"branch"`
+	Hand    string `json:"hand"`
+	Frog    string `json:"frog"`
+}
+
+type wireTrackside struct {
+	ID    string     `json:"id"`
+	Kind  string     `json:"kind"`
+	Side  string     `json:"side"`
+	Spans []wireSpan `json:"spans"`
+}
+
+type wireSpan struct {
+	Element string  `json:"element"`
+	From    float64 `json:"from"`
+	To      float64 `json:"to"`
 }
 
 type wireStart struct {
@@ -113,6 +135,56 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 			}
 			if p.Length <= 0 {
 				t.Fatalf("примитив нулевой длины в проводе: %+v", p)
+			}
+		}
+	}
+	// Роли: у ветвей стрелки роль с полными данными, у обычных путей её нет.
+	// Клиент не должен разбирать ID — значит, контракт обязан нести всё.
+	var roles int
+	for _, e := range w.Elements {
+		if e.Role == nil {
+			continue
+		}
+		roles++
+		r := e.Role
+		if r.Turnout == "" || r.Branch == "" || r.Hand == "" || r.Frog == "" {
+			t.Fatalf("роль без стрелки/ветви/руки/марки крестовины: %+v", r)
+		}
+		switch r.Branch {
+		case "straight", "diverging":
+		default:
+			t.Fatalf("неизвестная ветвь в роли: %q", r.Branch)
+		}
+		switch r.Hand {
+		case "right", "left":
+		default:
+			t.Fatalf("неизвестная рукость в роли: %q", r.Hand)
+		}
+	}
+	if roles == 0 {
+		t.Fatal("ни один элемент не получил роль ветви стрелки")
+	}
+
+	// Путевые объекты: спаны в координате u, как в карте. Unknown kind не
+	// пройдёт — клиент рисует только то, что знает.
+	if len(w.Trackside) == 0 {
+		t.Fatal("в контракте нет trackside")
+	}
+	for _, ts := range w.Trackside {
+		if ts.ID == "" {
+			t.Fatal("путевой объект без ID")
+		}
+		switch ts.Kind {
+		case "platform", "buffer_stop":
+		default:
+			t.Fatalf("неизвестный kind путевого объекта: %q", ts.Kind)
+		}
+		if len(ts.Spans) == 0 {
+			t.Fatalf("путевой объект %s без спанов", ts.ID)
+		}
+		for _, s := range ts.Spans {
+			if s.Element == "" || s.From < 0 || s.To < s.From {
+				t.Fatalf("путевой объект %s: неверный спан %+v", ts.ID, s)
 			}
 		}
 	}

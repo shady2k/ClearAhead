@@ -47,9 +47,42 @@ func _initialize() -> void:
 	_check(unknowns == 0, "нет неизвестных kind (их %d)" % unknowns)
 	_check(arcs >= 1, "есть хотя бы одна дуга (их %d) — ветка arc разбирается" % arcs)
 
+	# Роли ветвей стрелок: 8 стрелок × 2 ветви. Поле — единственный способ
+	# отличить ветвь от пути, разбор ID запрещён.
+	var roles := 0
+	var role_bad := 0
+	for el in geo.elements:
+		if not el.has("role"):
+			continue
+		roles += 1
+		var r: Dictionary = el.role
+		if (r.turnout as String).is_empty() or (r.branch as String).is_empty() \
+				or (r.hand as String).is_empty() or not r.has("frog"):
+			role_bad += 1
+		elif r.branch != Parser.BRANCH_STRAIGHT and r.branch != Parser.BRANCH_DIVERGING:
+			role_bad += 1
+		elif r.hand != "right" and r.hand != "left":
+			role_bad += 1
+	_check(role_bad == 0, "роли ветвей полные (битых %d)" % role_bad)
+	_check(roles == 16, "16 ветвей стрелок с ролью, получили %d" % roles)
+
+	# Путевые объекты: платформы 2 и 3, спаны в координате u как в карте.
+	var platforms := 0
+	for ts in geo.trackside:
+		_check(ts.kind == Parser.KIND_PLATFORM, "%s: kind platform, получили «%s»" % [ts.id, ts.kind])
+		_check(ts.has("side") and not (ts.side as String).is_empty(), "%s: сторона задана" % ts.id)
+		_check(ts.spans.size() == 1, "%s: один спан, получили %d" % [ts.id, ts.spans.size()])
+		var sp: Dictionary = ts.spans[0]
+		_check(sp.element == "ST_A_E_T2" or sp.element == "ST_A_E_T3",
+			"%s: спан на пути 2 или 3, получили %s" % [ts.id, sp.element])
+		_check(sp.from == 100.0 and sp.to == 600.0,
+			"%s: спан [100, 600] в u, получили [%s, %s]" % [ts.id, sp.from, sp.to])
+		platforms += 1
+	_check(platforms == 2, "2 платформы в контракте, получили %d" % platforms)
+
 	if _failures == 0:
-		print("CONTRACT CHECK OK: %s · %s rev %d · %d элементов · %d дуг" % [
-			golden, geo.map_id, geo.map_revision, geo.elements.size(), arcs])
+		print("CONTRACT CHECK OK: %s · %s rev %d · %d элементов · %d дуг · %d ролей · %d объектов" % [
+			golden, geo.map_id, geo.map_revision, geo.elements.size(), arcs, roles, platforms])
 		quit(0)
 	else:
 		printerr("CONTRACT CHECK FAIL: %d проверок не сошлось" % _failures)
