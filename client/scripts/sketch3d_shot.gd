@@ -1,18 +1,21 @@
 extends SceneTree
-## Снимок эскиза W3D. Godot --headless не рисует, нужен дисплей:
+## Снимок 3D-вида (W7, развитие эскиза W3D). Godot --headless не рисует, нужен
+## дисплей:
 ##
 ##   DISPLAY=:1 godot --path client --script res://scripts/sketch3d_shot.gd \
-##       -- --shot /tmp/sk3d_1.png [--focus x,y] [--size м] [--azimuth deg] \
-##          [--elev deg] [--frames N] [--geometry <путь к эталону>]
+##       -- --shot /tmp/v3d_1.png [--focus x,y] [--size м] [--azimuth deg] \
+##          [--elev deg] [--frames N] [--geometry <путь к эталону>] \
+##          [--hide-loco 1]
 ##
 ## По образцу client/tests/smoke_screenshot.gd: дать сцене кадры на сборку и
-## отрисовку, снять окно в PNG, выйти. size — половина видимой высоты в метрах
+## отрисовку, снять окно в PNG, выйти. size — видимая высота орто в метрах
 ## (0 — автофит по всей фикстуре); azimuth — азимут камеры от +X в градусах;
-## elev — угол над плоскостью пути (89 ≈ сверху).
+## elev — угол над плоскостью пути (89 ≈ сверху); --hide-loco 1 прячет
+## эталонную коробку локомотива.
 
 const Sketch := preload("res://scripts/sketch3d.gd")
 
-var _shot := "/tmp/sk3d.png"
+var _shot := "/tmp/v3d.png"
 var _frames := 10
 var _focus := ""
 var _size := 0.0
@@ -30,6 +33,8 @@ func _initialize() -> void:
 	var geo := _arg("--geometry", "")
 	if geo != "":
 		Sketch.geometry_path = geo
+	if _arg("--hide-loco", "0") == "1":
+		Sketch.hide_loco = true
 	var focus := Vector2.INF
 	if _focus != "":
 		var parts := _focus.split(",")
