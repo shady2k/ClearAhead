@@ -6,6 +6,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
@@ -38,6 +39,15 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 	}
 	etag := `"` + man.RenderGeometryHash + `"`
 
+	// Манифест сериализуется один раз при создании, как и геометрия: внутри
+	// запроса нет ни диска, ни сети. Наружу уезжает ВСЯ track.Manifest —
+	// map_id и ревизию клиент заранее не знает (это единственный способ их
+	// узнать), хеши пригодятся для будущих проверок кэша.
+	manBody, err := json.Marshal(man)
+	if err != nil {
+		panic("httpapi: манифест не сериализуется: " + err.Error())
+	}
+
 	m := rpc.NewMux()
 	rpc.Register[protocol.GeometryRequest](m, "geometry",
 		func(_ context.Context, req protocol.GeometryRequest) ([]byte, error) {
@@ -45,6 +55,10 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 				return nil, errUnknownResource
 			}
 			return body, nil
+		})
+	rpc.Register[protocol.ManifestRequest](m, "manifest",
+		func(_ context.Context, _ protocol.ManifestRequest) ([]byte, error) {
+			return manBody, nil
 		})
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,6 +68,24 @@ func NewHandler(rg *track.RenderGeometry, man track.Manifest) http.Handler {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {
 			w.Header().Set("Allow", "GET, HEAD")
 			http.Error(w, "только GET и HEAD", http.StatusMethodNotAllowed)
+			return
+		}
+		if r.URL.Path == manifestPath {
+			got, err := m.Dispatch(r.Context(), "manifest", protocol.Input{})
+			if err != nil {
+				// Единственная ошибка здесь — невалидное представление запроса
+				// (в путь или тело что-то попало): барьер не пропустил, и до
+				// обработчика ничего не дошло. Для клиента это «нет такого
+				// ресурса».
+				http.NotFound(w, r)
+				return
+			}
+			// Манифест — «текущее состояние», а не immutable-артефакт: его URL
+			// не адресует ревизию, поэтому кэш обязан перепроверять, а не
+			// залипать на прошлой карте.
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Write(got.([]byte))
 			return
 		}
 		id, rev, ok := geometryPath(r.URL.Path)
@@ -95,3 +127,8 @@ func geometryPath(p string) (id, rev string, ok bool) {
 	}
 	return parts[1], parts[3], true
 }
+
+// manifestPath — путь манифеста загруженной карты. Адресовать манифест нечем:
+// карта в памяти одна, а map_id и ревизию клиент узнаёт ИЗ манифеста, поэтому
+// ни сегментов пути, ни адресной привязки у запроса нет.
+const manifestPath = "/manifest"

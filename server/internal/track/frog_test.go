@@ -193,34 +193,34 @@ func TestFrogUnknownType(t *testing.T) {
 	}
 }
 
-// TestCompileFrogST_A — сквозная проверка на настоящей карте: крестовина
-// ST_A_SW_1 попадает на s ≈ 29.36 м. Это тот же критерий, что
+// TestCompileFrogFixture — сквозная проверка на карте-фикстуре: крестовина
+// SW1 попадает на u ≈ 29.32 м бокового прохода. Это тот же критерий, что
 // TestFrogST_A_SW_1, но через весь компилятор и файл карты.
-func TestCompileFrogST_A(t *testing.T) {
+func TestCompileFrogFixture(t *testing.T) {
 	rg := compileStation(t)
 	byID := map[string]RenderFeature{}
 	for _, f := range rg.Features {
 		byID[f.Owner] = f
 	}
-	f, ok := byID["ST_A_SW_1"]
+	f, ok := byID["SW1"]
 	if !ok {
-		t.Fatal("в геометрии станции нет крестовины ST_A_SW_1")
+		t.Fatal("в геометрии фикстуры нет крестовины SW1")
 	}
-	if len(f.Addresses) != 2 || f.Addresses[1].Element != "ST_A_SW_1:diverging" {
+	if len(f.Addresses) != 2 || f.Addresses[1].Element != "SW1:diverging" {
 		t.Fatalf("адреса крестовины %+v", f.Addresses)
 	}
-	if d := math.Abs(f.Addresses[1].U - 29.36); d > 0.05 {
-		t.Fatalf("крестовина ST_A_SW_1 на u=%g, ожидалось 29.36 ± 0.05", f.Addresses[1].U)
+	if d := math.Abs(f.Addresses[1].U - 29.32); d > 0.05 {
+		t.Fatalf("крестовина SW1 на u=%g, ожидалось 29.32 ± 0.05", f.Addresses[1].U)
 	}
-	if len(rg.Features) != 8 {
-		t.Fatalf("крестовин %d, ожидалось 8 (по одной на стрелку)", len(rg.Features))
+	if len(rg.Features) != 2 {
+		t.Fatalf("крестовин %d, ожидалось 2 (по одной на стрелку горловины)", len(rg.Features))
 	}
 }
 
-// loadMapFile разбирает настоящий файл карты из репозитория.
+// loadMapFile разбирает карту-фикстуру из testdata пакета mapfmt.
 func loadMapFile(t *testing.T) (*mapfmt.Map, error) {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
+	f, err := os.Open(filepath.Join("..", "mapfmt", "testdata", "fixture_station.json"))
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +228,7 @@ func loadMapFile(t *testing.T) (*mapfmt.Map, error) {
 	return mapfmt.Decode(f)
 }
 
-// compileStation компилирует настоящую карту станции.
+// compileStation компилирует карту-фикстуру.
 func compileStation(t *testing.T) *RenderGeometry {
 	t.Helper()
 	m, err := loadMapFile(t)

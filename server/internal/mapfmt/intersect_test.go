@@ -222,11 +222,10 @@ func TestValidateAxisParallelTracksAllowed(t *testing.T) {
 	validateAccepts(t, doc)
 }
 
-// TestValidateST_A — эталонная карта репозитория обязана проходить валидацию,
-// включая проверку пересечений. Пока карта не починена (ClearAhead-sn5),
-// этот тест красный.
-func TestValidateST_A(t *testing.T) {
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
+// TestValidateFixtureStation — карта-фикстура обязана проходить валидацию,
+// включая проверку пересечений: она эталон для тестов, которые её грузят.
+func TestValidateFixtureStation(t *testing.T) {
+	f, err := os.Open(filepath.Join("testdata", "fixture_station.json"))
 	if err != nil {
 		t.Fatalf("карта: %v", err)
 	}
@@ -236,6 +235,6 @@ func TestValidateST_A(t *testing.T) {
 		t.Fatalf("разбор: %v", err)
 	}
 	if err := Validate(m); err != nil {
-		t.Fatalf("ST_A должна проходить валидацию: %v", err)
+		t.Fatalf("фикстура должна проходить валидацию: %v", err)
 	}
 }

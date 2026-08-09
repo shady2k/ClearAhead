@@ -1,11 +1,16 @@
 extends Node
-## Сборка клиента: аргументы, асинхронная загрузка геометрии (HTTP с ETag/304
-## или локальный файл-эталон), сборка World, первичный охват камеры, статусы
-## в UI. HTTP только асинхронный — главный поток ничего не ждёт.
+## Сборка клиента: аргументы, асинхронная загрузка манифеста и геометрии
+## (HTTP с ETag/304 или локальный файл-эталон), сборка World, первичный охват
+## камеры, статусы в UI. HTTP только асинхронный — главный поток ничего не ждёт.
+##
+## map_id и ревизию клиент НЕ знает заранее: в сетевом режиме он сначала
+## получает манифест с /manifest и только после этого запрашивает геометрию
+## адресованной ревизии. Пара (map_id, ревизия) живёт в памяти от манифеста;
+## литералов карты в коде нет.
 ##
 ## Запуск:
 ##   godot --path client                                  # с сервером (по умолчанию)
-##   godot --path client -- --server http://host:8080 --map ST_A --revision 1
+##   godot --path client -- --server http://host:8080
 ##   godot --path client -- --geometry-file ../contract/render_geometry.golden.json
 ##   godot --path client -- --debug                        # отладочный слой
 
@@ -18,12 +23,13 @@ const GM := preload("res://scripts/geometry_math.gd")
 @onready var debug: Node2D = $World/Debug
 
 var _server_url := "http://localhost:8080"
-var _map_id := "ST_A"
-var _revision := 1
+var _map_id := ""   # заполняется из манифеста, литерала карты нет
+var _revision := 0  # заполняется из манифеста
 var _geometry_file := ""
 var _etag := ""
 var _source := ""
-var _http: HTTPRequest
+var _http_manifest: HTTPRequest
+var _http_geometry: HTTPRequest
 
 func _ready() -> void:
 	debug.visible = ProjectSettings.get_setting("client/debug_layer", false)
@@ -34,50 +40,101 @@ func _ready() -> void:
 		ui.set_status("Загрузка геометрии из файла…")
 		_load_file(_geometry_file)
 	else:
-		ui.set_status("Загрузка геометрии с %s…" % _server_url)
-		_load_http()
+		ui.set_status("Загрузка манифеста с %s…" % _server_url)
+		_load_manifest()
 
 func _parse_args() -> void:
 	_server_url = String(ProjectSettings.get_setting("client/server_url", _server_url)).trim_suffix("/")
-	for arg in OS.get_cmdline_user_args():
+	var args := OS.get_cmdline_user_args()
+	# Принимаются обе формы — `--server=URL` и `--server URL`: в документации и в
+	# smoke_screenshot.gd аргументы передаются через пробел.
+	var i := 0
+	while i < args.size():
+		var arg: String = args[i]
 		if arg.begins_with("--server="):
 			_server_url = arg.trim_prefix("--server=").trim_suffix("/")
-		elif arg.begins_with("--map="):
-			_map_id = arg.trim_prefix("--map=")
-		elif arg.begins_with("--revision="):
-			var rev := arg.trim_prefix("--revision=")
-			if rev.is_valid_int():
-				_revision = int(rev)
+		elif arg == "--server" and i + 1 < args.size():
+			_server_url = args[i + 1].trim_suffix("/")
+			i += 1
 		elif arg.begins_with("--geometry-file="):
 			_geometry_file = arg.trim_prefix("--geometry-file=")
+		elif arg == "--geometry-file" and i + 1 < args.size():
+			_geometry_file = args[i + 1]
+			i += 1
 		elif arg == "--debug":
 			debug.visible = true
+		i += 1
 
 func _load_geometry() -> void:
-	# кнопка «Повторить»
+	# кнопка «Повторить»: манифест ещё не получен — начинаем с него, иначе
+	# повторяем только запрос геометрии (пара карты уже известна).
 	if _geometry_file != "":
 		ui.set_status("Повторное чтение файла…")
 		_load_file(_geometry_file)
+	elif _map_id == "":
+		ui.set_status("Повтор манифеста…")
+		_load_manifest()
 	else:
 		ui.set_status("Повтор запроса…")
 		_load_http()
 
+func _manifest_url() -> String:
+	return "%s/manifest" % _server_url
+
 func _geometry_url() -> String:
 	return "%s/maps/%s/revisions/%d/geometry" % [_server_url, _map_id, _revision]
 
-func _load_http() -> void:
-	if _http == null:
-		_http = HTTPRequest.new()
-		add_child(_http)
-		_http.request_completed.connect(_on_http_completed)
-	var headers := PackedStringArray()
-	if _etag != "":
-		headers.append("If-None-Match: %s" % _etag)
-	var err := _http.request(_geometry_url(), headers)
+func _load_manifest() -> void:
+	if _http_manifest == null:
+		_http_manifest = HTTPRequest.new()
+		add_child(_http_manifest)
+		_http_manifest.request_completed.connect(_on_manifest_completed)
+	var err := _http_manifest.request(_manifest_url())
 	if err != OK:
 		ui.set_error("Не удалось начать запрос: %s" % error_string(err))
 
-func _on_http_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
+func _on_manifest_completed(result: int, response_code: int, _headers: PackedStringArray, body: PackedByteArray) -> void:
+	if result != HTTPRequest.RESULT_SUCCESS:
+		# HTTPRequest.Result — свой enum, error_string() по нему врёт (числа не совпадают с Error)
+		ui.set_error("Сервер недоступен (код %d)" % result)
+		return
+	if response_code != 200:
+		ui.set_error("Сервер ответил HTTP %d" % response_code)
+		return
+	var data: Variant = JSON.parse_string(body.get_string_from_utf8())
+	if typeof(data) != TYPE_DICTIONARY:
+		ui.set_error("Манифест не разобран: сервер вернул не JSON")
+		return
+	var man: Dictionary = data
+	var id_v: Variant = man.get("map_id")
+	if typeof(id_v) != TYPE_STRING or (id_v as String).is_empty():
+		ui.set_error("Манифест без map_id")
+		return
+	var rev_v: Variant = man.get("map_revision")
+	if typeof(rev_v) != TYPE_FLOAT and typeof(rev_v) != TYPE_INT:
+		ui.set_error("Манифест без числовой map_revision")
+		return
+	_map_id = id_v as String
+	_revision = int(rev_v)
+	if _revision < 1:
+		ui.set_error("Манифест с map_revision %d" % _revision)
+		return
+	ui.set_status("Загрузка геометрии %s rev %d с %s…" % [_map_id, _revision, _server_url])
+	_load_http()
+
+func _load_http() -> void:
+	if _http_geometry == null:
+		_http_geometry = HTTPRequest.new()
+		add_child(_http_geometry)
+		_http_geometry.request_completed.connect(_on_geometry_completed)
+	var headers := PackedStringArray()
+	if _etag != "":
+		headers.append("If-None-Match: %s" % _etag)
+	var err := _http_geometry.request(_geometry_url(), headers)
+	if err != OK:
+		ui.set_error("Не удалось начать запрос: %s" % error_string(err))
+
+func _on_geometry_completed(result: int, response_code: int, headers: PackedStringArray, body: PackedByteArray) -> void:
 	if result != HTTPRequest.RESULT_SUCCESS:
 		# HTTPRequest.Result — свой enum, error_string() по нему врёт (числа не совпадают с Error)
 		ui.set_error("Сервер недоступен (код %d)" % result)

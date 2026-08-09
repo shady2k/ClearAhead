@@ -78,3 +78,29 @@ func (r GeometryRequest) MapID() string { return r.mapID }
 
 // Revision возвращает проверенный номер ревизии.
 func (r GeometryRequest) Revision() int { return r.revision }
+
+// ManifestRequest — запрос манифеста загруженной карты.
+//
+// Манифест не адресуется ни картой, ни ревизией: клиент идёт за ним именно
+// затем, чтобы УЗНАТЬ пару (map_id, ревизия), а сервер держит в памяти одну
+// карту (см. httpapi.NewHandler). У представления запроса нет ни одного поля:
+// любой сегмент пути или тело — невалидное представление, и Parse его
+// отвергает. Обработчик, зарегистрированный в rpc.Mux, получает значение,
+// которому проверять нечего.
+type ManifestRequest struct{}
+
+func (*ManifestRequest) sealed() {}
+
+func (r *ManifestRequest) native() ManifestRequest { return *r }
+
+// Parse разбирает внешний вход. Единственное валидное представление запроса
+// манифеста — пустое: ни пути, ни тела.
+func (r *ManifestRequest) Parse(in Input) error {
+	if len(in.Path) != 0 {
+		return fmt.Errorf("protocol: запрос манифеста не адресуется сегментами пути")
+	}
+	if len(in.Body) != 0 {
+		return fmt.Errorf("protocol: у запроса манифеста нет тела")
+	}
+	return nil
+}

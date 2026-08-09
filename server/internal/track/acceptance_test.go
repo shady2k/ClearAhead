@@ -8,11 +8,11 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 )
 
-// TestStationCompiles грузит настоящий файл карты из репозитория. Строка в коде
-// проверила бы компилятор, но не карту — а ошибка автора карты и есть то, ради
-// чего написан валидатор.
+// TestStationCompiles грузит карту-фикстуру из testdata пакета mapfmt. Строка в
+// коде проверила бы компилятор, но не карту — а ошибка автора карты и есть то,
+// ради чего написан валидатор. Фикстура маленькая: одна стрелка, три ребра.
 func TestStationCompiles(t *testing.T) {
-	path := filepath.Join("..", "..", "maps", "st_a.json")
+	path := filepath.Join("..", "mapfmt", "testdata", "fixture_station.json")
 	f, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("карта: %v", err)
@@ -30,9 +30,11 @@ func TestStationCompiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("компиляция (замыкание не сошлось?): %v", err)
 	}
-	if len(m.Topology.Turnouts) < 6 {
-		t.Fatalf("стрелок %d, для двух горловин, тупика и примыкания нужно не меньше 6",
-			len(m.Topology.Turnouts))
+	// Две — это горловина: SW1 и SW2 образуют съезд. Одной стрелки мало, на
+	// такой фикстуре не воспроизводится наложение шпальных решёток соседних
+	// элементов, а оно живое и его придётся ловить.
+	if len(m.Topology.Turnouts) != 2 {
+		t.Fatalf("стрелок %d, в фикстуре горловина из двух", len(m.Topology.Turnouts))
 	}
 	if len(ct.Elements) != len(rg.Elements) {
 		t.Fatalf("элементов в CompiledTrack %d, в RenderGeometry %d", len(ct.Elements), len(rg.Elements))

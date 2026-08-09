@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"math"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/httpapi"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
@@ -304,11 +306,11 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 	}
 }
 
-// renderStation компилирует карту станции и сериализует геометрию так же, как
-// это делает ручка.
-func renderStation(t *testing.T) []byte {
+// compileFixture грузит карту-фикстуру и компилирует её — общий вход для тестов
+// провода и манифеста.
+func compileFixture(t *testing.T) (*mapfmt.Map, *track.CompiledTrack, *track.RenderGeometry) {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
+	f, err := os.Open(filepath.Join("..", "mapfmt", "testdata", "fixture_station.json"))
 	if err != nil {
 		t.Fatalf("карта: %v", err)
 	}
@@ -320,10 +322,18 @@ func renderStation(t *testing.T) []byte {
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("валидация: %v", err)
 	}
-	_, rg, err := track.Compile(m)
+	ct, rg, err := track.Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
+	return m, ct, rg
+}
+
+// renderStation компилирует карту-фикстуру и сериализует геометрию так же, как
+// это делает ручка.
+func renderStation(t *testing.T) []byte {
+	t.Helper()
+	_, _, rg := compileFixture(t)
 	// Байты берутся там же, где их берёт ручка и где считается ETag. Отступы
 	// добавляются только для читаемости диффа: эталон обязан быть выводим из
 	// отдаваемого тела, иначе он описывает не то, что уходит клиенту.
@@ -336,4 +346,33 @@ func renderStation(t *testing.T) []byte {
 		t.Fatalf("форматирование: %v", err)
 	}
 	return pretty.Bytes()
+}
+
+// TestManifestFromFixture — ручка отдаёт манифест скомпилированной фикстуры:
+// клиент не знает map_id и ревизию заранее и берёт их из этого ответа, поэтому
+// манифест обязан доехать без искажений и без лишних полей.
+func TestManifestFromFixture(t *testing.T) {
+	m, ct, rg := compileFixture(t)
+	man, err := track.BuildManifest(m, ct, rg)
+	if err != nil {
+		t.Fatalf("манифест: %v", err)
+	}
+	h := httpapi.NewHandler(rg, man)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/manifest", nil))
+	if w.Code != 200 {
+		t.Fatalf("код %d, ожидалось 200", w.Code)
+	}
+	dec := json.NewDecoder(w.Body)
+	dec.DisallowUnknownFields()
+	var got track.Manifest
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("манифест не укладывается в track.Manifest: %v", err)
+	}
+	if got != man {
+		t.Fatalf("манифест %+v, ожидался %+v", got, man)
+	}
+	if got.MapID != "FIX_ST" || got.Revision != 2 {
+		t.Fatalf("манифест карты %q ревизии %d, ожидалась FIX_ST ревизии 2", got.MapID, got.Revision)
+	}
 }

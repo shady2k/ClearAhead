@@ -29,12 +29,12 @@ func _initialize() -> void:
 	var geo: Dictionary = res.geometry
 
 	# Явные ожидания по эталону — дополнительно к проверкам парсера.
-	_check(geo.map_id == "ST_A", "map_id == ST_A, получили «%s»" % geo.map_id)
+	_check(geo.map_id == "FIX_ST", "map_id == FIX_ST, получили «%s»" % geo.map_id)
 	# Ревизию НЕ пиним числом: она растёт при каждой правке раскладки (карту
 	# уже правили — ClearAhead-sn5), и прибитое число делает сверку контракта
 	# красной по причине, к контракту отношения не имеющей.
 	_check(geo.map_revision >= 1, "map_revision >= 1, получили %s" % geo.map_revision)
-	_check(geo.elements.size() == 31, "31 элемент, получили %d" % geo.elements.size())
+	_check(geo.elements.size() == 9, "9 элементов, получили %d" % geo.elements.size())
 	var arcs := 0
 	var unknowns := 0
 	for el in geo.elements:
@@ -67,23 +67,23 @@ func _initialize() -> void:
 		elif r.hand != "right" and r.hand != "left":
 			role_bad += 1
 	_check(role_bad == 0, "роли ветвей полные (битых %d)" % role_bad)
-	_check(roles == 16, "16 ветвей стрелок с ролью, получили %d" % roles)
+	_check(roles == 4, "4 ветви стрелок с ролью, получили %d" % roles)
 
-	# Путевые объекты: платформы 2 и 3, спаны в координате u как в карте.
+	# Путевые объекты: платформа на главном пути, спан в координате u как в карте.
 	var platforms := 0
 	for ts in geo.trackside:
 		_check(ts.kind == Parser.KIND_PLATFORM, "%s: kind platform, получили «%s»" % [ts.id, ts.kind])
 		_check(ts.has("side") and not (ts.side as String).is_empty(), "%s: сторона задана" % ts.id)
 		_check(ts.spans.size() == 1, "%s: один спан, получили %d" % [ts.id, ts.spans.size()])
 		var sp: Dictionary = ts.spans[0]
-		_check(sp.element == "ST_A_E_T2" or sp.element == "ST_A_E_T3",
-			"%s: спан на пути 2 или 3, получили %s" % [ts.id, sp.element])
-		_check(sp.from == 100.0 and sp.to == 600.0,
-			"%s: спан [100, 600] в u, получили [%s, %s]" % [ts.id, sp.from, sp.to])
+		_check(sp.element == "E_MAIN",
+			"%s: спан на главном пути E_MAIN, получили %s" % [ts.id, sp.element])
+		_check(sp.from == 40.0 and sp.to == 100.0,
+			"%s: спан [40, 100] в u, получили [%s, %s]" % [ts.id, sp.from, sp.to])
 		platforms += 1
-	_check(platforms == 2, "2 платформы в контракте, получили %d" % platforms)
+	_check(platforms == 1, "1 платформа в контракте, получили %d" % platforms)
 
-	# Конструкция пути (спека §3–4): один тип, 14 run'ов, полное покрытие
+	# Конструкция пути (спека §3–4): один тип, 4 run'а, полное покрытие
 	# обычных рёбер, крестовины из features.
 	_check(geo.track_types.size() == 1, "1 тип, получили %d" % geo.track_types.size())
 	var tt: Dictionary = geo.track_types[0]
@@ -93,7 +93,7 @@ func _initialize() -> void:
 	_approx(tt.sleeper.length, 2.5, "длина шпалы 2.5")
 	_approx(tt.sleeper.width, 0.28, "ширина шпалы 0.28")
 	_approx(tt.ballast.half_width, 1.75, "полуширина балласта 1.75")
-	_check(geo.construction_runs.size() == 14, "14 run'ов, получили %d" % geo.construction_runs.size())
+	_check(geo.construction_runs.size() == 4, "4 run'а, получили %d" % geo.construction_runs.size())
 	var covered := {}
 	var joint_run: Dictionary = {}
 	for run in geo.construction_runs:
@@ -101,7 +101,7 @@ func _initialize() -> void:
 		_check(run.coordinate == "u", "%s: coordinate == u" % run.id)
 		for span in run.spans:
 			covered[span.element] = covered.get(span.element, 0) + 1
-		if run.id == "RUN_ST_A_E_E34_T4":
+		if run.id == "RUN_APPROACH_CROSS":
 			joint_run = run
 	var uncovered := 0
 	var overlapped := 0
@@ -115,32 +115,32 @@ func _initialize() -> void:
 			overlapped += 1
 	_check(uncovered == 0, "обычные рёбра покрыты run'ами (непокрыто %d)" % uncovered)
 	_check(overlapped == 0, "перекрытий покрытия нет (их %d)" % overlapped)
-	_check(joint_run.spans.size() == 2, "run E34/T4 из двух спанов (их %d)" % joint_run.spans.size())
-	_check(joint_run.spans[0].element == "ST_A_E_E34" and joint_run.spans[1].element == "ST_A_E_T4",
-		"run E34/T4 покрывает E34 и T4")
+	_check(joint_run.spans.size() == 2, "run APPROACH/CROSS из двух спанов (их %d)" % joint_run.spans.size())
+	_check(joint_run.spans[0].element == "E_APPROACH" and joint_run.spans[1].element == "E_CROSS",
+		"run APPROACH/CROSS покрывает E_APPROACH и E_CROSS")
 	_check(geo.placement_algorithm == "placement-v1", "placement_algorithm == placement-v1, получили «%s»" % geo.placement_algorithm)
 
-	# Крестовины (спека §5): 8 стрелок, точка и адреса из эталона.
+	# Крестовины (спека §5): 2 стрелки, точка и адреса из эталона.
 	var frogs := 0
 	for f in geo.features:
 		_check(f.kind == Parser.KIND_FEATURE_FROG, "%s: kind frog, получили «%s»" % [f.owner, f.kind])
 		frogs += 1
-	_check(frogs == 8, "8 крестовин, получили %d" % frogs)
+	_check(frogs == 2, "2 крестовины, получили %d" % frogs)
 	var sw1: Dictionary = {}
 	for f in geo.features:
-		if f.owner == "ST_A_SW_1":
+		if f.owner == "SW1":
 			sw1 = f
-	_check(not sw1.is_empty(), "есть крестовина ST_A_SW_1")
+	_check(not sw1.is_empty(), "есть крестовина SW1")
 	if not sw1.is_empty():
-		_approx(sw1.point.x, 329.3428015022417, "SW_1: point.x")
-		_approx(sw1.point.y, -0.7175, "SW_1: point.y")
-		_check(sw1.addresses.size() == 2, "SW_1: два адреса (их %d)" % sw1.addresses.size())
-		_check(sw1.addresses[0].element == "ST_A_SW_1:straight", "SW_1: адрес 0 — прямой проход")
-		_check(sw1.addresses[1].element == "ST_A_SW_1:diverging", "SW_1: адрес 1 — боковой проход")
-		_approx(sw1.addresses[0].u, 29.342801502241677, "SW_1: u прямого прохода")
-		_approx(sw1.addresses[1].u, 29.31944228015446, "SW_1: u бокового прохода")
-		_approx(sw1.addresses[0].tangent.x, 1.0, "SW_1: касательная прямого прохода")
-		_approx(sw1.addresses[0].tangent.y, 0.0, "SW_1: касательная прямого прохода y")
+		_approx(sw1.point.x, 149.34280150224168, "SW1: point.x")
+		_approx(sw1.point.y, -0.7175, "SW1: point.y")
+		_check(sw1.addresses.size() == 2, "SW1: два адреса (их %d)" % sw1.addresses.size())
+		_check(sw1.addresses[0].element == "SW1:straight", "SW1: адрес 0 — прямой проход")
+		_check(sw1.addresses[1].element == "SW1:diverging", "SW1: адрес 1 — боковой проход")
+		_approx(sw1.addresses[0].u, 29.342801502241677, "SW1: u прямого прохода")
+		_approx(sw1.addresses[1].u, 29.31944228015446, "SW1: u бокового прохода")
+		_approx(sw1.addresses[0].tangent.x, 1.0, "SW1: касательная прямого прохода")
+		_approx(sw1.addresses[0].tangent.y, 0.0, "SW1: касательная прямого прохода y")
 
 	if _failures == 0:
 		print("CONTRACT CHECK OK: %s · %s rev %d · %d элементов · %d дуг · %d ролей · %d объектов · %d run'ов · %d крестовин" % [
@@ -152,7 +152,7 @@ func _initialize() -> void:
 		quit(1)
 
 func _approx(a: float, b: float, what: String) -> void:
-	_check(absf(a - b) < 1e-6, "%s: %v != %v" % [what, a, b])
+	_check(absf(a - b) < 1e-6, "%s: %f != %f" % [what, a, b])
 
 func _check(cond: bool, what: String) -> void:
 	if cond:

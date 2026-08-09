@@ -1,7 +1,7 @@
 extends SceneTree
 ## Тесты чистой геометрии (координаты сервера, Y вверх). Включая дуги с
-## ЗНАЧЕНИЯМИ ИЗ ЭТАЛОНА: конец дуги ST_A_SW_1:diverging обязан совпасть с
-## стартовой позой ST_A_E_W12 из contract/render_geometry.golden.json — это
+## ЗНАЧЕНИЯМИ ИЗ ЭТАЛОНА: конец дуги SW1:diverging обязан совпасть со
+## стартовой позой E_CROSS из contract/render_geometry.golden.json — это
 ## проверяет формулу дуги и знак угла против данных настоящего сервера.
 ## Запуск:
 ##   godot --headless --path client --script tests/test_geometry_math.gd
@@ -69,14 +69,14 @@ func _run() -> void:
 	pts = GM.sample_chain(start, prims)
 	_approx(pts[pts.size() - 1], Vector2(150, 100), "straight 50 + дуга: конец (150,100)")
 
-	# --- ЗНАЧЕНИЕ ИЗ ЭТАЛОНА: конец SW_1:diverging == старт W12 ---
-	# SW_1:diverging: (300,0,h=0), дуга R=300, L=33.21, angle=-0.1107.
-	# W12: старт (333.14221294597223, -1.8362971100542635, -0.1107).
-	start = {"plan": {"x": 300.0, "y": 0.0, "heading": 0.0}}
+	# --- ЗНАЧЕНИЕ ИЗ ЭТАЛОНА: конец SW1:diverging == старт E_CROSS ---
+	# SW1:diverging: (120,0,h=0), дуга R=300, L=33.21, angle=-0.1107.
+	# E_CROSS: старт (153.14221294597223, -1.8362971100542635, -0.1107).
+	start = {"plan": {"x": 120.0, "y": 0.0, "heading": 0.0}}
 	prims = [{"kind": "arc", "length": 33.21, "radius": 300.0, "angle": -0.1107}]
 	pts = GM.sample_chain(start, prims)
-	_approx(pts[pts.size() - 1], Vector2(333.14221294597223, -1.8362971100542635),
-		"дуга SW_1:diverging попадает в старт W12 (эталон)")
+	_approx(pts[pts.size() - 1], Vector2(153.14221294597223, -1.8362971100542635),
+		"дуга SW1:diverging попадает в старт E_CROSS (эталон)")
 
 	# --- normals / offset / polygon ---
 	var line := PackedVector2Array([Vector2(0, 0), Vector2(10, 0)])
@@ -130,12 +130,12 @@ func _run() -> void:
 	_approx(Vector2(pose.x, pose.y), Vector2(100.0 * sin(HALF_PI * 0.5), 100.0 * (1.0 - cos(HALF_PI * 0.5))),
 		"pose_at: середина дуги (угол 45°)")
 	_approx_f(pose.heading, HALF_PI * 0.5, "pose_at: касательная в середине дуги")
-	# ЗНАЧЕНИЕ ИЗ ЭТАЛОНА: SW_1:diverging в конце (u=33.21) == старт W12
-	start = {"plan": {"x": 300.0, "y": 0.0, "heading": 0.0}}
+	# ЗНАЧЕНИЕ ИЗ ЭТАЛОНА: SW1:diverging в конце (u=33.21) == старт E_CROSS
+	start = {"plan": {"x": 120.0, "y": 0.0, "heading": 0.0}}
 	prims = [{"kind": "arc", "length": 33.21, "radius": 300.0, "angle": -0.1107}]
 	pose = GM.pose_at(start, prims, 33.21)
-	_approx(Vector2(pose.x, pose.y), Vector2(333.14221294597223, -1.8362971100542635),
-		"pose_at: конец SW_1:diverging попадает в старт W12 (эталон)")
+	_approx(Vector2(pose.x, pose.y), Vector2(153.14221294597223, -1.8362971100542635),
+		"pose_at: конец SW1:diverging попадает в старт E_CROSS (эталон)")
 	# цепочка: прямой 50 + дуга — поза после границы
 	start = {"plan": {"x": 0.0, "y": 0.0, "heading": 0.0}}
 	prims = [
@@ -204,7 +204,7 @@ func _approx_f(a: float, b: float, what: String) -> void:
 	if absf(a - b) < 1e-6:
 		return
 	_failures += 1
-	printerr("FAIL [%s]: %v != %v" % [what, a, b])
+	printerr("FAIL [%s]: %f != %f" % [what, a, b])
 
 func _check(cond: bool, what: String, got: Variant) -> void:
 	_total += 1

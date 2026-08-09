@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,7 +13,7 @@ import (
 func newTestHandler(t *testing.T) (http.Handler, track.Manifest) {
 	t.Helper()
 	rg := &track.RenderGeometry{MapID: "ST_A", Revision: 1}
-	man := track.Manifest{MapID: "ST_A", Revision: 1, RenderGeometryHash: "deadbeef"}
+	man := track.Manifest{MapID: "ST_A", Revision: 1, TrackHash: "cafebabe", RenderGeometryHash: "deadbeef"}
 	return NewHandler(rg, man), man
 }
 
@@ -95,5 +96,59 @@ func TestGeometryHead(t *testing.T) {
 	}
 	if got, want := w.Header().Get("ETag"), `"`+man.RenderGeometryHash+`"`; got != want {
 		t.Fatalf("HEAD: ETag %q, ожидалось %q", got, want)
+	}
+}
+
+// TestManifestOK — клиент узнаёт map_id и ревизию из манифеста, поэтому ручка
+// обязана отдать их точь-в-точь, и через барьер: путь /manifest не несёт ни
+// одного сегмента, диспетчер разбирает пустой вход в проверенный
+// protocol.ManifestRequest.
+func TestManifestOK(t *testing.T) {
+	h, man := newTestHandler(t)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/manifest", nil))
+	if w.Code != 200 {
+		t.Fatalf("код %d, ожидалось 200", w.Code)
+	}
+	if cc := w.Header().Get("Cache-Control"); !strings.Contains(cc, "no-cache") {
+		t.Fatalf("Cache-Control %q не содержит no-cache: манифест — не immutable-артефакт", cc)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type %q, ожидался application/json", ct)
+	}
+	var got track.Manifest
+	if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+		t.Fatalf("тело манифеста не JSON: %v", err)
+	}
+	if got != man {
+		t.Fatalf("манифест %+v, ожидался %+v", got, man)
+	}
+}
+
+func TestManifestHead(t *testing.T) {
+	h, _ := newTestHandler(t)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("HEAD", "/manifest", nil))
+	if w.Code != 200 {
+		t.Fatalf("HEAD /manifest: код %d, ожидалось 200", w.Code)
+	}
+}
+
+func TestManifestRejects(t *testing.T) {
+	h, _ := newTestHandler(t)
+	cases := []struct {
+		method, path string
+		want         int
+	}{
+		{"POST", "/manifest", 405},
+		{"GET", "/manifest/extra", 404}, // сегменты пути — невалидное представление
+		{"GET", "/maps/ST_A/revisions/1/manifest", 404},
+	}
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(c.method, c.path, nil))
+		if w.Code != c.want {
+			t.Fatalf("%s %s: код %d, ожидалось %d", c.method, c.path, w.Code, c.want)
+		}
 	}
 }
