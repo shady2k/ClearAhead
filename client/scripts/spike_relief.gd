@@ -112,17 +112,30 @@ const CORR_OUTER := 16.0         # м — до какой дали полка р
 const CORR_BURY := 0.06          # м — насколько подошва призмы утоплена в полку
 const FILL_SLOPE := 1.5          # откос земляного полотна 1:1.5
 const CORR_MAX_DROP := 40.0      # м — на какой перепад рассчитан запас раннего выхода
-# Брус не может быть длиннее балласта, на котором лежит: при 5.4 м его конец
-# уходил на 2.4 м в траву, и горловина вблизи выглядела частоколом игл. Число
-# всё равно выдуманное (контракт решётки стрелки не несёт, баг rgk), но теперь
-# оно хотя бы не противоречит соседней строке контракта — half_width балласта.
-#
-# 3.2 БЫЛО ВСЁ РАВНО МНОГО: брус не только длиннее, он ещё и СДВИНУТ вбок на
-# (l - base)/2 (см. _add_turnout_sleepers), и в прошлый расчёт сдвиг не вошёл.
-# Дальний конец уходит на l/2 + (l - base)/2 = l - base/2, то есть при 3.2 — на
-# 1.95 м, а балласт кончается на 1.75: конец бруса висел над откосом. Предел
-# отсюда: l <= half_width + base/2 = 3.0. Взято 2.95, с запасом на глаз.
-const TURNOUT_BEAM_MAX := 2.95  # м — самый длинный переводной брус
+## ГОРЛОВИНА — ОДНА РЕШЁТКА, И КОНЧАЕТСЯ ОНА НЕ НА КОНЦЕ ЭЛЕМЕНТА.
+##
+## Здесь стоял TURNOUT_BEAM_MAX: брусья клались только по элементу стрелки и
+## удлинялись «до 2.95 м» — число, подобранное на глаз под ширину балласта. Обе
+## половины были неверны.
+##
+## Длина. Брус держит ОБА пути, значит он обязан дотянуться от внешнего торца
+## шпалы прямого пути до внешнего торца шпалы отклонения: length = base + sep,
+## где sep — боковое расстояние между осями в этом сечении. Это не подбор, а
+## вывод, и он сам собой не вылезает за балласт: дальний конец отстоит от оси
+## отклонения на base/2 = 1.25 < half_width = 1.75, то есть лежит на призме
+## отклонения, а не над её откосом. Заодно получается 5.35 м у конца горловины —
+## настоящие брусья марки 1/9 кончаются на 5.5 м.
+##
+## Длина зоны. Элемент стрелки кончается там, где оси разошлись на ~1.8 м, а
+## обычные шпалы длиной 2.5 м требуют разноса минимум base + BEAM_CLEAR. Между
+## этими отметками решётки двух путей ПЕРЕСЕКАЛИСЬ под углом марки — это и был
+## «где-то короткие, где-то накладываются» на снимке владельца. Зона брусьев
+## тянется до разноса base + BEAM_CLEAR (для 1/9 это ещё ~9 м за элементом), и
+## внутри неё шпалы run'ов гасятся: их место занимает общий брус.
+const BEAM_CLEAR := 0.35        # м — зазор между торцами шпал соседних путей
+const ZONE_MAX := 120.0         # м — предел поиска конца горловины
+const ZONE_STEP := 0.25         # м — шаг выборки осевых горловины
+const ZONE_BACK := 5.0          # м — насколько осевая прохода продлевается назад
 const CENTER_STEP := 4.0         # м — шаг выборки осевых для поиска коридора
 
 var _cl_pts := PackedVector3Array()   # осевые точки (x, высота_пути, z)
@@ -273,23 +286,21 @@ func _rebuild() -> void:
 	buffers.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var earth := SurfaceTool.new()
 	earth.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var pitch := _sleeper_pitch()
 	_collect_centerlines()
 	_add_ground()
 	for el in _geometry.elements:
 		var lift := BRANCH_LIFT if el.has("role") else 0.0
 		_add_ballast(ballast, el, lift)
 		_add_rails(rails, el, lift)
-		if el.has("role"):
-			# ОДНА решётка на стрелку: переводные брусья кладутся по ПРЯМОМУ
-			# проходу и удлиняются в сторону отклонения. У ветви отклонения
-			# своей решётки НЕТ — брусья общие. Раньше здесь строились две
-			# решётки под углом друг к другу, и шпалы накладывались: это
-			# дефект rgk, контракт решётку стрелки не несёт.
-			if String(el.role.branch) == "straight":
-				_add_turnout_sleepers(sleepers, el, pitch, lift)
+	# ОДНА решётка на горловину. Брусья кладутся по прямому проходу и держат оба
+	# пути; шпалы run'ов внутри зоны гасятся. Зоны считаются ДО раскладки: им
+	# нужны позиции шпал run'ов по обе стороны горловины, чтобы попасть в общий
+	# ритм и не сдвоить шпалу на входе и выходе.
+	var zones := _turnout_zones()
+	for z in zones:
+		_add_turnout_beams(sleepers, z)
 	for run in _geometry.get("construction_runs", []):
-		_add_run_sleepers(sleepers, run)
+		_add_run_sleepers(sleepers, run, zones)
 	for f in _geometry.get("features", []):
 		if f.kind == "frog":
 			_add_frog(frog, f)
@@ -445,16 +456,26 @@ func _add_frog(tool: SurfaceTool, f: Dictionary) -> void:
 		Vector3(c0.x, _track_y(c0.x), c0.y), Vector3(c1.x, _track_y(c1.x), c1.y)]), section, true, true)
 
 ## Шпалы по рецепту run'а (спека §4): моменты phase + n*pitch из run_length,
-## аналитическая pose(u) — как в 2D-мире (world.gd._draw_run_sleepers).
-func _add_run_sleepers(tool: SurfaceTool, run: Dictionary) -> void:
+## аналитическая pose(u) — как в 2D-мире (world.gd._draw_run_sleepers). Внутри
+## горловины шпала не кладётся: там лежит общий брус (см. _turnout_zones).
+func _add_run_sleepers(tool: SurfaceTool, run: Dictionary, zones: Array) -> void:
 	var typ := _type()
 	if typ.is_empty():
 		return
-	var pitch := float(typ.sleeper.pitch)
-	var length := GM.run_length(run)
 	var half := float(typ.sleeper.length) * 0.5
 	var width := float(typ.sleeper.width)
-	for r in GM.run_sleeper_offsets(float(run.phase), pitch, length):
+	for s in _run_sleeper_poses(run):
+		if _in_any_zone(zones, s.pos):
+			continue
+		_add_sleeper_box(tool, s.pos, s.heading, half, width, 0.0)
+
+## Позы шпал run'а в плане: { pos: Vector2, heading: float }.
+func _run_sleeper_poses(run: Dictionary) -> Array:
+	var out := []
+	var typ := _type()
+	if typ.is_empty():
+		return out
+	for r in GM.run_sleeper_offsets(float(run.phase), float(typ.sleeper.pitch), GM.run_length(run)):
 		var local := GM.run_to_local(run, r)
 		if not local.ok:
 			continue
@@ -464,49 +485,207 @@ func _add_run_sleepers(tool: SurfaceTool, run: Dictionary) -> void:
 		var pose := GM.pose_at(el.start, el.primitives, local.u)
 		if not pose.ok:
 			continue
-		_add_sleeper_box(tool, Vector2(pose.x, pose.y), pose.heading, half, width, 0.0)
+		out.append({"pos": Vector2(pose.x, pose.y), "heading": float(pose.heading)})
+	return out
 
-## Шпалы на ветвях стрелки: run'ы их не покрывают (спека §4 — проходы устройств
-## не регулярная решётка), контракт решётки стрелки не даёт. ВЫДУМАНО: тот же
-## шаг/фаза, что у run'ов, вдоль каждой ветви от острия. Шпала в u=0 у
-## отклонения пропущена — она совпадает с общей шпалой прямого пути.
-## Переводные брусья: перпендикулярны прямому проходу, длина растёт от обычной
-## шпалы у острия до ~5.4 м у крестовины, центр смещается в сторону отклонения.
-## ВЫДУМАНО: контракт решётку стрелки не даёт (баг rgk). Настоящие числа должны
-## прийти из каталога типов стрелок (бид ClearAhead-qyf).
-func _add_turnout_sleepers(tool: SurfaceTool, el: Dictionary, pitch: float, lift: float) -> void:
+## --- горловина: одна решётка на стрелку ---
+##
+## ВЫДУМАНО ЦЕЛИКОМ: контракт решётки стрелки не несёт (баг rgk), настоящие
+## числа должны прийти из каталога типов стрелок (бид ClearAhead-qyf). Но
+## выдуман здесь только ШАГ; длина бруса и длина зоны выводятся из геометрии
+## самих ветвей, см. BEAM_CLEAR.
+##
+## Зона описывается так:
+##   sp   — осевая прямого прохода, выборкой от -ZONE_BACK до ZONE_MAX;
+##          назад и вперёд за концы элемента продлевается касательной, потому
+##          что зона почти всегда длиннее самого элемента стрелки;
+##   dp   — то же для ветви отклонения;
+##   len  — станция, на которой оси разошлись на base + BEAM_CLEAR;
+##   a, b — станции ближайших шпал run'ов ПО ПРЯМОМУ ПРОХОДУ до и после зоны;
+##   step — шаг брусьев: (b - a) поделено на целое число близких к pitch долей.
+##
+## Шаг считается делением, а не берётся равным pitch, и это принципиально: run
+## по контракту начинает фазу от своего начала, и на стыке с элементом стрелки
+## расстояние оказывалось каким угодно. На SW2 оно было 0.2 м при шпале шириной
+## 0.28 — две шпалы внахлёст. Деление промежутка на равные доли даёт шаг в
+## пределах процента от pitch и НИ ОДНОГО сдвоенного стыка по построению.
+func _turnout_zones() -> Array:
+	var zones := []
+	var typ := _type()
+	if typ.is_empty():
+		return zones
+	var base := float(typ.sleeper.length)
+	var pitch := float(typ.sleeper.pitch)
+	var by_turnout := {}
+	for el in _geometry.elements:
+		if not el.has("role"):
+			continue
+		var key := String(el.role.turnout)
+		if not by_turnout.has(key):
+			by_turnout[key] = {}
+		by_turnout[key][String(el.role.branch)] = el
+	# Шпалы всех run'ов нужны целиком: вход в горловину и выход из неё лежат в
+	# разных run'ах, а иногда (SW2) вход — вообще в середине чужого run'а.
+	var all_sleepers := []
+	for run in _geometry.get("construction_runs", []):
+		all_sleepers.append_array(_run_sleeper_poses(run))
+	for key in by_turnout:
+		var pair: Dictionary = by_turnout[key]
+		if not pair.has("straight") or not pair.has("diverging"):
+			continue
+		var zone := {
+			"id": key,
+			"u0": -ZONE_BACK,
+			"sp": _sample_path(pair.straight, -ZONE_BACK, ZONE_MAX),
+			"dp": _sample_path(pair.diverging, 0.0, ZONE_MAX * 1.3),
+		}
+		zone["len"] = _zone_length(zone, base)
+		var a := -pitch
+		var b: float = zone.len + pitch
+		var have_a := false
+		var have_b := false
+		for s in all_sleepers:
+			var pl := _zone_project(zone, s.pos)
+			# |lat| мало — шпала стоит на самом прямом проходе, а не на соседнем
+			# пути: только такие задают ритм, в который встраиваются брусья.
+			if absf(pl.y) > base * 0.2:
+				continue
+			if pl.x < -1e-6 and pl.x > -ZONE_BACK + 1e-6 and (not have_a or pl.x > a):
+				a = pl.x
+				have_a = true
+			if pl.x > zone.len + 1e-6 and (not have_b or pl.x < b):
+				b = pl.x
+				have_b = true
+		var n: int = maxi(1, int(round((b - a) / pitch)) - 1)
+		zone["a"] = a
+		zone["b"] = b
+		zone["step"] = (b - a) / float(n + 1)
+		zone["count"] = n
+		zones.append(zone)
+	return zones
+
+## Осевая элемента выборкой с шагом ZONE_STEP. За пределами элемента (и назад от
+## его начала) продлевается касательной: зона горловины почти всегда длиннее
+## самого элемента стрелки, а вход в неё лежит до его начала.
+func _sample_path(el: Dictionary, u0: float, u1: float) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	var length := _element_length(el)
+	var u := u0
+	while u <= u1 + 1e-6:
+		var c: float = clampf(u, 0.0, length)
+		var pose := GM.pose_at(el.start, el.primitives, c)
+		if pose.ok:
+			var d := u - c
+			out.append(Vector2(pose.x + cos(pose.heading) * d, pose.y + sin(pose.heading) * d))
+		u += ZONE_STEP
+	return out
+
+## Станция, на которой оси ветвей разошлись настолько, что каждой хватает своей
+## шпалы. До неё путей два, а решётка одна.
+func _zone_length(zone: Dictionary, base: float) -> float:
+	var need := base + BEAM_CLEAR
+	var u := 0.0
+	while u <= ZONE_MAX:
+		var lat := _zone_lat(zone, u)
+		if is_finite(lat) and absf(lat) >= need:
+			return u
+		u += ZONE_STEP
+	push_warning("SPIKE: горловина %s не разошлась на %.2f м за %.0f м" % [zone.id, need, ZONE_MAX])
+	return ZONE_MAX
+
+## Репер прямого прохода на станции u: точка, касательная, левая нормаль.
+func _zone_frame(zone: Dictionary, u: float) -> Dictionary:
+	var sp: PackedVector2Array = zone.sp
+	var u0 := float(zone.u0)
+	var i: int = clampi(int(floor((u - u0) / ZONE_STEP)), 0, sp.size() - 2)
+	var a: Vector2 = sp[i]
+	var b: Vector2 = sp[i + 1]
+	var d := (b - a).normalized()
+	var o: Vector2 = a + d * (u - (u0 + float(i) * ZONE_STEP))
+	return {"origin": o, "dir": d, "nrm": Vector2(-d.y, d.x)}
+
+## Боковое смещение оси отклонения в сечении u прямого прохода: пересечение
+## поперечины с осевой отклонения. Знак — по левой нормали, так что «правая» и
+## «левая» стрелки выходят из геометрии, а не из поля role.hand.
+func _zone_lat(zone: Dictionary, u: float) -> float:
+	var f := _zone_frame(zone, u)
+	var o: Vector2 = f.origin
+	var d: Vector2 = f.dir
+	var dp: PackedVector2Array = zone.dp
+	var prev_s := 0.0
+	var prev_p := Vector2.ZERO
+	for k in dp.size():
+		var q: Vector2 = dp[k]
+		var s := (q - o).dot(d)
+		if k > 0 and prev_s <= 0.0 and s >= 0.0:
+			var t := 0.0 if is_equal_approx(s, prev_s) else -prev_s / (s - prev_s)
+			var p := prev_p.lerp(q, t)
+			return (p - o).dot(f.nrm)
+		prev_s = s
+		prev_p = q
+	return INF
+
+## Поперечный габарит бруса в сечении u: от внешнего торца шпалы прямого пути до
+## внешнего торца шпалы отклонения. Vector2(ближний, дальний) по левой нормали.
+func _zone_span(zone: Dictionary, u: float, base: float) -> Vector2:
+	var lat := _zone_lat(zone, u)
+	if not is_finite(lat):
+		lat = 0.0
+	return Vector2(minf(0.0, lat) - base * 0.5, maxf(0.0, lat) + base * 0.5)
+
+## Проекция точки плана на прямой проход: Vector2(станция, боковое смещение).
+func _zone_project(zone: Dictionary, p: Vector2) -> Vector2:
+	var sp: PackedVector2Array = zone.sp
+	var u0 := float(zone.u0)
+	var best := INF
+	var out := Vector2.ZERO
+	for i in sp.size() - 1:
+		var a: Vector2 = sp[i]
+		var e: Vector2 = sp[i + 1] - a
+		var l2 := e.length_squared()
+		if l2 <= 0.0:
+			continue
+		var t: float = clampf((p - a).dot(e) / l2, 0.0, 1.0)
+		var c := a + e * t
+		var d2 := p.distance_squared_to(c)
+		if d2 < best:
+			best = d2
+			var dir := e / sqrt(l2)
+			out = Vector2(u0 + (float(i) + t) * ZONE_STEP, (p - c).dot(Vector2(-dir.y, dir.x)))
+	return out
+
+## Накрыт ли центр шпалы общим брусом. Границы (a, b) — станции соседних шпал
+## run'ов, оставшихся снаружи, поэтому гаснет ровно то, что заменено брусьями.
+func _in_any_zone(zones: Array, p: Vector2) -> bool:
+	var typ := _type()
+	if typ.is_empty():
+		return false
+	var base := float(typ.sleeper.length)
+	for z in zones:
+		var pl := _zone_project(z, p)
+		if pl.x <= z.a + 1e-6 or pl.x >= z.b - 1e-6:
+			continue
+		var span := _zone_span(z, pl.x, base)
+		if pl.y >= span.x - 1e-6 and pl.y <= span.y + 1e-6:
+			return true
+	return false
+
+## Переводные брусья зоны: перпендикулярны прямому проходу, длина — по габариту
+## обоих путей в сечении, центр — посередине этого габарита.
+func _add_turnout_beams(tool: SurfaceTool, zone: Dictionary) -> void:
 	var typ := _type()
 	if typ.is_empty():
 		return
 	var base := float(typ.sleeper.length)
 	var width := float(typ.sleeper.width)
-	var hand_sign := -1.0 if String(el.role.hand) == "right" else 1.0
-	var length := _element_length(el)
-	if length <= 0.0:
-		return
-	for u in GM.run_sleeper_offsets(0.0, pitch, length):
-		var pose := GM.pose_at(el.start, el.primitives, u)
-		if not pose.ok:
-			continue
-		var t: float = clampf(u / length, 0.0, 1.0)
-		var l: float = lerpf(base, TURNOUT_BEAM_MAX, t)
-		_add_sleeper_box(tool, Vector2(pose.x, pose.y), pose.heading,
-			l * 0.5, width, lift, hand_sign * (l - base) * 0.5)
-
-func _add_branch_sleepers(tool: SurfaceTool, el: Dictionary, pitch: float, lift: float) -> void:
-	var typ := _type()
-	if typ.is_empty():
-		return
-	var half := float(typ.sleeper.length) * 0.5
-	var width := float(typ.sleeper.width)
-	var is_diverging: bool = el.role.branch == "diverging"
-	for u in GM.run_sleeper_offsets(0.0, pitch, _element_length(el)):
-		if is_diverging and u < 0.001:
-			continue
-		var pose := GM.pose_at(el.start, el.primitives, u)
-		if not pose.ok:
-			continue
-		_add_sleeper_box(tool, Vector2(pose.x, pose.y), pose.heading, half, width, lift)
+	for k in range(1, int(zone.count) + 1):
+		var u: float = zone.a + float(k) * float(zone.step)
+		var f := _zone_frame(zone, u)
+		var span := _zone_span(zone, u, base)
+		var o: Vector2 = f.origin
+		var d: Vector2 = f.dir
+		_add_sleeper_box(tool, o, atan2(d.y, d.x),
+			(span.y - span.x) * 0.5, width, 0.0, (span.x + span.y) * 0.5)
 
 func _add_sleeper_box(tool: SurfaceTool, center: Vector2, heading: float,
 		half_len: float, width: float, lift: float, shift: float = 0.0) -> void:
@@ -923,12 +1102,6 @@ func _type() -> Dictionary:
 	if tts.is_empty():
 		return {}
 	return tts[0]
-
-func _sleeper_pitch() -> float:
-	var typ := _type()
-	if typ.is_empty():
-		return 0.6
-	return float(typ.sleeper.pitch)
 
 func _element_length(el: Dictionary) -> float:
 	var total := 0.0
