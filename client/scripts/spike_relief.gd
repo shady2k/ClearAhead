@@ -28,13 +28,33 @@ const GM := preload("res://scripts/geometry_math.gd")
 const Parser := preload("res://scripts/geometry_parser.gd")
 
 ## --- стилевые константы (в контракте их нет: вертикальный профиль нулевой) ---
-const BALLAST_DEPTH := 0.30      # м — толщина балласта
-const BALLAST_ADD := 0.45        # м — откос 1:1.5: низ шире верха на 0.45 на борт
+## ВЕРТИКАЛЬ ПУТИ. Начало отсчёта y = 0 — постель под шпалой (верх балластной
+## призмы под подошвой шпалы). Вверх:
+##
+##   -SLEEPER_EMBED .. -SLEEPER_EMBED+SLEEPER_H   шпала
+##   CRIB_Y                                       щебень в шпальном ящике
+##   верх шпалы .. +PAD_H                         прокладка
+##   подошва рельса .. +RAIL_H                    рельс
+##
+## ЗАЗОРОВ ВОЗДУХОМ ЗДЕСЬ БОЛЬШЕ НЕТ. Раньше стояли SLEEPER_LIFT и RAIL_LIFT по
+## 10 мм «против z-fighting», и вблизи они читались щелью в несколько пикселей:
+## владелец увидел это как «рельсы висят». Воздух — неверное лекарство от
+## z-fighting; соприкасающиеся детали должны ПЕРЕСЕКАТЬСЯ, а не расходиться.
+## Заодно RAIL_LIFT случайно компенсировал отсутствие SLEEPER_LIFT в формуле
+## рельса: стоило тронуть одно — и рельс отрывался от шпалы. Теперь отметки
+## считаются друг от друга (_sleeper_top, _rail_sole), а не набираются вручную.
+const BALLAST_DEPTH := 0.30      # м — толщина балласта под постелью
+## ЩЕБЕНЬ В ШПАЛЬНОМ ЯЩИКЕ. Было 0.15: шпала торчала из него на 4.5 см и с
+## рабочих дистанций читалась заподлицо — «шпалы покрыты насыпью целиком».
+## 0.10 оставляет 9.5 см из 20, то есть верхнюю половину шпалы наружу: решётка
+## видна, а ящик всё равно заполнен и слоёного пирога не образует.
+const CRIB_Y := 0.10             # м — щебень в шпальном ящике: не доходит до верха шпалы
+const BALLAST_ADD := 0.675       # м — откос 1:1.5 на полную высоту призмы (0.30+0.15)
 const SLEEPER_H := 0.20          # м — высота шпалы
-const SLEEPER_LIFT := 0.01       # м — зазор над балластом (анти z-fight)
-const RAIL_H := 0.16             # м — высота рельса (прямоугольный профиль)
-const RAIL_W := 0.10             # м — ширина рельса
-const RAIL_LIFT := 0.01          # м — зазор над шпалой (анти z-fight)
+const SLEEPER_EMBED := 0.005     # м — шпала утоплена в постель (пересечение, не зазор)
+const RAIL_H := 0.16             # м — высота рельса
+const RAIL_W := 0.10             # м — ширина рельса (прямоугольный профиль базового класса)
+const PAD_H := 0.008             # м — упругая прокладка между подошвой рельса и шпалой
 const BRANCH_LIFT := 0.01        # м — подъём геометрии ветвей стрелки (анти z-fight)
 const FROG_LEN := 1.2            # м — длина заглушки крестовины вдоль касательной
 const FROG_W := 0.12             # м — ширина заглушки крестовины
@@ -83,9 +103,26 @@ const TERR_Z1 := 320.0
 const TERR_STEP := 6.0           # м — шаг сетки рельефа
 const CORR_INNER := 6.5          # м — полуширина полки под путём
 const CORR_OUTER := 16.0         # м — до какой дали полка растворяется в рельефе
-const CORR_DROP := 0.15          # м — полка чуть ниже подошвы балласта
+## ПОДОШВА БАЛЛАСТА ЗАГЛУБЛЕНА В ГРУНТ, А НЕ ПОДНЯТА НАД НИМ. Здесь стоял
+## CORR_DROP = 0.15 «полка чуть ниже подошвы балласта» — то есть земля проходила
+## на 15 см НИЖЕ низа призмы, и весь путь висел на воздушной прослойке по всей
+## длине. С низкой камеры под него было видно траву; владелец прочитал это как
+## «шпалы висят», хотя висела вся призма. Тот же класс ошибки, что SLEEPER_LIFT и
+## RAIL_LIFT: соприкасающиеся тела должны ПЕРЕСЕКАТЬСЯ, а не расходиться.
+const CORR_BURY := 0.06          # м — насколько подошва призмы утоплена в полку
 const FILL_SLOPE := 1.5          # откос земляного полотна 1:1.5
-const TURNOUT_BEAM_MAX := 5.4   # м — самый длинный переводной брус
+const CORR_MAX_DROP := 40.0      # м — на какой перепад рассчитан запас раннего выхода
+# Брус не может быть длиннее балласта, на котором лежит: при 5.4 м его конец
+# уходил на 2.4 м в траву, и горловина вблизи выглядела частоколом игл. Число
+# всё равно выдуманное (контракт решётки стрелки не несёт, баг rgk), но теперь
+# оно хотя бы не противоречит соседней строке контракта — half_width балласта.
+#
+# 3.2 БЫЛО ВСЁ РАВНО МНОГО: брус не только длиннее, он ещё и СДВИНУТ вбок на
+# (l - base)/2 (см. _add_turnout_sleepers), и в прошлый расчёт сдвиг не вошёл.
+# Дальний конец уходит на l/2 + (l - base)/2 = l - base/2, то есть при 3.2 — на
+# 1.95 м, а балласт кончается на 1.75: конец бруса висел над откосом. Предел
+# отсюда: l <= half_width + base/2 = 3.0. Взято 2.95, с запасом на глаз.
+const TURNOUT_BEAM_MAX := 2.95  # м — самый длинный переводной брус
 const CENTER_STEP := 4.0         # м — шаг выборки осевых для поиска коридора
 
 var _cl_pts := PackedVector3Array()   # осевые точки (x, высота_пути, z)
@@ -130,7 +167,11 @@ func _ground_worked(x: float, z: float) -> float:
 	if _cl_pts.is_empty():
 		return nat
 	# Ранний выход: вдали от габарита трассы коридор искать незачем.
-	var margin := CORR_INNER + FILL_SLOPE * 12.0
+	# Запас берётся под САМЫЙ ВЫСОКИЙ откос: подошва откоса уходит от бровки на
+	# FILL_SLOPE * (перепад), и если запас меньше, чем реальный вылет, граница
+	# ящика режет откос по прямой — на рельефе спайка мира это читалось
+	# прямоугольной ступенькой поперёк холма.
+	var margin := CORR_INNER + FILL_SLOPE * CORR_MAX_DROP
 	if x < _cl_bb.position.x - margin or x > _cl_bb.end.x + margin \
 			or z < _cl_bb.position.y - margin or z > _cl_bb.end.y + margin:
 		return nat
@@ -149,7 +190,7 @@ func _ground_worked(x: float, z: float) -> float:
 	# (выемка), и вниз (насыпь) одинаково. Раньше насыпь строилась ПОД КАЖДЫМ
 	# путём отдельно, и в горловине откосы соседних путей проходили друг сквозь
 	# друга — отсюда «насыпь выше шпал».
-	var shelf := best_y - BALLAST_DEPTH - CORR_DROP
+	var shelf := best_y - BALLAST_DEPTH + CORR_BURY
 	if d <= CORR_INNER:
 		return shelf
 	var reach: float = FILL_SLOPE * absf(nat - shelf)
@@ -169,6 +210,11 @@ static var hide_loco := false
 static var shot_persp := false
 
 const CAM_FOV := 50.0            # градусы — перспективная проекция
+## Насколько ближняя плоскость ортографии уводится ЗА камеру, и докуда достаёт
+## дальняя. Обе с запасом на юбку мира: она уходит на 4 км за край поля высот.
+## См. развёрнутое обоснование в _apply_camera.
+const ORTHO_NEAR_BACK := 8000.0  # м
+const FAR_BEYOND := 12000.0      # м
 
 var _camera: Camera3D
 var _aabb := AABB()
@@ -250,13 +296,37 @@ func _rebuild() -> void:
 	_add_platforms(platform, platform_edge)
 	_add_buffer_stops(buffers)
 	_add_loco_scale()
-	_commit(ballast, _mat(COL_BALLAST, 1.0, 0.0, true, 1.6))   # крупная крошка
-	_commit(sleepers, _mat(COL_SLEEPER, 0.85, 0.0, true, 5.0))  # волокно, мельче крошки
-	_commit(rails, _mat(COL_RAIL, 0.35, 0.6))
-	_commit(frog, _mat(COL_FROG, 0.40, 0.5))
-	_commit(platform, _mat(COL_PLATFORM, 0.85))
-	_commit(platform_edge, _mat(COL_PLATFORM_EDGE, 0.70))
-	_commit(buffers, _mat(COL_BUFFER, 0.60))
+	_commit(ballast, _mat_ballast())
+	_commit(sleepers, _mat_sleeper())
+	_commit(rails, _mat_rail())
+	_commit(frog, _mat_frog())
+	_commit(platform, _mat_platform())
+	_commit(platform_edge, _mat_platform_edge())
+	_commit(buffers, _mat_buffer())
+
+## Материалы вынесены по одному в функцию, чтобы наследник (spike_world.gd) мог
+## заменить палитру пути, не переписывая сборку. Здесь — палитра по натуре из
+## разбора 2026-08-09 (коэффициенты отражения настоящих поверхностей).
+func _mat_ballast() -> StandardMaterial3D:
+	return _mat(COL_BALLAST, 1.0, 0.0, true, 1.6)   # крупная крошка
+
+func _mat_sleeper() -> StandardMaterial3D:
+	return _mat(COL_SLEEPER, 0.85, 0.0, true, 5.0)  # волокно, мельче крошки
+
+func _mat_rail() -> StandardMaterial3D:
+	return _mat(COL_RAIL, 0.35, 0.6)
+
+func _mat_frog() -> StandardMaterial3D:
+	return _mat(COL_FROG, 0.40, 0.5)
+
+func _mat_platform() -> StandardMaterial3D:
+	return _mat(COL_PLATFORM, 0.85)
+
+func _mat_platform_edge() -> StandardMaterial3D:
+	return _mat(COL_PLATFORM_EDGE, 0.70)
+
+func _mat_buffer() -> StandardMaterial3D:
+	return _mat(COL_BUFFER, 0.60)
 
 ## --- материалы ---
 func _mat(albedo: Color, roughness: float, metallic: float = 0.0, noisy: bool = false, tri: float = 0.05) -> StandardMaterial3D:
@@ -285,7 +355,10 @@ func _mat(albedo: Color, roughness: float, metallic: float = 0.0, noisy: bool = 
 		m.uv1_scale = Vector3(tri, tri, tri)
 	return m
 
-func _commit(tool: SurfaceTool, mat: StandardMaterial3D, parent: Node = null) -> MeshInstance3D:
+## Тип материала — Material, а не StandardMaterial3D: покров земли в spike_world
+## считается шейдером (деталь мельче шага сетки вершинами невыразима), и ему
+## нужен ShaderMaterial. material_override принимает и то, и другое.
+func _commit(tool: SurfaceTool, mat: Material, parent: Node = null) -> MeshInstance3D:
 	var mesh := tool.commit()
 	if mesh == null:
 		return null
@@ -303,10 +376,17 @@ func _add_ballast(tool: SurfaceTool, el: Dictionary, lift: float) -> void:
 	if typ.is_empty():
 		return
 	var hw := float(typ.ballast.half_width)
+	# ВЕРХ ПРИЗМЫ — НА УРОВНЕ ШПАЛЬНОГО ЯЩИКА, а не постели. Раньше он стоял на
+	# y = lift, шпала лежала НА плите, и вблизи путь читался стопкой слоёв. Щебень
+	# должен заполнять промежутки между шпалами почти до их верха, а шпала —
+	# торчать из него на 4-5 см. Плоская отметка CRIB_Y это и даёт: плоскость
+	# проходит СКВОЗЬ шпалы, их низ оказывается похоронен, наружу выходит только
+	# верхняя часть. Гребёнки щебня, поднимающегося к каждой шпале, экструзия
+	# постоянного сечения не выразит — но её и не видно с рабочих дистанций.
 	var section := PackedVector3Array([
 		Vector3(-hw - BALLAST_ADD, -BALLAST_DEPTH + lift, 0.0),
-		Vector3(-hw, lift, 0.0),
-		Vector3(hw, lift, 0.0),
+		Vector3(-hw, CRIB_Y + lift, 0.0),
+		Vector3(hw, CRIB_Y + lift, 0.0),
 		Vector3(hw + BALLAST_ADD, -BALLAST_DEPTH + lift, 0.0),
 	])
 	_extrude(tool, _chain3d(el), section,
@@ -316,18 +396,36 @@ func _add_rails(tool: SurfaceTool, el: Dictionary, lift: float) -> void:
 	var typ := _type()
 	if typ.is_empty():
 		return
-	var g := float(typ.gauge) * 0.5
-	var y0 := RAIL_LIFT + SLEEPER_H + lift
-	var section := PackedVector3Array([
+	var g := _rail_axis_offset(float(typ.gauge))
+	var y0 := _rail_sole() + lift
+	var section := _rail_section(y0)
+	var cs := not _element_connected_at_start(el)
+	var ce := not _element_connected_at_end(el)
+	# ПОДКЛАДКА. Без неё PAD_H превращается в новый зазор воздухом — ровно тот
+	# дефект, против которого он введён: подошва висит на 8 мм над шпалой.
+	# Здесь она СПЛОШНОЙ ЛЕНТОЙ вдоль рельса, а не пластиной на каждой шпале:
+	# на рабочих дистанциях разница не читается, а знать положение шпал отсюда
+	# нельзя — их раскладывает другой проход, по run'ам.
+	var pw := _rail_foot_half() + 0.025
+	var pad := PackedVector3Array([
+		Vector3(-pw, y0 - PAD_H, 0.0), Vector3(-pw, y0, 0.0),
+		Vector3(pw, y0, 0.0), Vector3(pw, y0 - PAD_H, 0.0),
+	])
+	for sign in [1.0, -1.0]:
+		var chain := _offset_chain3d(el, g * sign)
+		_extrude(tool, chain, pad, cs, ce)
+		_extrude(tool, chain, section, cs, ce)
+
+## Сечение рельса в осях (латераль, высота) от подошвы y0. Здесь — прямоугольник
+## RAIL_W×RAIL_H: с высоты станции профиля не видно. Наследник заменяет его на
+## настоящий двутавр (подошва — шейка — головка).
+func _rail_section(y0: float) -> PackedVector3Array:
+	return PackedVector3Array([
 		Vector3(-RAIL_W * 0.5, y0, 0.0),
 		Vector3(-RAIL_W * 0.5, y0 + RAIL_H, 0.0),
 		Vector3(RAIL_W * 0.5, y0 + RAIL_H, 0.0),
 		Vector3(RAIL_W * 0.5, y0, 0.0),
 	])
-	var cs := not _element_connected_at_start(el)
-	var ce := not _element_connected_at_end(el)
-	for sign in [1.0, -1.0]:
-		_extrude(tool, _offset_chain3d(el, g * sign), section, cs, ce)
 
 func _add_frog(tool: SurfaceTool, f: Dictionary) -> void:
 	var addr: Dictionary = f.addresses[0]
@@ -336,7 +434,7 @@ func _add_frog(tool: SurfaceTool, f: Dictionary) -> void:
 	var c := Vector2(float(f.point.x), float(f.point.y))
 	var c0 := c - dir * (FROG_LEN * 0.5)
 	var c1 := c + dir * (FROG_LEN * 0.5)
-	var y0 := RAIL_LIFT + SLEEPER_H
+	var y0 := _rail_sole()
 	var section := PackedVector3Array([
 		Vector3(-FROG_W * 0.5, y0, 0.0),
 		Vector3(-FROG_W * 0.5, y0 + RAIL_H, 0.0),
@@ -414,7 +512,7 @@ func _add_sleeper_box(tool: SurfaceTool, center: Vector2, heading: float,
 		half_len: float, width: float, lift: float, shift: float = 0.0) -> void:
 	var d := Vector2(cos(heading), sin(heading))
 	var l := Vector2(-d.y, d.x)
-	var c := Vector3(center.x, _track_y(center.x) + SLEEPER_LIFT + lift, center.y)
+	var c := Vector3(center.x, _track_y(center.x) - SLEEPER_EMBED + lift, center.y)
 	c += Vector3(l.x, 0.0, l.y) * shift
 	var u := Vector3(l.x, 0.0, l.y) * half_len          # вдоль шпалы
 	var v := Vector3(d.x, 0.0, d.y) * (width * 0.5)     # вдоль пути
@@ -425,15 +523,26 @@ func _add_sleeper_box(tool: SurfaceTool, center: Vector2, heading: float,
 	var bot := [
 		c + u + v, c - u + v, c - u - v, c + u - v,
 	]
-	_quad(tool, top[0], top[1], top[2], top[3])   # верх
-	_quad(tool, bot[3], bot[2], top[2], top[3])   # борт -v
-	_quad(tool, bot[2], bot[1], top[1], top[2])   # торец -u
-	_quad(tool, bot[1], bot[0], top[0], top[1])   # борт +v
-	_quad(tool, bot[0], bot[3], top[3], top[0])   # торец +u
+	# ГРАНИ КОРОБКИ ОТДАЮТСЯ С ЯВНЫМ «КУДА НАРУЖУ». Здесь стоял голый _quad, и
+	# запись верха давала разность НАРУЖУ, а запись бортов — ВНУТРЬ: две
+	# разные раскладки в одной функции. Пока обмотка была вывернута целиком, это
+	# не всплывало (просто менялось, что видно), а после починки _quad вылезло
+	# буквально: верх шпалы рисуется, борта срезаны, и шпала стала плитой без
+	# толщины — «шпалы имеют только две стороны». Знак теперь считается, а не
+	# держится в голове.
+	var au := Vector3(l.x, 0.0, l.y)              # наружу по торцу
+	var av := Vector3(d.x, 0.0, d.y)              # наружу по борту
+	_quad_facing(tool, top[0], top[1], top[2], top[3], Vector3.UP)   # верх
+	_quad_facing(tool, bot[3], bot[2], top[2], top[3], -av)          # борт -v
+	_quad_facing(tool, bot[2], bot[1], top[1], top[2], -au)          # торец -u
+	_quad_facing(tool, bot[1], bot[0], top[0], top[1], av)           # борт +v
+	_quad_facing(tool, bot[0], bot[3], top[3], top[0], au)           # торец +u
 
 ## Параллелепипед по ортонормированным осям (a — вдоль, b — поперёк, up — вверх).
-## Обмотка совпадает с проверенной обмоткой _add_sleeper_box (верх/борта) плюс
-## низ.
+## Наружное направление у каждой грани известно из самих осей — им и правится
+## обмотка (см. _quad_facing). Раньше здесь лежала та же смешанная раскладка, что
+## и у шпалы, и вдобавок правильность верха зависела от РУКОСТИ базиса, который
+## передаст вызывающий: у левой тройки (a,b,up) верх выворачивался наизнанку.
 func _add_obox(tool: SurfaceTool, c: Vector3, a: Vector3, b: Vector3, up: Vector3,
 		ha: float, hb: float, hu: float) -> void:
 	var t := [
@@ -444,12 +553,12 @@ func _add_obox(tool: SurfaceTool, c: Vector3, a: Vector3, b: Vector3, up: Vector
 		c + a * ha + b * hb - up * hu, c - a * ha + b * hb - up * hu,
 		c - a * ha - b * hb - up * hu, c + a * ha - b * hb - up * hu,
 	]
-	_quad(tool, t[0], t[1], t[2], t[3])          # верх
-	_quad(tool, bo[3], bo[2], t[2], t[3])        # борт -b
-	_quad(tool, bo[2], bo[1], t[1], t[2])        # торец -a
-	_quad(tool, bo[1], bo[0], t[0], t[1])        # борт +b
-	_quad(tool, bo[0], bo[3], t[3], t[0])        # торец +a
-	_quad(tool, bo[3], bo[2], bo[1], bo[0])      # низ
+	_quad_facing(tool, t[0], t[1], t[2], t[3], up)            # верх
+	_quad_facing(tool, bo[3], bo[2], t[2], t[3], -b)          # борт -b
+	_quad_facing(tool, bo[2], bo[1], t[1], t[2], -a)          # торец -a
+	_quad_facing(tool, bo[1], bo[0], t[0], t[1], b)           # борт +b
+	_quad_facing(tool, bo[0], bo[3], t[3], t[0], a)           # торец +a
+	_quad_facing(tool, bo[3], bo[2], bo[1], bo[0], -up)       # низ
 
 ## Экструзия сечения (точки в осях lat×up, порядок: мин-lat-низ, мин-lat-верх,
 ## макс-lat-верх, макс-lat-низ) вдоль цепочки: по грани на пару точек сечения,
@@ -493,23 +602,46 @@ func _cap(tool: SurfaceTool, a: Vector3, lat: Vector3, section: PackedVector3Arr
 	else:
 		_quad(tool, pts[0], pts[1], pts[2], pts[3])
 
-## ОБХОД БАГА РЕНДЕРА: на этом стеке (Godot 4.7.1 nixpkgs + llvmpipe, GL
-## Compatibility) нормали мешей SurfaceTool рендерятся ИНВЕРТИРОВАННЫМИ —
-## верхние грани (нормаль +Y) ведут себя как нижние: гаснут под светом сверху
-## и загораются под светом снизу. PlaneMesh (земля) рендерится правильно.
-## Эмпирически проверено изолированным тестом: нормаль надо класть
-## ПРОТИВОПОЛОЖНУЮ геометрической (set_normal(-n)), тогда освещение и
-## обмотка согласуются (верх светлый под солнцем сверху). Касается только
-## освещения: обмотка треугольников при этом остаётся фронтальной.
+## ОБМОТКА. Здесь стояло «баг рендера: нормали SurfaceTool инвертированы, кладём
+## set_normal(-n)». Бага нет — есть договор Godot: ЛИЦЕВАЯ ГРАНЬ ТА, У КОТОРОЙ
+## ВЕРШИНЫ ИДУТ ПО ЧАСОВОЙ СТРЕЛКЕ ДЛЯ ЗРИТЕЛЯ, то есть (p1-p0)×(p2-p0) смотрит
+## ОТ зрителя. Прежний порядок отправлял наружу именно эту разность, и все тела
+## получались вывернутыми: cull_back срезал наружные грани, а внутрь смотрящие
+## оставлял. Косметика set_normal(-n) чинила только освещение и тем прятала
+## причину — отсечение нормаль не спрашивает вовсе, ему довольно порядка вершин.
+##
+## Замерено вертикальным проколом сцены: земля (её кладёт _quad_cn, обмотка
+## другая) даёт в вершинах разность -Y и рисуется, а верх балластной призмы и
+## верх шпалы дают +Y и не рисуются НИГДЕ. Отсюда «шпалы прозрачные»: верх шпалы
+## срезан, и сквозь коробку без дна видно землю; отсюда же исчезнувший балласт —
+## призму видно только там, где её подошва случайно вышла выше земли, и тогда
+## глаз видит НИЗ призмы вместо верха.
+##
+## Разность (p1-p0)×(p2-p0) при принятой у вызывающих обмотке смотрит НАРУЖУ —
+## её и кладём нормалью, а вершины отправляем в обратном порядке.
 func _quad(tool: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3) -> void:
 	var n := (p1 - p0).cross(p2 - p0).normalized()
-	tool.set_normal(-n)
+	tool.set_normal(n)
 	tool.add_vertex(p0)
+	tool.add_vertex(p2)
 	tool.add_vertex(p1)
-	tool.add_vertex(p2)
 	tool.add_vertex(p0)
-	tool.add_vertex(p2)
 	tool.add_vertex(p3)
+	tool.add_vertex(p2)
+
+## Квад с ЗАДАННЫМ наружным направлением: порядок вершин подгоняется под него.
+##
+## _quad требует от вызывающего помнить раскладку — а память подводит: у коробки
+## шпалы верх был записан по одной раскладке, борта по обратной, и полдела
+## срезалось отсечением. Там, где наружная сторона известна из самой геометрии
+## (грань коробки, ось), надёжнее её передать и не думать о порядке. Экструзия
+## этим не пользуется: у неё раскладка одна на все грани и она доказана.
+func _quad_facing(tool: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, p3: Vector3,
+		outward: Vector3) -> void:
+	if (p1 - p0).cross(p2 - p0).dot(outward) >= 0.0:
+		_quad(tool, p0, p1, p2, p3)
+	else:
+		_quad(tool, p0, p3, p2, p1)
 
 ## --- земля: собственное поле высот (спайк) ---
 ## Осевые всех элементов с их высотой — по ним ищется коридор земляных работ.
@@ -630,15 +762,21 @@ func _add_platforms(slab: SurfaceTool, edge: SurfaceTool) -> void:
 			var chain := _range_chain(el, float(span.from), float(span.to))
 			if chain.size() < 2:
 				continue
+			# ПЛИТА НАЧИНАЕТСЯ ЗА КРОМКОЙ, а не под ней. Раньше жёлтая кромка
+			# лежала ПОВЕРХ плиты, их верхние грани совпадали плоскость в
+			# плоскость, и z-буфер выбирал победителя по пикселям — отсюда
+			# жёлтая пила вдоль всей платформы. Теперь у полос общая боковая
+			# грань, а совпадающих горизонтальных нет ни одной.
 			var lat_in := side_sign * PLATFORM_OFFSET
+			var lat_edge := lat_in + side_sign * PLATFORM_EDGE_W
 			var lat_out := side_sign * (PLATFORM_OFFSET + PLATFORM_WIDTH)
-			var lo := minf(lat_in, lat_out)
-			var hi := maxf(lat_in, lat_out)
+			var lo := minf(lat_edge, lat_out)
+			var hi := maxf(lat_edge, lat_out)
 			_extrude(slab, chain, PackedVector3Array([
 				Vector3(lo, yb, 0.0), Vector3(lo, yt, 0.0),
 				Vector3(hi, yt, 0.0), Vector3(hi, yb, 0.0)]), true, true)
 			var e_in := lat_in
-			var e_out := lat_in + side_sign * PLATFORM_EDGE_W
+			var e_out := lat_edge
 			var elo := minf(e_in, e_out)
 			var ehi := maxf(e_in, e_out)
 			_extrude(edge, chain, PackedVector3Array([
@@ -727,9 +865,34 @@ func _chain3d(el: Dictionary) -> PackedVector3Array:
 func _offset_chain3d(el: Dictionary, offset: float) -> PackedVector3Array:
 	return _chain3d_from(GM.offset_polyline(GM.sample_chain(el.start, el.primitives), offset))
 
+## План приходит от геометрии, ОТМЕТКА берётся из продольного профиля — и здесь
+## же цепочка доуплотняется по нему.
+##
+## GM.sample_chain тесселирует КРИВИЗНУ В ПЛАНЕ и больше ничего: у прямого
+## элемента она отдаёт две точки, начало и конец. Экструзии этого довольно, чтобы
+## положить прямую призму, — но не довольно по высоте: _track_y это ломаный
+## профиль с вертикальными кривыми, и между двумя узлами верх призмы идёт ХОРДОЙ.
+## Замерено зондом: у элемента 0..120 м (та самая вертикальная кривая) хорда
+## проходит на 0.142 м ВЫШЕ профиля, а шпала торчит из щебня на 0.095 — то есть
+## на этом перегоне шпалы хоронились целиком, и наружу выходили только кончики.
+## Отсюда «шпалы короткие».
+##
+## Шаг 5 м берётся из самой кривой: её вторая производная 1e-4 1/м, стрелка
+## хорды на пять метров — 0.3 мм, то есть на три порядка меньше того, что видно.
+## Вставка идёт ПО ХОРДЕ ПЛАНА, так что форма пути в плане не меняется ни на
+## сколько — уточняется только отметка.
+const PROFILE_STEP := 5.0        # м — шаг доуплотнения цепочки по профилю
+
 func _chain3d_from(pts: PackedVector2Array) -> PackedVector3Array:
 	var out := PackedVector3Array()
-	for p in pts:
+	for i in pts.size():
+		var p := pts[i]
+		if i > 0:
+			var q := pts[i - 1]
+			var cuts := int(ceil(q.distance_to(p) / PROFILE_STEP)) - 1
+			for k in range(1, cuts + 1):
+				var m := q.lerp(p, float(k) / float(cuts + 1))
+				out.append(Vector3(m.x, _track_y(m.x), m.y))
 		out.append(Vector3(p.x, _track_y(p.x), p.y))
 	return out
 
@@ -773,8 +936,33 @@ func _element_length(el: Dictionary) -> float:
 		total += float(p.length)
 	return total
 
+## --- отметки вертикали: считаются друг от друга, а не набираются вручную ---
+func _sleeper_top() -> float:
+	return SLEEPER_H - SLEEPER_EMBED
+
+func _rail_sole() -> float:
+	return _sleeper_top() + PAD_H
+
 func _rail_top() -> float:
-	return RAIL_LIFT + SLEEPER_H + RAIL_H
+	return _rail_sole() + RAIL_H
+
+## Смещение ОСИ рельса от оси пути.
+##
+## КОЛЕЯ ИЗМЕРЯЕТСЯ ПО ВНУТРЕННИМ РАБОЧИМ ГРАНЯМ ГОЛОВОК, а не по осям рельсов —
+## так она определена и в спеке (render-contract-and-types-design.md:82). Здесь
+## стояло gauge/2, то есть на ±gauge/2 ставилась ОСЬ: внутренние грани сходились
+## на полширины рельса, и при gauge 1.435 путь выходил 1.335 — на 10 см уже
+## нормы. Наследник переопределяет полуширину под свой профиль.
+func _rail_axis_offset(gauge: float) -> float:
+	return gauge * 0.5 + _rail_head_half()
+
+## Полуширина головки. У прямоугольного профиля головка — это весь рельс.
+func _rail_head_half() -> float:
+	return RAIL_W * 0.5
+
+## Полуширина подошвы: по ней ставится подкладка.
+func _rail_foot_half() -> float:
+	return RAIL_W * 0.5
 
 ## --- свет и фон ---
 ## Небо (процедурный градиент) с амбиентом от него, теневой ключевой источник
@@ -844,6 +1032,27 @@ func _apply_camera() -> void:
 	_camera.projection = Camera3D.PROJECTION_ORTHOGONAL if _cam_ortho else Camera3D.PROJECTION_PERSPECTIVE
 	_camera.size = _cam_size
 	_camera.fov = CAM_FOV
+	# БЛИЖНЯЯ ПЛОСКОСТЬ В ОРТОГРАФИИ УХОДИТ ЗА КАМЕРУ.
+	#
+	# В ортографии дистанция на масштаб не влияет ВОВСЕ — влияет только
+	# отсечение, и ближняя плоскость там параллельна экрану. Камера стоит на
+	# _cam_dist ≈ 1.07 × _cam_size, то есть на зуме 14 — в пятнадцати метрах, ВНУТРИ
+	# сцены. Весь передний план, что ближе неё, срезается: на экране это прямая
+	# линия поперёк кадра, за которой видно нижнюю половину неба, а тела,
+	# пересекающие её, показывают срез. Это и был «обрезанный край».
+	#
+	# Отодвинуть камеру нельзя, хотя картинку это бы не изменило: от ПОЗИЦИИ
+	# камеры считаются дымка (fog_density) и дальность зерна земли (detail_far в
+	# шейдере покрова). Проверено снимком: отступ в 6 км даёт правильную
+	# геометрию и полностью выбеленный дымкой кадр.
+	#
+	# У ортографической проекции ближняя плоскость — обычная граница линейного
+	# отображения глубины, и отрицательной ей быть не запрещено: она просто
+	# оказывается ПОЗАДИ камеры. Так сцена целиком попадает в объём отсечения, а
+	# камера остаётся там, где её ждут дымка и шейдер. В перспективе так нельзя —
+	# там ближняя плоскость стоит в знаменателе, и вернуть надо 0.05.
+	_camera.near = -ORTHO_NEAR_BACK if _cam_ortho else 0.05
+	_camera.far = FAR_BEYOND if _cam_ortho else 4000.0
 	_camera.current = true
 
 ## Автофит: ортографический размер по проекции AABB на плоскость камеры.

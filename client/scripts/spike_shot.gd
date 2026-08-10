@@ -5,6 +5,10 @@ extends SceneTree
 ##
 ##   DISPLAY=:1 godot --path client --script res://scripts/spike_shot.gd \
 ##       -- --shot /tmp/s1.png [--focus x,y] [--size м] [--azimuth deg] [--elev deg]
+##
+## --scene переключает сцену спайка: spike_relief.tscn (путь на земле, по
+## умолчанию) или spike_world.tscn (мир вокруг пути). Статические параметры
+## съёмки объявлены в spike_relief.gd, spike_world.gd их наследует.
 
 const Spike := preload("res://scripts/spike_relief.gd")
 
@@ -29,7 +33,8 @@ func _initialize() -> void:
 		Spike.shot_persp = true
 	if _arg("--hide-loco", "0") == "1":
 		Spike.hide_loco = true
-	root.add_child((load("res://scenes/spike_relief.tscn") as PackedScene).instantiate())
+	var scene := _arg("--scene", "res://scenes/spike_relief.tscn")
+	root.add_child((load(scene) as PackedScene).instantiate())
 
 func _process(_delta: float) -> bool:
 	_elapsed += 1

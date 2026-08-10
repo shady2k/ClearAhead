@@ -73,7 +73,7 @@ ifneq ($(strip $(ELEV)),)
 SK_ARGS += --elev $(ELEV)
 endif
 
-.PHONY: help sketch3d sketch3d-shot dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
+.PHONY: help world world-shot terrain-probe tile-dump sketch3d sketch3d-shot dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -86,6 +86,10 @@ help:
 	@echo '  make contract   контрактный тест клиента против эталона (без сервера)'
 	@echo '  make test       всё: go test ./... + контрактный тест клиента'
 	@echo '  make sketch3d   ЭСКИЗ: тот же путь мешами в 3D, орто-камера'
+	@echo '  make world      СПАЙК МИРА: рельеф, лес, река, посёлок (нужен Forward+)'
+	@echo '  make world-shot снимок спайка мира в $(SHOT)'
+	@echo '  make terrain-probe  статистика поля высот спайка мира (без окна)'
+	@echo '  make tile-dump      процедурные тайлы спайка мира в PNG (без окна)'
 	@echo '  make vnc        напомнить, куда смотреть и где пароль'
 	@echo
 	@echo 'Переменные: MAP, SERVER_ADDR, SHOT, FOCUS="x,y", ZOOM=<пикс/м>, DISPLAY_ID'
@@ -180,10 +184,71 @@ sketch3d-shot:
 		--shot $(SHOT) $(SK_ARGS)
 	@echo "снимок: $(SHOT)"
 
+## world / world-shot — СПАЙК МИРА: тот же путь, но с рельефом, лесом, рекой и
+## посёлком (client/scripts/spike_world.gd). Всё, кроме пути, выдумано клиентом.
+##
+## Нужен Forward+: спайк рассчитывает на тени, дымку и SSAO, которых в
+## gl_compatibility нет. Метод передаётся флагом запуска, project.godot не
+## трогается — на llvmpipe-машине Forward+ не поднимется, там RENDER=gl_compatibility.
+##   make world                                живой просмотр, мышь крутит камеру
+##   make world-shot                           общий план в $(SHOT)
+##   make world-shot SIZE=150 ELEV=26 FOCUS=170,0   станция крупно
+RENDER ?= forward_plus
+WORLD_SCENE := res://scenes/spike_world.tscn
+# Умолчания камеры общего плана; SIZE/ELEV/AZ/FOCUS перекрывают их по одному.
+# Расписано через ifeq, а не через $(if ...): в FOCUS есть запятая, а она у make
+# — разделитель аргументов функции.
+W_SIZE  := 420
+W_ELEV  := 40
+W_AZ    := 205
+W_FOCUS := 240,40
+ifneq ($(strip $(SIZE)),)
+W_SIZE := $(SIZE)
+endif
+ifneq ($(strip $(ELEV)),)
+W_ELEV := $(ELEV)
+endif
+ifneq ($(strip $(AZ)),)
+W_AZ := $(AZ)
+endif
+ifneq ($(strip $(FOCUS)),)
+W_FOCUS := $(FOCUS)
+endif
+WORLD_ARGS := --size $(W_SIZE) --elev $(W_ELEV) --azimuth $(W_AZ) --focus $(W_FOCUS)
+
+world:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) --path client $(WORLD_SCENE)
+
+world-shot:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) --path client \
+		--script res://scripts/spike_shot.gd -- --scene $(WORLD_SCENE) \
+		--shot $(SHOT) --persp 1 $(WORLD_ARGS)
+	@echo "снимок: $(SHOT)"
+
 ## contract — клиент разбирает эталон БОЕВЫМ парсером. Сцену не поднимает,
 ## поэтому здесь --headless законен.
 contract:
 	$(GODOT) --headless --path client --script tests/contract_check.gd
+
+## terrain-probe — СТАТИСТИКА ПОЛЯ ВЫСОТ спайка мира, без окна и рендера.
+## Поле высот — чистая функция координат, и спорить о ней по снимку бессмысленно:
+## «земля выглядит плоской» может значить и клэмп в коде, и слабый шум, и
+## неудачную камеру. Зонд отвечает числом. Им найдены оба дефекта разбора
+## 2026-08-10: 37 % карты, срезанных клэмпом в плоскость, и эрозия, которая
+## гасила деталь на 2 % вместо обещанных гребней и промоин.
+terrain-probe:
+	$(GODOT) --headless --path client --script res://tools/terrain_probe.gd
+
+## tile-dump — ВЫГРУЗКА ПРОЦЕДУРНЫХ ТАЙЛОВ спайка мира в PNG, без окна и рендера.
+## Тайл — чистая функция кода, и спорить о нём по снимку сцены бессмысленно: на
+## общем плане мип съедает рисунок, и «трава убогая» может значить и материал, и
+## свет, и сам тайл. Так найдена причина 2026-08-10: дернина рисовала РОЗЕТКИ —
+## листья лучами из центра куртины, то есть одуванчики, — и на снимке это читалось
+## брокколи. Видно это только на самом тайле.
+##   make tile-dump OUT=/tmp   -> tile_turf.png, tile_blade_0..2.png
+OUT ?= /tmp
+tile-dump:
+	$(GODOT) --headless --path client --script res://tools/tile_dump.gd -- --out $(OUT)
 
 test-go:
 	cd server && $(GO) build ./... && $(GO) vet ./... && $(GO) test ./...
