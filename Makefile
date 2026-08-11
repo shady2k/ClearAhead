@@ -16,7 +16,15 @@ SHELL := $(shell command -v bash 2>/dev/null || echo /bin/sh)
 
 SERVER_ADDR ?= :8080
 SERVER_URL  ?= http://127.0.0.1$(SERVER_ADDR)
-MAP         ?= server/maps/st_a.json
+
+# Карту серверу больше не передают файлом: затравка строится кодом
+# (seedmap.Station), а на диске живёт база мира. DB — её файл; удалить его
+# значит засеять мир заново при следующем запуске.
+#
+# Путь абсолютный намеренно: модуль лежит в server/, поэтому serve заходит туда
+# (как build и test-go), и относительный путь означал бы server/world.db, а не
+# то, что написано в переменной.
+DB          ?= $(CURDIR)/world.db
 
 GO ?= go
 
@@ -30,17 +38,28 @@ help:
 	@echo '  make build   сборка сервера'
 	@echo '  make fmt     gofmt по серверу'
 	@echo
-	@echo 'Переменные: MAP, SERVER_ADDR'
+	@echo 'Переменные: DB, SERVER_ADDR'
 	@echo
 	@echo 'Примеры:'
-	@echo '  make serve MAP=server/internal/mapfmt/testdata/fixture_station.json'
-	@echo '  curl -s $(SERVER_URL)/maps'
+	@echo '  make serve SERVER_ADDR=:8091 DB=/tmp/world.db'
+	@echo '  curl -s $(SERVER_URL)/regions/ST_A'
+	@echo '  curl -s $(SERVER_URL)/regions/ST_A/revisions/2/network'
+	@echo '  curl -sD- -o /dev/null $(SERVER_URL)/regions/ST_A/chunks/0/0/0'
+	@echo '  curl -s $(SERVER_URL)/manifest'
+	@echo
+	@echo 'Корень игрока один — регион: манифест региона называет ревизию,'
+	@echo 'хеши и числа правила подробности, по ним берут сеть и рельеф.'
+	@echo 'Ресурс geometry удалён: сеть живёт на /revisions/{n}/network.'
+	@echo 'Ручки /maps без пути нет — она снесена вместе с JSON (96ccacf).'
+	@echo 'Регион совпадает с map_id: на затравке это ST_A.'
+	@echo 'Чанк — двоичный, поэтому в примере показаны заголовки, а не тело.'
 	@echo
 	@echo 'Клиента нет — см. шапку Makefile.'
 
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
+## go.mod лежит в server/, а не в корне: без cd команда не собирается вовсе.
 serve:
-	$(GO) run ./server/cmd/clearahead -map $(MAP) -addr $(SERVER_ADDR)
+	cd server && $(GO) run ./cmd/clearahead -db $(DB) -addr $(SERVER_ADDR)
 
 test-go:
 	cd server && $(GO) build ./... && $(GO) vet ./... && $(GO) test ./...
