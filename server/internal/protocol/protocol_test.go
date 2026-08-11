@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
 // TestManifestRequestParse — у запроса манифеста нет ни одного поля
@@ -31,29 +31,15 @@ func TestManifestRequestParse(t *testing.T) {
 	}
 }
 
-// validMapBody — минимальный документ карты, проходящий строгий разбор
-// (mapfmt.Decode): форма, а не валидация — её выполняет mapstore.
+// validMapBody — документ карты, проходящий строгий разбор (mapfmt.Decode):
+// форма, а не валидация — её выполняет mapstore. Карта берётся у фабрики: у
+// барьера нет своего мнения о содержании, и заводить вторую запись карты
+// здесь незачем.
+const mapIDВТеле = "T"
+
 func validMapBody(t *testing.T) json.RawMessage {
 	t.Helper()
-	m := mapfmt.Map{
-		FormatVersion: mapfmt.FormatVersion,
-		MapID:         "T",
-		MapRevision:   1,
-		Anchors:       map[string]mapfmt.Anchor{"N1.P1": {X: 0, Y: 0, Z: 0, Heading: 0}},
-		Topology: mapfmt.Topology{
-			Nodes: []mapfmt.Node{
-				{ID: "N1", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-				{ID: "N2", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
-			},
-			Edges: []mapfmt.Edge{{ID: "E1", From: "N1.P1", To: "N2.P1"}},
-		},
-		Geometry: mapfmt.Geometry{
-			Edges: map[string]mapfmt.Alignments{
-				"E1": {Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 100}}},
-			},
-		},
-	}
-	b, err := json.Marshal(m)
+	b, err := json.Marshal(seedmap.Line(seedmap.WithID(mapIDВТеле)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,8 +96,8 @@ func TestSaveMapRequestParse(t *testing.T) {
 	if err := req.Parse(Input{Body: validMapBody(t)}); err != nil {
 		t.Fatalf("валидное тело: %v", err)
 	}
-	if req.Map().MapID != "T" {
-		t.Fatalf("map_id %q, ожидался T", req.Map().MapID)
+	if req.Map().MapID != mapIDВТеле {
+		t.Fatalf("map_id %q, ожидался %s", req.Map().MapID, mapIDВТеле)
 	}
 	if err := req.Parse(Input{}); err == nil {
 		t.Fatal("пустое тело обязано отвергаться")
@@ -136,7 +122,7 @@ func TestSaveAsMapRequestParse(t *testing.T) {
 	if err := req.Parse(Input{Path: map[string]string{"name": "st.json"}, Body: validMapBody(t)}); err != nil {
 		t.Fatalf("валидный вход: %v", err)
 	}
-	if req.Name() != "st.json" || req.Map().MapID != "T" {
+	if req.Name() != "st.json" || req.Map().MapID != mapIDВТеле {
 		t.Fatalf("разбор имени %q или карты %q", req.Name(), req.Map().MapID)
 	}
 	if err := req.Parse(Input{Path: map[string]string{"name": ""}, Body: validMapBody(t)}); err == nil {

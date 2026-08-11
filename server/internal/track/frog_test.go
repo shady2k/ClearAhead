@@ -2,13 +2,12 @@ package track
 
 import (
 	"math"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -193,20 +192,20 @@ func TestFrogUnknownType(t *testing.T) {
 	}
 }
 
-// TestCompileFrogFixture — сквозная проверка на карте-фикстуре: крестовина
+// TestCompileFrogFixture — сквозная проверка на карте фабрики: крестовина
 // SW1 попадает на u ≈ 29.32 м бокового прохода. Это тот же критерий, что
-// TestFrogST_A_SW_1, но через весь компилятор и файл карты.
+// TestFrogST_A_SW_1, но через весь компилятор и целую карту.
 func TestCompileFrogFixture(t *testing.T) {
 	rg := compileStation(t)
 	byID := map[string]RenderFeature{}
 	for _, f := range rg.Features {
 		byID[f.Owner] = f
 	}
-	f, ok := byID["SW1"]
+	f, ok := byID[seedmap.StationSW1]
 	if !ok {
-		t.Fatal("в геометрии фикстуры нет крестовины SW1")
+		t.Fatalf("в геометрии станции нет крестовины %s", seedmap.StationSW1)
 	}
-	if len(f.Addresses) != 2 || f.Addresses[1].Element != "SW1:diverging" {
+	if len(f.Addresses) != 2 || f.Addresses[1].Element != seedmap.StationSW1+mapfmt.PassageDiverging {
 		t.Fatalf("адреса крестовины %+v", f.Addresses)
 	}
 	if d := math.Abs(f.Addresses[1].U - 29.32); d > 0.05 {
@@ -217,25 +216,10 @@ func TestCompileFrogFixture(t *testing.T) {
 	}
 }
 
-// loadMapFile разбирает карту-фикстуру из testdata пакета mapfmt.
-func loadMapFile(t *testing.T) (*mapfmt.Map, error) {
-	t.Helper()
-	f, err := os.Open(filepath.Join("..", "mapfmt", "testdata", "fixture_station.json"))
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	return mapfmt.Decode(f)
-}
-
-// compileStation компилирует карту-фикстуру.
+// compileStation компилирует станцию фабрики.
 func compileStation(t *testing.T) *RenderGeometry {
 	t.Helper()
-	m, err := loadMapFile(t)
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	_, rg, err := Compile(m)
+	_, rg, err := Compile(seedmap.Station())
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}

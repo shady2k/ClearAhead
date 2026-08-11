@@ -13,15 +13,18 @@ import (
 // причину придётся искать.
 func TestФабрикаПорождаетВалидныеКарты(t *testing.T) {
 	случаи := map[string]*mapfmt.Map{
-		"перегон":                 Line(),
-		"перегон с рельефом":      Line(WithTerrain()),
-		"перегон без решётки":     Line(WithoutConstruction()),
-		"станция":                 Station(),
-		"станция с рельефом":      Station(WithTerrain()),
-		"станция без решётки":     Station(WithoutConstruction()),
-		"перегон с мостом":        Line(WithTerrain(), WithStructure("bridge", "MOST", LineEdgeID, 50, 150)),
-		"перегон с тоннелем":      Line(WithTerrain(), WithStructure("tunnel", "TONNEL", LineEdgeID, 0, 80)),
-		"станция иначе названная": Station(WithID("DRUGAYA"), WithRevision(7)),
+		"перегон":                          Line(),
+		"перегон с рельефом":               Line(WithTerrain()),
+		"перегон без решётки":              Line(WithoutConstruction()),
+		"станция":                          Station(),
+		"станция с рельефом":               Station(WithTerrain()),
+		"станция без решётки":              Station(WithoutConstruction()),
+		"перегон с мостом":                 Line(WithTerrain(), WithStructure("bridge", "MOST", LineEdgeID, 50, 150)),
+		"перегон с тоннелем":               Line(WithTerrain(), WithStructure("tunnel", "TONNEL", LineEdgeID, 0, 80)),
+		"станция иначе названная":          Station(WithID("DRUGAYA"), WithRevision(7)),
+		"кольцо":                           Ring(RingRadiusM),
+		"перегон из двух рёбер":            Corridor(),
+		"перегон из двух рёбер с рельефом": Corridor(WithTerrain()),
 	}
 	for имя, m := range случаи {
 		if err := mapfmt.Validate(m); err != nil {
@@ -34,7 +37,10 @@ func TestФабрикаПорождаетВалидныеКарты(t *testing.T
 // замыкание циклов и распространение поз — отдельный класс требований, и
 // фикстура, ломающаяся на них, бесполезна для тестов компилятора.
 func TestКартыФабрикиКомпилируются(t *testing.T) {
-	for имя, m := range map[string]*mapfmt.Map{"перегон": Line(), "станция": Station()} {
+	for имя, m := range map[string]*mapfmt.Map{
+		"перегон": Line(), "станция": Station(),
+		"кольцо": Ring(RingRadiusM), "перегон из двух рёбер": Corridor(),
+	} {
 		ct, rg, err := track.Compile(m)
 		if err != nil {
 			t.Fatalf("%s: компиляция: %v", имя, err)
@@ -73,5 +79,33 @@ func TestПорчаДействительноЛомает(t *testing.T) {
 	m := Station(Mutate(func(m *mapfmt.Map) { m.MapID = "ПЛОХОЙ:ID" }))
 	if err := mapfmt.Validate(m); err == nil {
 		t.Fatal("испорченная карта прошла валидацию")
+	}
+}
+
+// Кольцо обязано СХОДИТЬСЯ при штатном радиусе и расходиться при изменённом —
+// иначе проверка невязки замыкания холостая с обеих сторон.
+func TestКольцоСходитсяИРасходится(t *testing.T) {
+	if _, _, err := track.Propagate(Ring(RingRadiusM)); err != nil {
+		t.Fatalf("замкнутое кольцо отвергнуто: %v", err)
+	}
+	// ΔR = 5 мм даёт невязку 5·√2 ≈ 7 мм — заведомо больше допуска 1 мм.
+	if _, _, err := track.Propagate(Ring(RingRadiusM + 0.005)); err == nil {
+		t.Fatal("кольцо с невязкой 7 мм принято")
+	}
+}
+
+// У перегона из двух рёбер обязан быть обычный порт, где сходятся ДВА ребра:
+// в этом весь смысл фикстуры, и вырождение её в один элемент оставило бы
+// ветку переноса позы через такой порт без покрытия незаметно.
+func TestПерегонИзДвухРёберИмеетОбычныйСтык(t *testing.T) {
+	m := Corridor()
+	концов := 0
+	for _, e := range m.Topology.Edges {
+		if e.From == CorridorJoint || e.To == CorridorJoint {
+			концов++
+		}
+	}
+	if концов != 2 {
+		t.Fatalf("в стыке %s сходится %d концов, ожидалось 2", CorridorJoint, концов)
 	}
 }

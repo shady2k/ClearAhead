@@ -6,110 +6,102 @@ import (
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// twoEdges — N1 --E1-- N2 --E2-- N3, прямая 100 + прямая 50.
-// N2.P1 — стык: им пользуются оба ребра, и именно там проверяется замыкание.
-const twoEdges = `{
-  "format_version": 4, "map_id": "T", "map_revision": 1,
-  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1" } ] },
-      { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N2.P1", "to": "N3.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
-    "E2": { "horizontal": [ { "kind": "straight", "length": 50.0 } ] }
-  } }
-}`
-
-func loadMap(t *testing.T, doc string) *mapfmt.Map {
+// годная — карта, которая обязана остаться валидной после правки.
+//
+// Прежний loadMap разбирал JSON и валидировал каждую фикстуру; разбора больше
+// нет, а валидация нужна по-прежнему: правка, случайно сделавшая карту
+// негодной, обесценила бы тест, который её берёт, и падал бы он не там и не про
+// то. Карты фабрики без правок проверяет сама фабрика.
+func годная(t *testing.T, m *mapfmt.Map) *mapfmt.Map {
 	t.Helper()
-	m, err := mapfmt.Decode(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
 	if err := mapfmt.Validate(m); err != nil {
-		t.Fatalf("валидация: %v", err)
+		t.Fatalf("фикстура невалидна: %v", err)
 	}
 	return m
 }
 
+// TestPropagateChain — поза переносится вдоль элемента, а высота остаётся
+// якорной: профиля у перегона нет, значит z обязан дойти до дальнего конца
+// неизменным. Heading на дальнем конце смотрит ВНУТРЬ элемента, то есть назад.
 func TestPropagateChain(t *testing.T) {
-	poses, els, err := Propagate(loadMap(t, twoEdges))
+	m := seedmap.Line()
+	edge := m.Topology.Edges[0]
+	anchor := m.Anchors[edge.From]
+
+	poses, els, err := Propagate(m)
 	if err != nil {
 		t.Fatalf("распространение: %v", err)
 	}
-	// Конец E1 в порту N2.P1: 100 м по X. Heading смотрит внутрь E1, то есть назад.
-	p := poses[Incidence{Port: "N2.P1", Element: "E1"}]
-	if math.Abs(p.Plan.X-100) > 1e-6 || math.Abs(p.Plan.Y) > 1e-6 {
-		t.Fatalf("N2.P1 в (%v, %v), ожидалось (100, 0)", p.Plan.X, p.Plan.Y)
+	p := poses[Incidence{Port: edge.To, Element: seedmap.LineEdgeID}]
+	if math.Abs(p.Plan.X-seedmap.LineLengthM) > 1e-6 || math.Abs(p.Plan.Y) > 1e-6 {
+		t.Fatalf("%s в (%v, %v), ожидалось (%v, 0)", edge.To, p.Plan.X, p.Plan.Y, seedmap.LineLengthM)
 	}
 	if math.Abs(math.Abs(p.Plan.Heading)-math.Pi) > 1e-9 {
-		t.Fatalf("heading N2.P1 = %v, ожидалось ±π", p.Plan.Heading)
+		t.Fatalf("heading %s = %v, ожидалось ±π", edge.To, p.Plan.Heading)
 	}
-	if math.Abs(p.Z-10) > 1e-9 {
-		t.Fatalf("z N2.P1 = %v, ожидалось 10 (профиля нет)", p.Z)
+	if math.Abs(p.Z-anchor.Z) > 1e-9 {
+		t.Fatalf("z %s = %v, ожидалось %v (профиля нет)", edge.To, p.Z, anchor.Z)
 	}
-	if len(els) != 2 {
-		t.Fatalf("элементов %d, ожидалось 2", len(els))
+	if len(els) != 1 {
+		t.Fatalf("элементов %d, ожидался 1", len(els))
 	}
 }
 
-func TestPropagateRejectsUnanchored(t *testing.T) {
-	doc := strings.Replace(twoEdges, `"anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } }`,
-		`"anchors": {}`, 1)
-	m, err := mapfmt.Decode(strings.NewReader(doc))
+// TestPropagateChainThroughJunction — на порту, где сходятся несколько концов,
+// поза переносится через порт, а не только вдоль элемента: подход станции
+// кончается в общем порту стрелки, и оттуда её получают оба прохода.
+func TestPropagateChainThroughJunction(t *testing.T) {
+	poses, els, err := Propagate(seedmap.Station())
 	if err != nil {
-		t.Fatalf("разбор: %v", err)
+		t.Fatalf("распространение: %v", err)
 	}
-	if err := mapfmt.Validate(m); err == nil {
-		if _, _, err := Propagate(m); err == nil {
-			t.Fatal("ожидался отказ: компонента без якоря")
-		}
+	// Подход — прямая 120 м от якоря в нуле, поэтому общий порт SW1 стоит в
+	// (120, 0), а конец подхода смотрит назад.
+	p := poses[Incidence{Port: seedmap.StationSW1 + ".C", Element: seedmap.StationApproach}]
+	if math.Abs(p.Plan.X-120) > 1e-6 || math.Abs(p.Plan.Y) > 1e-6 {
+		t.Fatalf("общий порт SW1 в (%v, %v), ожидалось (120, 0)", p.Plan.X, p.Plan.Y)
+	}
+	// Проход, начинающийся в том же порту, стоит там же и смотрит вперёд.
+	s := poses[Incidence{Port: seedmap.StationSW1 + ".C", Element: seedmap.StationSW1 + mapfmt.PassageStraight}]
+	if math.Hypot(s.Plan.X-p.Plan.X, s.Plan.Y-p.Plan.Y) > 1e-9 {
+		t.Fatalf("проход и ребро разошлись в одном порту: (%v, %v) против (%v, %v)",
+			s.Plan.X, s.Plan.Y, p.Plan.X, p.Plan.Y)
+	}
+	// Пять рёбер плюс по два прохода на каждую из двух стрелок.
+	if len(els) != 9 {
+		t.Fatalf("элементов %d, ожидалось 9", len(els))
+	}
+}
+
+// TestPropagateRejectsUnanchored — компонента без якоря не имеет абсолютного
+// положения, и вывести его неоткуда: это отказ, а не «позы по умолчанию».
+func TestPropagateRejectsUnanchored(t *testing.T) {
+	m := seedmap.Line(seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Anchors = map[string]mapfmt.Anchor{}
+	}))
+	if _, _, err := Propagate(m); err == nil {
+		t.Fatal("ожидался отказ: компонента без якоря")
 	}
 }
 
 // ringWith строит кольцо из четырёх дуг на π/2: замкнутую окружность радиуса
-// 50 м, у которой у последней дуги радиус подменён на lastRadius.
+// 300 м, у которой у последней дуги радиус подменён на lastRadius.
+//
+// Фабрика такого не даёт и дать не может по существу: ни перегон, ни станция
+// цикла не содержат, а без цикла невязке замыкания взяться неоткуда — каждая
+// поза выводится ровно один раз. Поэтому карта здесь собирается на месте.
 //
 // Углы не трогаются, поэтому направление сходится точно при любом радиусе, а
 // расходится только положение — так зонд бьёт ровно в допуск по положению и
 // ничего не смешивает. Ошибка замыкания при подмене ΔR равна ΔR·√2.
-func ringWith(lastRadius string) string {
-	return `{
-	  "format_version": 4, "map_id": "C", "map_revision": 1,
-	  "anchors": { "N1.P1": { "element": "E1", "x": 0, "y": 0, "z": 0, "heading": 0 } },
-	  "topology": {
-	    "nodes": [
-	      { "id": "N1", "ports": [ { "id": "P1" } ] },
-	      { "id": "N2", "ports": [ { "id": "P1" } ] },
-	      { "id": "N3", "ports": [ { "id": "P1" } ] },
-	      { "id": "N4", "ports": [ { "id": "P1" } ] }
-	    ],
-	    "turnouts": [], "trackside": [],
-	    "edges": [
-	      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-	      { "id": "E2", "from": "N2.P1", "to": "N3.P1" },
-	      { "id": "E3", "from": "N3.P1", "to": "N4.P1" },
-	      { "id": "E4", "from": "N4.P1", "to": "N1.P1" }
-	    ]
-	  },
-	  "geometry": { "turnouts": {}, "edges": {
-	    "E1": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
-	    "E2": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
-	    "E3": { "horizontal": [ { "kind": "arc", "radius": 300.0, "angle": 1.5707963267948966 } ] },
-	    "E4": { "horizontal": [ { "kind": "arc", "radius": ` + lastRadius + `, "angle": 1.5707963267948966 } ] }
-	  } }
-	}`
+// ringWith — кольцо из фабрики. Цикл живёт там, а не здесь: он нужен и другим
+// пакетам, а фикстура, размноженная по тестам, расходится.
+func ringWith(t *testing.T, lastRadius float64) *mapfmt.Map {
+	t.Helper()
+	return годная(t, seedmap.Ring(lastRadius))
 }
 
 // TestPropagateClosingCycle — положительный случай: кольцо, которое сходится.
@@ -117,7 +109,7 @@ func ringWith(lastRadius string) string {
 // Без него тест на невязку бесполезен: проверка, которая отвергает всё подряд,
 // тоже «ловит расхождение».
 func TestPropagateClosingCycle(t *testing.T) {
-	if _, _, err := Propagate(loadMap(t, ringWith("300.0"))); err != nil {
+	if _, _, err := Propagate(ringWith(t, 300.0)); err != nil {
 		t.Fatalf("замкнутое кольцо должно приниматься, получен отказ: %v", err)
 	}
 }
@@ -128,7 +120,7 @@ func TestPropagateClosingCycle(t *testing.T) {
 // него допуск мог бы быть нулевым, и проверка отвергала бы любую честную карту.
 // ΔR = 0,5 мм даёт невязку 0,5·√2 ≈ 0,71 мм — под допуском 1 мм.
 func TestPropagateClosureWithinTolerance(t *testing.T) {
-	if _, _, err := Propagate(loadMap(t, ringWith("300.0005"))); err != nil {
+	if _, _, err := Propagate(ringWith(t, 300.0005)); err != nil {
 		t.Fatalf("невязка 0,71 мм под допуском 1 мм должна приниматься, получен отказ: %v", err)
 	}
 }
@@ -142,7 +134,7 @@ func TestPropagateClosureWithinTolerance(t *testing.T) {
 //
 // ΔR = 5 мм даёт невязку 5·√2 ≈ 7,07 мм — семь допусков, а не триста тысяч.
 func TestPropagateClosureMismatch(t *testing.T) {
-	_, _, err := Propagate(loadMap(t, ringWith("300.005")))
+	_, _, err := Propagate(ringWith(t, 300.005))
 	if err == nil {
 		t.Fatal("ожидался отказ по невязке замыкания")
 	}
@@ -153,5 +145,34 @@ func TestPropagateClosureMismatch(t *testing.T) {
 	// снова бьёт мимо границы, а мы этого не заметим.
 	if !strings.Contains(err.Error(), "7.0") {
 		t.Fatalf("в сообщении ожидалась невязка около 7 мм, получено: %v", err)
+	}
+}
+
+// СТЫК ДВУХ ОБЫЧНЫХ РЁБЕР. Перенос позы через порт, в котором сходятся два
+// ребра, — отдельная ветка: на станции все сходящиеся порты принадлежат
+// стрелкам, а перегон из одного ребра стыка не имеет вовсе. Без этого теста
+// ветка остаётся непокрытой, и заметить это по зелёному прогону невозможно.
+func TestPropagateThroughPlainJoint(t *testing.T) {
+	m := годная(t, seedmap.Corridor())
+	poses, els, err := Propagate(m)
+	if err != nil {
+		t.Fatalf("распространение: %v", err)
+	}
+	if len(els) != 2 {
+		t.Fatalf("элементов %d, ожидалось 2", len(els))
+	}
+	// Поза конца первого ребра и поза начала второго — это один и тот же порт,
+	// пройденный с разных сторон: положения обязаны совпасть.
+	конецПервого, ok1 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorFirst}]
+	началоВторого, ok2 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorSecond}]
+	if !ok1 || !ok2 {
+		t.Fatalf("позы стыка не выведены: %v %v", ok1, ok2)
+	}
+	if конецПервого.Plan.X != началоВторого.Plan.X || конецПервого.Plan.Y != началоВторого.Plan.Y {
+		t.Fatalf("стык разошёлся: (%v, %v) против (%v, %v)",
+			конецПервого.Plan.X, конецПервого.Plan.Y, началоВторого.Plan.X, началоВторого.Plan.Y)
+	}
+	if конецПервого.Z != началоВторого.Z {
+		t.Fatalf("отметки стыка разошлись: %v против %v", конецПервого.Z, началоВторого.Z)
 	}
 }

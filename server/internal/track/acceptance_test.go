@@ -1,28 +1,17 @@
 package track
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// TestStationCompiles грузит карту-фикстуру из testdata пакета mapfmt. Строка в
-// коде проверила бы компилятор, но не карту — а ошибка автора карты и есть то,
-// ради чего написан валидатор. Фикстура маленькая: одна стрелка, три ребра.
+// TestStationCompiles — станция фабрики проходит весь путь: валидация,
+// компиляция, замыкание. Проверка сквозная и потому здесь, а не в тестах
+// отдельных модулей: отказ на любом шаге обесценивает всё остальное.
 func TestStationCompiles(t *testing.T) {
-	path := filepath.Join("..", "mapfmt", "testdata", "fixture_station.json")
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-
-	m, err := mapfmt.Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
+	m := seedmap.Station()
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("валидация: %v", err)
 	}
@@ -31,10 +20,10 @@ func TestStationCompiles(t *testing.T) {
 		t.Fatalf("компиляция (замыкание не сошлось?): %v", err)
 	}
 	// Две — это горловина: SW1 и SW2 образуют съезд. Одной стрелки мало, на
-	// такой фикстуре не воспроизводится наложение шпальных решёток соседних
+	// такой карте не воспроизводится наложение шпальных решёток соседних
 	// элементов, а оно живое и его придётся ловить.
 	if len(m.Topology.Turnouts) != 2 {
-		t.Fatalf("стрелок %d, в фикстуре горловина из двух", len(m.Topology.Turnouts))
+		t.Fatalf("стрелок %d, у горловины две", len(m.Topology.Turnouts))
 	}
 	if len(ct.Elements) != len(rg.Elements) {
 		t.Fatalf("элементов в CompiledTrack %d, в RenderGeometry %d", len(ct.Elements), len(rg.Elements))

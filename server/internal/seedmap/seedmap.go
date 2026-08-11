@@ -25,6 +25,8 @@
 package seedmap
 
 import (
+	"math"
+
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 )
@@ -243,4 +245,101 @@ func run(id string, spans ...netloc.IntervalU) mapfmt.ConstructionRun {
 // укладывается по ходу, и спан без него недоописан.
 func span(element string, fromM, toM float64) netloc.IntervalU {
 	return netloc.IntervalU{Element: element, From: fromM, To: toM, Direction: netloc.DirForward}
+}
+
+// RingRadiusM — радиус дуг кольца, порождаемого Ring.
+const RingRadiusM = 300.0
+
+// Ring — замкнутое кольцо из четырёх четвертей окружности.
+//
+// Единственная фикстура с ЦИКЛОМ. Ни перегон, ни станция цикла не содержат, а
+// без цикла невязке замыкания взяться неоткуда: проверка сходимости на них
+// холостая. lastRadius задаёт радиус последней четверти — отклонение от
+// RingRadiusM даёт управляемую невязку, и это единственный способ проверить
+// допуск с обеих сторон границы.
+//
+// Порт N1.P1 обслуживает два конца, поэтому якорь обязан назвать элемент,
+// внутрь которого смотрит heading.
+func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
+	arc := func(radius float64) mapfmt.Alignments {
+		return mapfmt.Alignments{Horizontal: []mapfmt.HPrim{
+			{Kind: "arc", Radius: radius, Angle: math.Pi / 2},
+		}}
+	}
+	m := &mapfmt.Map{
+		FormatVersion: mapfmt.FormatVersion,
+		MapID:         "RING",
+		MapRevision:   1,
+		Anchors:       map[string]mapfmt.Anchor{"N1.P1": {Element: "E1"}},
+		Topology: mapfmt.Topology{
+			Nodes: []mapfmt.Node{
+				{ID: "N1", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: "N2", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: "N3", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: "N4", Ports: []mapfmt.Port{{ID: "P1"}}},
+			},
+			Turnouts:  []mapfmt.Turnout{},
+			Trackside: []mapfmt.Trackside{},
+			Edges: []mapfmt.Edge{
+				{ID: "E1", From: "N1.P1", To: "N2.P1"},
+				{ID: "E2", From: "N2.P1", To: "N3.P1"},
+				{ID: "E3", From: "N3.P1", To: "N4.P1"},
+				{ID: "E4", From: "N4.P1", To: "N1.P1"},
+			},
+		},
+		Geometry: mapfmt.Geometry{
+			Turnouts: map[string]mapfmt.TurnoutGeometry{},
+			Edges: map[string]mapfmt.Alignments{
+				"E1": arc(RingRadiusM), "E2": arc(RingRadiusM),
+				"E3": arc(RingRadiusM), "E4": arc(lastRadius),
+			},
+		},
+	}
+	return apply(m, opts)
+}
+
+// Идентификаторы перегона из двух рёбер.
+const (
+	CorridorFirst  = "E1"
+	CorridorSecond = "E2"
+	// CorridorJoint — обычный порт, где сходятся два ребра.
+	CorridorJoint = "N_MID.P1"
+)
+
+// Corridor — перегон из ДВУХ рёбер, сходящихся на обычном порту.
+//
+// Нужен не для разнообразия: стык двух обычных рёбер — отдельная ветка
+// переноса позы через порт, и ни перегон из одного ребра, ни станция её не
+// задевают (на станции все сходящиеся порты принадлежат стрелкам). Без этой
+// фикстуры ветка остаётся непокрытой, а её отсутствие в тестах незаметно.
+func Corridor(opts ...Option) *mapfmt.Map {
+	const halfM = 100.0
+	m := &mapfmt.Map{
+		FormatVersion: mapfmt.FormatVersion,
+		MapID:         "CORRIDOR",
+		MapRevision:   1,
+		Anchors:       map[string]mapfmt.Anchor{"NA.P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
+		Topology: mapfmt.Topology{
+			Nodes: []mapfmt.Node{
+				{ID: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: "N_MID", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+			},
+			Edges: []mapfmt.Edge{
+				{ID: CorridorFirst, From: "NA.P1", To: CorridorJoint},
+				{ID: CorridorSecond, From: CorridorJoint, To: "NB.P1"},
+			},
+		},
+		Geometry: mapfmt.Geometry{
+			Turnouts: map[string]mapfmt.TurnoutGeometry{},
+			Edges: map[string]mapfmt.Alignments{
+				CorridorFirst:  {Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: halfM}}},
+				CorridorSecond: {Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: halfM}}},
+			},
+		},
+		Construction: construction([]mapfmt.ConstructionRun{
+			run("RUN_CORRIDOR", span(CorridorFirst, 0, halfM), span(CorridorSecond, 0, halfM)),
+		}),
+	}
+	return apply(m, opts)
 }

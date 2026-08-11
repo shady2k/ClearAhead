@@ -3,16 +3,17 @@ package track
 import (
 	"crypto/sha256"
 	"encoding/hex"
-
-	"github.com/shady2k/ClearAhead/server/internal/geom"
-	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"strings"
 	"testing"
+
+	"github.com/shady2k/ClearAhead/server/internal/geom"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-func manifestOf(t *testing.T, doc string) Manifest {
+func manifestOf(t *testing.T, m *mapfmt.Map) Manifest {
 	t.Helper()
-	m := loadMap(t, doc)
 	ct, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
@@ -24,47 +25,98 @@ func manifestOf(t *testing.T, doc string) Manifest {
 	return man
 }
 
+// twoEdgesJSON — карта, записанная текстом. Нужна ровно одному тесту ниже, и
+// только потому, что он про РАЗБОР: остальные берут карту у фабрики.
+const twoEdgesJSON = `{
+  "format_version": 4, "map_id": "T", "map_revision": 1,
+  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } },
+  "topology": {
+    "nodes": [
+      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "N2", "ports": [ { "id": "P1" } ] },
+      { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+    ],
+    "turnouts": [], "trackside": [],
+    "edges": [
+      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
+      { "id": "E2", "from": "N2.P1", "to": "N3.P1" }
+    ]
+  },
+  "geometry": { "turnouts": {}, "edges": {
+    "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
+    "E2": { "horizontal": [ { "kind": "straight", "length": 50.0 } ] }
+  } }
+}`
+
+// TestManifestStableUnderReformatting — хеш берётся из СОДЕРЖАНИЯ карты, а не
+// из байт её записи.
+//
+// Утверждение имеет смысл только там, где карта приходит текстом: проверяются
+// две разные записи одного документа. Фабрикой оно невыразимо и вместе с
+// разбором JSON лишается предмета.
 func TestManifestStableUnderReformatting(t *testing.T) {
-	reformatted := strings.ReplaceAll(twoEdges, "\n", " ")
+	decode := func(doc string) *mapfmt.Map {
+		t.Helper()
+		m, err := mapfmt.Decode(strings.NewReader(doc))
+		if err != nil {
+			t.Fatalf("разбор: %v", err)
+		}
+		if err := mapfmt.Validate(m); err != nil {
+			t.Fatalf("валидация: %v", err)
+		}
+		return m
+	}
+	reformatted := strings.ReplaceAll(twoEdgesJSON, "\n", " ")
 	reformatted = strings.ReplaceAll(reformatted, "  ", " ")
-	if manifestOf(t, twoEdges).TrackHash != manifestOf(t, reformatted).TrackHash {
+	if manifestOf(t, decode(twoEdgesJSON)).TrackHash != manifestOf(t, decode(reformatted)).TrackHash {
 		t.Fatal("хеш зависит от форматирования исходного JSON")
 	}
 }
 
+// TestManifestChangesOnGeometry — миллиметр в геометрии меняет хеш.
+//
+// Решётка снята с обеих карт: её run покрывает ребро от края до края, и правка
+// длины ребра потребовала бы править ещё и спан run'а. Тогда изменилось бы два
+// поля, и тест перестал бы говорить именно про геометрию.
 func TestManifestChangesOnGeometry(t *testing.T) {
-	changed := strings.Replace(twoEdges, `"length": 100.0`, `"length": 100.001`, 1)
-	if manifestOf(t, twoEdges).TrackHash == manifestOf(t, changed).TrackHash {
-		t.Fatal("правка геометрии не изменила хеш")
+	base := seedmap.Line(seedmap.WithoutConstruction())
+	changed := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
+		a := m.Geometry.Edges[seedmap.LineEdgeID]
+		a.Horizontal[0].Length = seedmap.LineLengthM + 0.001
+		m.Geometry.Edges[seedmap.LineEdgeID] = a
+	}))
+	if manifestOf(t, годная(t, base)).TrackHash == manifestOf(t, годная(t, changed)).TrackHash {
+		t.Fatal("правка геометрии на миллиметр не изменила хеш")
 	}
 }
 
-// withGeoref вставляет валидный блок геопривязки в документ: хеш должен
-// зависеть от привязки (она меняет смысл координат), но не от provenance —
-// правка комментария автора не должна сбрасывать кэш клиента.
-const georef = `"georeference": { "datum": "WGS84",
-  "origin": { "lat": 55.75, "lon": 37.62, "h": 150.0 },
-  "origin_height_kind": "ellipsoidal", "x_axis_azimuth_deg": 0.0,
-  "ground_to_grid": 1.0002 }`
-
-func withGeoref(doc string, prov bool) string {
-	out := strings.Replace(doc, `"map_revision": 1,`,
-		`"map_revision": 1,`+"\n  "+georef+",", 1)
-	if !prov {
-		return out
-	}
-	return strings.Replace(out, `"ground_to_grid": 1.0002 }`,
-		`"ground_to_grid": 1.0002, "provenance": { "author": "тест", "note": "правка" } }`, 1)
+// withGeoref добавляет карте валидную геопривязку: хеш должен зависеть от
+// привязки (она меняет смысл координат), но не от provenance — правка
+// комментария автора не должна сбрасывать кэш клиента.
+func withGeoref(prov bool) seedmap.Option {
+	return seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Georeference = &mapfmt.Georeference{
+			Datum:            "WGS84",
+			Origin:           mapfmt.Origin{Lat: 55.75, Lon: 37.62, H: 150.0},
+			OriginHeightKind: "ellipsoidal",
+			XAxisAzimuthDeg:  0,
+			GroundToGrid:     1.0002,
+		}
+		if prov {
+			m.Georeference.Provenance = map[string]string{"author": "тест", "note": "правка"}
+		}
+	})
 }
 
 func TestManifestIgnoresProvenance(t *testing.T) {
-	if manifestOf(t, withGeoref(twoEdges, false)).TrackHash != manifestOf(t, withGeoref(twoEdges, true)).TrackHash {
+	if manifestOf(t, годная(t, seedmap.Line(withGeoref(false)))).TrackHash !=
+		manifestOf(t, годная(t, seedmap.Line(withGeoref(true)))).TrackHash {
 		t.Fatal("правка provenance изменила хеш")
 	}
 }
 
 func TestManifestChangesOnGeoreference(t *testing.T) {
-	if manifestOf(t, twoEdges).TrackHash == manifestOf(t, withGeoref(twoEdges, false)).TrackHash {
+	if manifestOf(t, seedmap.Line()).TrackHash == manifestOf(t, годная(t, seedmap.Line(withGeoref(false)))).TrackHash {
 		t.Fatal("правка геопривязки не изменила хеш")
 	}
 }
@@ -191,7 +243,7 @@ func renderHashOf(t *testing.T, rg *RenderGeometry) string {
 // TestManifestHashIsBodyHash — BuildManifest обязан брать хеш тех же байт.
 // Без этой связки хеш и ответ снова разъедутся, просто чуть позже.
 func TestManifestHashIsBodyHash(t *testing.T) {
-	m := loadMap(t, twoEdges)
+	m := seedmap.Line()
 	ct, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)

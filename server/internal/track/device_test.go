@@ -3,6 +3,8 @@ package track
 import (
 	"strings"
 	"testing"
+
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
 // Обобщение обязано быть настоящим, а не переименованием полей: скомпилированное
@@ -59,11 +61,7 @@ func TestСкомпилированноеУстройствоНеТрёхпор�
 // Стрелка из карты компилируется в устройство с тремя портами и двумя
 // переходами, оба из общего порта.
 func TestСтрелкаКомпилируетсяВУстройство(t *testing.T) {
-	m, err := loadMapFile(t)
-	if err != nil {
-		t.Fatalf("разбор карты-фикстуры: %v", err)
-	}
-	ct, _, err := Compile(m)
+	ct, _, err := Compile(seedmap.Station())
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
