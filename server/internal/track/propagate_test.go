@@ -9,13 +9,13 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// годная — карта, которая обязана остаться валидной после правки.
+// valid — карта, которая обязана остаться валидной после правки.
 //
 // Прежний loadMap разбирал JSON и валидировал каждую фикстуру; разбора больше
 // нет, а валидация нужна по-прежнему: правка, случайно сделавшая карту
 // негодной, обесценила бы тест, который её берёт, и падал бы он не там и не про
 // то. Карты фабрики без правок проверяет сама фабрика.
-func годная(t *testing.T, m *mapfmt.Map) *mapfmt.Map {
+func valid(t *testing.T, m *mapfmt.Map) *mapfmt.Map {
 	t.Helper()
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("фикстура невалидна: %v", err)
@@ -101,7 +101,7 @@ func TestPropagateRejectsUnanchored(t *testing.T) {
 // пакетам, а фикстура, размноженная по тестам, расходится.
 func ringWith(t *testing.T, lastRadius float64) *mapfmt.Map {
 	t.Helper()
-	return годная(t, seedmap.Ring(lastRadius))
+	return valid(t, seedmap.Ring(lastRadius))
 }
 
 // TestPropagateClosingCycle — положительный случай: кольцо, которое сходится.
@@ -153,7 +153,7 @@ func TestPropagateClosureMismatch(t *testing.T) {
 // стрелкам, а перегон из одного ребра стыка не имеет вовсе. Без этого теста
 // ветка остаётся непокрытой, и заметить это по зелёному прогону невозможно.
 func TestPropagateThroughPlainJoint(t *testing.T) {
-	m := годная(t, seedmap.Corridor())
+	m := valid(t, seedmap.Corridor())
 	poses, els, err := Propagate(m)
 	if err != nil {
 		t.Fatalf("распространение: %v", err)
@@ -163,16 +163,16 @@ func TestPropagateThroughPlainJoint(t *testing.T) {
 	}
 	// Поза конца первого ребра и поза начала второго — это один и тот же порт,
 	// пройденный с разных сторон: положения обязаны совпасть.
-	конецПервого, ok1 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorFirst}]
-	началоВторого, ok2 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorSecond}]
+	firstEnd, ok1 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorFirst}]
+	secondStart, ok2 := poses[Incidence{Port: seedmap.CorridorJoint, Element: seedmap.CorridorSecond}]
 	if !ok1 || !ok2 {
 		t.Fatalf("позы стыка не выведены: %v %v", ok1, ok2)
 	}
-	if конецПервого.Plan.X != началоВторого.Plan.X || конецПервого.Plan.Y != началоВторого.Plan.Y {
+	if firstEnd.Plan.X != secondStart.Plan.X || firstEnd.Plan.Y != secondStart.Plan.Y {
 		t.Fatalf("стык разошёлся: (%v, %v) против (%v, %v)",
-			конецПервого.Plan.X, конецПервого.Plan.Y, началоВторого.Plan.X, началоВторого.Plan.Y)
+			firstEnd.Plan.X, firstEnd.Plan.Y, secondStart.Plan.X, secondStart.Plan.Y)
 	}
-	if конецПервого.Z != началоВторого.Z {
-		t.Fatalf("отметки стыка разошлись: %v против %v", конецПервого.Z, началоВторого.Z)
+	if firstEnd.Z != secondStart.Z {
+		t.Fatalf("отметки стыка разошлись: %v против %v", firstEnd.Z, secondStart.Z)
 	}
 }

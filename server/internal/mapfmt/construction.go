@@ -272,16 +272,16 @@ func (m *Map) checkPlatformSizes(prefix string) error {
 	bad := func(id, what string, v, min, max float64) error {
 		return fmt.Errorf("%sплатформа %q: %s %g вне [%g, %g]", prefix, id, what, v, min, max)
 	}
-	for i := range m.Topology.Trackside {
-		ts := &m.Topology.Trackside[i]
-		if ts.Kind != "platform" {
+	for i := range m.Topology.Structures {
+		st := &m.Topology.Structures[i]
+		if st.Kind != "platform" {
 			continue
 		}
-		if !(ts.Offset >= MinPlatformOffset && ts.Offset <= MaxPlatformOffset) {
-			return bad(ts.ID, "offset", ts.Offset, MinPlatformOffset, MaxPlatformOffset)
+		if !(st.Offset >= MinPlatformOffset && st.Offset <= MaxPlatformOffset) {
+			return bad(st.ID, "offset", st.Offset, MinPlatformOffset, MaxPlatformOffset)
 		}
-		if !(ts.Width >= MinPlatformWidth && ts.Width <= MaxPlatformWidth) {
-			return bad(ts.ID, "width", ts.Width, MinPlatformWidth, MaxPlatformWidth)
+		if !(st.Width >= MinPlatformWidth && st.Width <= MaxPlatformWidth) {
+			return bad(st.ID, "width", st.Width, MinPlatformWidth, MaxPlatformWidth)
 		}
 	}
 	return nil

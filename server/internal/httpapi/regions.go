@@ -77,7 +77,7 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 //     когда мир пересобран целиком, и клиенту это повод выбросить кэш;
 //   - revision — иначе НЕЧЕГО подставить в
 //     /regions/{region}/revisions/{n}/network;
-//   - track_hash, network_hash — проверка кэша до запроса тела;
+//   - network_model_hash, network_hash — проверка кэша до запроса тела;
 //   - chunks — числа правила подробности, см. ниже;
 //   - frame — геопривязка региона, если она у него есть.
 //
@@ -87,16 +87,21 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // региона целиком (27 КБ) и выводит покрытие из неё сам — тем же правилом,
 // числа которого лежат в поле chunks.
 //
-// Имена хешей (track_hash, network_hash) взяты у track.Manifest как есть: они
-// называют ТЕ ЖЕ хеши, и вторая пара имён рядом с первой означала бы, что
-// где-то придётся заводить таблицу соответствия.
+// Имена хешей (network_model_hash, network_hash) взяты у track.Manifest как
+// есть: они называют ТЕ ЖЕ хеши, и вторая пара имён рядом с первой означала бы,
+// что где-то придётся заводить таблицу соответствия.
+//
+// Хешей два и они не дублируют друг друга: network_model_hash считается от
+// нормализованной модели сети, network_hash — от байтов тела /network. Клиенту
+// нужны оба: по второму он решает, идти ли за телом, по первому — изменилась ли
+// сама сеть, а не только её отрисовка.
 type regionManifest struct {
 	Region   string `json:"region"`
 	Epoch    int64  `json:"epoch"`
 	Revision int    `json:"revision"`
 
-	TrackHash   string `json:"track_hash"`
-	NetworkHash string `json:"network_hash"`
+	NetworkModelHash string `json:"network_model_hash"`
+	NetworkHash      string `json:"network_hash"`
 
 	Chunks chunkRule `json:"chunks"`
 
@@ -187,11 +192,11 @@ func (a *regionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	man := regionManifest{
-		Region:      reg.ID,
-		Epoch:       reg.Epoch,
-		Revision:    st.Manifest.Revision,
-		TrackHash:   st.Manifest.TrackHash,
-		NetworkHash: st.Manifest.NetworkHash,
+		Region:           reg.ID,
+		Epoch:            reg.Epoch,
+		Revision:         st.Manifest.Revision,
+		NetworkModelHash: st.Manifest.NetworkModelHash,
+		NetworkHash:      st.Manifest.NetworkHash,
 		Chunks: chunkRule{
 			SideM:         chunk.SideM0,
 			StepM:         chunk.StepM0,

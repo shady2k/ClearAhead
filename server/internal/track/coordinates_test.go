@@ -25,7 +25,7 @@ import (
 //
 // Присвоить LinearS в поле типа LinearU нельзя — это ловит система типов.
 // Здесь ловится другое: неверно ОБЪЯВЛЕННОЕ поле.
-func TestПроводНеСодержитКоординатуS(t *testing.T) {
+func TestWireCarriesNoSCoordinate(t *testing.T) {
 	sType := reflect.TypeOf(units.Distance(0))
 
 	var seen = map[reflect.Type]bool{}
@@ -70,7 +70,7 @@ func TestПроводНеСодержитКоординатуS(t *testing.T) {
 // узкая и намеренно такая: она стережёт длины и протяжённости, а не всё подряд.
 // Профиль (уклон, кривизна) остаётся безразмерным float по построению, и
 // требовать от него целых значило бы сломать вычисление.
-func TestДлиныСкомпилированногоПутиЦелые(t *testing.T) {
+func TestCompiledTrackLengthsAreIntegers(t *testing.T) {
 	el := reflect.TypeOf(CompiledElement{})
 	for _, name := range []string{"LengthU", "LengthS"} {
 		f, ok := el.FieldByName(name)
@@ -82,9 +82,9 @@ func TestДлиныСкомпилированногоПутиЦелые(t *testi
 		}
 	}
 
-	f, ok := reflect.TypeOf(CompiledTrack{}).FieldByName("Trackside")
+	f, ok := reflect.TypeOf(CompiledNetwork{}).FieldByName("Structures")
 	if !ok {
-		t.Fatal("CompiledTrack.Trackside исчез")
+		t.Fatal("CompiledNetwork.Structures исчез")
 	}
 	// map[string]netloc.LinearS -> []netloc.Interval[units.Distance] -> поле From
 	from, ok := f.Type.Elem().Elem().FieldByName("From")

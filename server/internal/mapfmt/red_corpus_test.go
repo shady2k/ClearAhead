@@ -20,20 +20,20 @@ import (
 // Тексты отказов записаны целиком, с числами: «радиус мал» доказывает, что
 // правило сработало, но не то, что автору карты сказали, какой радиус и куда
 // мал. Число в ожидании ловит и подмену профиля, и сдвиг формата отказа.
-func TestКрасныйКорпус(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		карта   *mapfmt.Map
-		причина string
+func TestRedCorpus(t *testing.T) {
+	cases := []struct {
+		name   string
+		m      *mapfmt.Map
+		reason string
 	}{
 		{
 			// Оси пересекаются в (50,0), топология пару не связывает.
 			"пересечение осей без устройства",
-			двеКомпоненты(
+			twoComponents(
 				mapfmt.Anchor{},
-				[]mapfmt.HPrim{прямая(300)},
+				[]mapfmt.HPrim{straight(300)},
 				mapfmt.Anchor{X: 50, Y: -50, Heading: math.Pi / 2},
-				[]mapfmt.HPrim{прямая(100)}),
+				[]mapfmt.HPrim{straight(100)}),
 			"оси пересекаются",
 		},
 		{
@@ -58,8 +58,8 @@ func TestКрасныйКорпус(t *testing.T) {
 		},
 		{
 			"уклон выше предела профиля",
-			seedmap.Line(геометрияПерегона(
-				[]mapfmt.HPrim{прямая(seedmap.LineLengthM)},
+			seedmap.Line(lineGeometry(
+				[]mapfmt.HPrim{straight(seedmap.LineLengthM)},
 				[]mapfmt.VPrim{{Kind: "grade", Length: seedmap.LineLengthM, SlopePermille: 50}})),
 			"уклон 50‰ превышает предел 30‰",
 		},
@@ -68,12 +68,12 @@ func TestКрасныйКорпус(t *testing.T) {
 			// которое дуга иной длины сломала бы заодно.
 			"радиус ниже минимума профиля",
 			seedmap.Line(seedmap.WithoutConstruction(),
-				геометрияПерегона([]mapfmt.HPrim{дуга(100, 0.2)}, nil)),
+				lineGeometry([]mapfmt.HPrim{arc(100, 0.2)}, nil)),
 			"радиус 100.0 м меньше минимального 180.0 м",
 		},
 		{
-			"путевой объект на несуществующем элементе",
-			seedmap.Line(seedmap.WithTrackside(mapfmt.Trackside{
+			"сооружение на несуществующем элементе",
+			seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
 				ID:   "TS1",
 				Kind: "platform",
 				Span: netloc.LinearU{{Element: "E9", From: 0, To: 10}},
@@ -81,7 +81,7 @@ func TestКрасныйКорпус(t *testing.T) {
 			"несуществующий элемент",
 		},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) { отвергает(t, c.карта, c.причина) })
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { rejects(t, c.m, c.reason) })
 	}
 }

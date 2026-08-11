@@ -8,37 +8,37 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// TestВалидаторОтвергает — правила формы, каждое доказано своей порчей карты
+// TestValidatorRejects — правила формы, каждое доказано своей порчей карты
 // фабрики. Карта до порчи валидна (это доказано тестом фабрики), поэтому отказ
 // приходит ровно от внесённого дефекта.
-func TestВалидаторОтвергает(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		карта   *mapfmt.Map
-		причина string
+func TestValidatorRejects(t *testing.T) {
+	cases := []struct {
+		name   string
+		m      *mapfmt.Map
+		reason string
 	}{
 		{
 			"домены выравниваний не совпадают",
-			seedmap.Line(геометрияПерегона(
-				[]mapfmt.HPrim{прямая(seedmap.LineLengthM)},
+			seedmap.Line(lineGeometry(
+				[]mapfmt.HPrim{straight(seedmap.LineLengthM)},
 				[]mapfmt.VPrim{{Kind: "grade", Length: seedmap.LineLengthM - 10}})),
 			"домен",
 		},
 		{
 			"вертикаль начинается не с grade",
-			seedmap.Line(геометрияПерегона(
-				[]mapfmt.HPrim{прямая(seedmap.LineLengthM)},
+			seedmap.Line(lineGeometry(
+				[]mapfmt.HPrim{straight(seedmap.LineLengthM)},
 				[]mapfmt.VPrim{{Kind: "vertical_curve", Length: seedmap.LineLengthM, EndSlopePermille: 5}})),
 			"grade",
 		},
 		{
 			"нулевая длина примитива",
-			seedmap.Line(геометрияПерегона([]mapfmt.HPrim{прямая(0)}, nil)),
+			seedmap.Line(lineGeometry([]mapfmt.HPrim{straight(0)}, nil)),
 			"длина",
 		},
 		{
 			"неизвестный примитив плана",
-			seedmap.Line(геометрияПерегона(
+			seedmap.Line(lineGeometry(
 				[]mapfmt.HPrim{{Kind: "spiral", Length: seedmap.LineLengthM}}, nil)),
 			"неизвестный",
 		},
@@ -50,8 +50,8 @@ func TestВалидаторОтвергает(t *testing.T) {
 			"origin_height_kind",
 		},
 		{
-			"путевой объект неизвестного рода",
-			seedmap.Line(seedmap.WithTrackside(mapfmt.Trackside{
+			"сооружение неизвестного вида",
+			seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
 				ID:   "TS1",
 				Kind: "sarai",
 				Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: 10}},
@@ -73,12 +73,12 @@ func TestВалидаторОтвергает(t *testing.T) {
 			"якорь ссылается на несуществующий порт",
 		},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) { отвергает(t, c.карта, c.причина) })
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { rejects(t, c.m, c.reason) })
 	}
 }
 
-// TestВидЭлементаОбязателен — карта без kind получает ОТКАЗ НА ВХОДЕ, а не
+// TestElementKindIsRequired — карта без kind получает ОТКАЗ НА ВХОДЕ, а не
 // молчаливое умолчание «значит рельсы».
 //
 // Это приёмочный критерий ClearAhead-z4u и главное, ради чего поле заведено
@@ -90,11 +90,11 @@ func TestВалидаторОтвергает(t *testing.T) {
 // вид достаётся её проходам), — и обе половины отказа: пустое значение и
 // незнакомое. Пустое отвергается своим текстом: это не опечатка, а карта,
 // написанная до правила, и сказать автору надо именно это.
-func TestВидЭлементаОбязателен(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		карта   *mapfmt.Map
-		причина string
+func TestElementKindIsRequired(t *testing.T) {
+	cases := []struct {
+		name   string
+		m      *mapfmt.Map
+		reason string
 	}{
 		{
 			"у ребра нет вида",
@@ -117,60 +117,60 @@ func TestВидЭлементаОбязателен(t *testing.T) {
 			`неизвестный вид "monorail"`,
 		},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) { отвергает(t, c.карта, c.причина) })
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) { rejects(t, c.m, c.reason) })
 	}
 }
 
-// TestПортСтрелкиБезРебраОтвергается — отрезаем тупик целиком: порт SW2.D
+// TestTurnoutPortWithoutEdgeIsRejected — отрезаем тупик целиком: порт SW2.D
 // остаётся вообще без ребра. Это отказ про не соединённый порт устройства, а не
 // про висящий конец с просьбой назначить purpose: у стрелки все три порта
 // обязаны нести ребро.
-func TestПортСтрелкиБезРебраОтвергается(t *testing.T) {
-	m := seedmap.Station(безРебра(seedmap.StationStub))
-	отвергает(t, m, "не соединён")
+func TestTurnoutPortWithoutEdgeIsRejected(t *testing.T) {
+	m := seedmap.Station(withoutEdge(seedmap.StationStub))
+	rejects(t, m, "не соединён")
 }
 
-// TestМаркаКрестовиныНеобязательна — §8 объявляет марку происхождением
+// TestFrogNumberIsOptional — §8 объявляет марку происхождением
 // геометрии, а не ограничением: карта без неё законна, клиент строит крестовину
 // из геометрии.
-func TestМаркаКрестовиныНеобязательна(t *testing.T) {
+func TestFrogNumberIsOptional(t *testing.T) {
 	m := seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
 		for i := range m.Topology.Turnouts {
 			m.Topology.Turnouts[i].Frog = ""
 		}
 	}))
-	принимает(t, m)
+	accepts(t, m)
 }
 
-// безРебра убирает ребро целиком: топологию, геометрию и покрывающий его run.
+// withoutEdge убирает ребро целиком: топологию, геометрию и покрывающий его run.
 // Убирать всё сразу обязательно — иначе карта ломается в трёх местах и отказ
 // приходит по первому попавшемуся, а не по предмету теста.
-func безРебра(ид string) seedmap.Option {
+func withoutEdge(id string) seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) {
-		рёбра := m.Topology.Edges[:0]
+		edges := m.Topology.Edges[:0]
 		for _, e := range m.Topology.Edges {
-			if e.ID != ид {
-				рёбра = append(рёбра, e)
+			if e.ID != id {
+				edges = append(edges, e)
 			}
 		}
-		m.Topology.Edges = рёбра
-		delete(m.Geometry.Edges, ид)
+		m.Topology.Edges = edges
+		delete(m.Geometry.Edges, id)
 		if m.Construction == nil {
 			return
 		}
-		прогоны := m.Construction.Runs[:0]
+		runs := m.Construction.Runs[:0]
 		for _, r := range m.Construction.Runs {
-			покрывает := false
+			covers := false
 			for _, sp := range r.Spans {
-				if sp.Element == ид {
-					покрывает = true
+				if sp.Element == id {
+					covers = true
 				}
 			}
-			if !покрывает {
-				прогоны = append(прогоны, r)
+			if !covers {
+				runs = append(runs, r)
 			}
 		}
-		m.Construction.Runs = прогоны
+		m.Construction.Runs = runs
 	})
 }

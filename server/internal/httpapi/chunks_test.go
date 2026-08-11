@@ -133,7 +133,7 @@ func do(t *testing.T, h http.Handler, method, url string, headers map[string]str
 	return rec
 }
 
-func TestЧанкОтдаётсяБлобомФиксированнойДлины(t *testing.T) {
+func TestChunkIsServedAsFixedLengthBlob(t *testing.T) {
 	h := newChunksTestHandler(t)
 	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 0, 0), nil)
 
@@ -162,7 +162,7 @@ func TestЧанкОтдаётсяБлобомФиксированнойДлин�
 	}
 }
 
-func TestТелоЧанкаДекодируетсяВЗаписанныеОтсчёты(t *testing.T) {
+func TestChunkBodyDecodesToStoredSamples(t *testing.T) {
 	h := newChunksTestHandler(t)
 	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 0, 0), nil)
 	if rec.Code != http.StatusOK {
@@ -181,7 +181,7 @@ func TestТелоЧанкаДекодируетсяВЗаписанныеОтс�
 	}
 }
 
-func TestОтсутствующийЧанкОтдаётся204(t *testing.T) {
+func TestMissingChunkIsServed204(t *testing.T) {
 	h := newChunksTestHandler(t)
 	// Регион существует, чанка в нём нет: разреженность — свойство хранилища,
 	// а не сбой, и 404 здесь был бы неотличим от опечатки в имени региона.
@@ -200,7 +200,7 @@ func TestОтсутствующийЧанкОтдаётся204(t *testing.T) {
 	}
 }
 
-func TestНеверныйАдресОтдаётся404(t *testing.T) {
+func TestBadAddressIsServed404(t *testing.T) {
 	h := newChunksTestHandler(t)
 	cases := map[string]string{
 		"несуществующий регион": chunkURL("нетакого", 0, 0, 0),
@@ -220,7 +220,7 @@ func TestНеверныйАдресОтдаётся404(t *testing.T) {
 	}
 }
 
-func TestУровеньВнеДиапазонаОтдаётся404(t *testing.T) {
+func TestLevelOutOfRangeIsServed404(t *testing.T) {
 	h := newChunksTestHandler(t)
 	// Уровня подробности вне [0, MaxLevel] не существует ни у одного региона:
 	// это неверный адрес, а не пустое место, где чанк мог бы появиться.
@@ -241,7 +241,7 @@ func TestУровеньВнеДиапазонаОтдаётся404(t *testing.T)
 	}
 }
 
-func TestПовторныйЗапросСIfNoneMatchОтдаёт304(t *testing.T) {
+func TestRepeatedRequestWithIfNoneMatchIsServed304(t *testing.T) {
 	h := newChunksTestHandler(t)
 	url := chunkURL(testRegion, 0, 0, 0)
 
@@ -269,7 +269,7 @@ func TestПовторныйЗапросСIfNoneMatchОтдаёт304(t *testing.T
 	}
 }
 
-// TestИзменившийсяЧанкДоезжаетДоЗагрузившегоЕгоКлиента — то, ради чего снят
+// TestChangedChunkReachesClientThatCachedIt — то, ради чего снят
 // immutable, разыграно целиком: клиент загрузил чанк, чанк изменился, клиент
 // пришёл со своим ETag.
 //
@@ -277,7 +277,7 @@ func TestПовторныйЗапросСIfNoneMatchОтдаёт304(t *testing.T
 // доказывает — при immutable этот второй запрос не случился бы вовсе, и у
 // игрока навсегда остался бы прежний холм на месте проложенного пути. Отказа
 // при этом не видно ниоткуда, поэтому ловить такое обязан тест.
-func TestИзменившийсяЧанкДоезжаетДоЗагрузившегоЕгоКлиента(t *testing.T) {
+func TestChangedChunkReachesClientThatCachedIt(t *testing.T) {
 	s := newChunksTestStore(t)
 	h := NewChunksHandler(s)
 	url := chunkURL(testRegion, 0, 0, 0)
@@ -331,7 +331,7 @@ func TestИзменившийсяЧанкДоезжаетДоЗагрузивш�
 	}
 }
 
-func TestЧужойМетодОтдаётся405(t *testing.T) {
+func TestForeignMethodIsServed405(t *testing.T) {
 	h := newChunksTestHandler(t)
 	rec := do(t, h, http.MethodPost, chunkURL(testRegion, 0, 0, 0), nil)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -342,7 +342,7 @@ func TestЧужойМетодОтдаётся405(t *testing.T) {
 	}
 }
 
-func TestHEADОтдаётЗаголовкиБезТела(t *testing.T) {
+func TestHEADServesHeadersWithoutBody(t *testing.T) {
 	h := newChunksTestHandler(t)
 	url := chunkURL(testRegion, 0, 0, 0)
 

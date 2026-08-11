@@ -17,47 +17,47 @@ import (
 // префикса «отрисовка: » заодно доказывает, что отказ пришёл именно от этого
 // модуля, а не от структурных проверок, которые зовутся раньше.
 
-func отвергаетОтрисовка(t *testing.T, m *mapfmt.Map, причина string) {
+func rejectsConstruction(t *testing.T, m *mapfmt.Map, reason string) {
 	t.Helper()
 	err := mapfmt.Validate(m)
 	if err == nil {
-		t.Fatalf("ожидался отказ (%s), карта прошла", причина)
+		t.Fatalf("ожидался отказ (%s), карта прошла", reason)
 	}
 	if !strings.HasPrefix(err.Error(), "отрисовка: ") {
 		t.Fatalf("отказ пришёл не от модуля отрисовки: %v", err)
 	}
-	if !strings.Contains(err.Error(), причина) {
-		t.Fatalf("отказ %q не содержит %q", err, причина)
+	if !strings.Contains(err.Error(), reason) {
+		t.Fatalf("отказ %q не содержит %q", err, reason)
 	}
 }
 
-// сТипом правит единственный тип решётки, который порождает фабрика.
-func сТипом(f func(*mapfmt.TrackType)) seedmap.Option {
+// withType правит единственный тип решётки, который порождает фабрика.
+func withType(f func(*mapfmt.TrackType)) seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) { f(&m.Construction.Types[0]) })
 }
 
-// сПрогоном правит run, покрывающий названный элемент. Поиск по элементу, а не
+// withRun правит run, покрывающий названный элемент. Поиск по элементу, а не
 // по индексу: порядок run'ов — деталь фабрики, а тест говорит о смысле.
-func сПрогоном(элемент string, f func(*mapfmt.ConstructionRun)) seedmap.Option {
+func withRun(element string, f func(*mapfmt.ConstructionRun)) seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) {
 		for i := range m.Construction.Runs {
 			for _, sp := range m.Construction.Runs[i].Spans {
-				if sp.Element == элемент {
+				if sp.Element == element {
 					f(&m.Construction.Runs[i])
 					return
 				}
 			}
 		}
-		panic("в карте нет run'а на элементе " + элемент)
+		panic("в карте нет run'а на элементе " + element)
 	})
 }
 
-// сПлатформой правит платформу станции.
-func сПлатформой(f func(*mapfmt.Trackside)) seedmap.Option {
+// withPlatform правит платформу станции.
+func withPlatform(f func(*mapfmt.Structure)) seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) {
-		for i := range m.Topology.Trackside {
-			if m.Topology.Trackside[i].Kind == "platform" {
-				f(&m.Topology.Trackside[i])
+		for i := range m.Topology.Structures {
+			if m.Topology.Structures[i].Kind == "platform" {
+				f(&m.Topology.Structures[i])
 				return
 			}
 		}
@@ -65,20 +65,20 @@ func сПлатформой(f func(*mapfmt.Trackside)) seedmap.Option {
 	})
 }
 
-// спан — интервал run'а: направление у решётки обязательно, она укладывается по
+// span — интервал run'а: направление у решётки обязательно, она укладывается по
 // ходу.
-func спан(элемент string, от, до float64) netloc.IntervalU {
-	return netloc.IntervalU{Element: элемент, From: от, To: до, Direction: netloc.DirForward}
+func span(element string, from, to float64) netloc.IntervalU {
+	return netloc.IntervalU{Element: element, From: from, To: to, Direction: netloc.DirForward}
 }
 
-// TestОтрисовкаОтвергаетТипВнеДиапазона — величины типа проверяются диапазоном,
+// TestConstructionRejectsTypeOutOfRange — величины типа проверяются диапазоном,
 // а не знаком: шаг 0.001 м проходит «строго положительно» и даёт миллион шпал на
 // километр — клиент ложится без ошибки.
-func TestОтрисовкаОтвергаетТипВнеДиапазона(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		порча   func(*mapfmt.TrackType)
-		причина string
+func TestConstructionRejectsTypeOutOfRange(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(*mapfmt.TrackType)
+		reason  string
 	}{
 		{"колея слишком широка", func(t *mapfmt.TrackType) { t.Gauge = 10 }, "gauge"},
 		{"колея слишком узка", func(t *mapfmt.TrackType) { t.Gauge = 0.1 }, "gauge"},
@@ -88,32 +88,32 @@ func TestОтрисовкаОтвергаетТипВнеДиапазона(t *t
 		{"шпала слишком узка", func(t *mapfmt.TrackType) { t.Sleeper.Width = 0.01 }, "sleeper.width"},
 		{"балласт слишком узок", func(t *mapfmt.TrackType) { t.Ballast.HalfWidth = 0.1 }, "ballast.half_width"},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) {
-			отвергаетОтрисовка(t, seedmap.Line(сТипом(c.порча)), c.причина)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Line(withType(c.corrupt)), c.reason)
 		})
 	}
 }
 
-func TestОтрисовкаОтвергаетПовторТипа(t *testing.T) {
+func TestConstructionRejectsDuplicateType(t *testing.T) {
 	m := seedmap.Line(seedmap.Mutate(func(m *mapfmt.Map) {
 		m.Construction.Types = append(m.Construction.Types, m.Construction.Types[0])
 	}))
-	отвергаетОтрисовка(t, m, "объявлен дважды")
+	rejectsConstruction(t, m, "объявлен дважды")
 }
 
-func TestОтрисовкаОтвергаетНеобъявленныйТипПоУмолчанию(t *testing.T) {
+func TestConstructionRejectsUndeclaredDefaultType(t *testing.T) {
 	m := seedmap.Line(seedmap.Mutate(func(m *mapfmt.Map) { m.Construction.DefaultType = "NOPE" }))
-	отвергаетОтрисовка(t, m, "тип по умолчанию")
+	rejectsConstruction(t, m, "тип по умолчанию")
 }
 
-// TestОтрисовкаОтвергаетПорчуПрогона — форма самого run'а: тип, координата,
+// TestConstructionRejectsCorruptedRun — форма самого run'а: тип, координата,
 // фаза, направление и пределы спанов.
-func TestОтрисовкаОтвергаетПорчуПрогона(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		порча   func(*mapfmt.ConstructionRun)
-		причина string
+func TestConstructionRejectsCorruptedRun(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(*mapfmt.ConstructionRun)
+		reason  string
 	}{
 		{"неизвестный тип решётки", func(r *mapfmt.ConstructionRun) { r.Type = "NOPE" }, "неизвестный тип"},
 		{"координата не u", func(r *mapfmt.ConstructionRun) { r.Coordinate = "s" }, "coordinate"},
@@ -147,22 +147,22 @@ func TestОтрисовкаОтвергаетПорчуПрогона(t *testing
 			"за пределами",
 		},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) {
-			отвергаетОтрисовка(t, seedmap.Line(сПрогоном(seedmap.LineEdgeID, c.порча)), c.причина)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Line(withRun(seedmap.LineEdgeID, c.corrupt)), c.reason)
 		})
 	}
 }
 
-// TestОтрисовкаТребуетПокрытияРёбер — ребро покрыто ровно одним run'ом, целиком,
+// TestConstructionRequiresEdgeCoverage — ребро покрыто ровно одним run'ом, целиком,
 // без пропусков и перекрытий: решётка — авторитетный факт о физическом пути, и
 // дыра в покрытии означает участок, про который никто ничего не сказал.
-func TestОтрисовкаТребуетПокрытияРёбер(t *testing.T) {
+func TestConstructionRequiresEdgeCoverage(t *testing.T) {
 	const U = seedmap.LineLengthM
-	случаи := []struct {
-		имя     string
-		порча   seedmap.Option
-		причина string
+	cases := []struct {
+		name    string
+		corrupt seedmap.Option
+		reason  string
 	}{
 		{
 			"ребро не покрыто ни одним run",
@@ -175,113 +175,113 @@ func TestОтрисовкаТребуетПокрытияРёбер(t *testing.T
 				m.Construction.Runs = append(m.Construction.Runs, mapfmt.ConstructionRun{
 					ID:         "RUN_DUP",
 					Coordinate: "u",
-					Spans:      netloc.LinearU{спан(seedmap.LineEdgeID, 0, U)},
+					Spans:      netloc.LinearU{span(seedmap.LineEdgeID, 0, U)},
 				})
 			}),
 			"ровно один run",
 		},
 		{
 			"пропуск между спанами",
-			сПрогоном(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) {
-				r.Spans = netloc.LinearU{спан(seedmap.LineEdgeID, 0, U-101), спан(seedmap.LineEdgeID, U-100, U)}
+			withRun(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) {
+				r.Spans = netloc.LinearU{span(seedmap.LineEdgeID, 0, U-101), span(seedmap.LineEdgeID, U-100, U)}
 			}),
 			"пропуск",
 		},
 		{
 			"перекрытие спанов",
-			сПрогоном(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) {
-				r.Spans = netloc.LinearU{спан(seedmap.LineEdgeID, 0, U-80), спан(seedmap.LineEdgeID, U-100, U)}
+			withRun(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) {
+				r.Spans = netloc.LinearU{span(seedmap.LineEdgeID, 0, U-80), span(seedmap.LineEdgeID, U-100, U)}
 			}),
 			"перекрытие",
 		},
 		{
 			"покрытие начинается не с нуля",
-			сПрогоном(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) { r.Spans[0].From = 1 }),
+			withRun(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) { r.Spans[0].From = 1 }),
 			"начинается с",
 		},
 		{
 			"покрытие кончается раньше конца ребра",
-			сПрогоном(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) { r.Spans[0].To = U - 0.5 }),
+			withRun(seedmap.LineEdgeID, func(r *mapfmt.ConstructionRun) { r.Spans[0].To = U - 0.5 }),
 			"кончается на",
 		},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) {
-			отвергаетОтрисовка(t, seedmap.Line(c.порча), c.причина)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Line(c.corrupt), c.reason)
 		})
 	}
 }
 
-// TestОтрисовкаОтвергаетПрогонНаПроходеУстройства — решётка устройств
+// TestConstructionRejectsRunOnDevicePassage — решётка устройств
 // нерегулярна, run'ы её не покрывают: клиент рисует стрелку собственным
 // приближением (спека §4).
-func TestОтрисовкаОтвергаетПрогонНаПроходеУстройства(t *testing.T) {
-	m := seedmap.Station(сПрогоном(seedmap.StationApproach, func(r *mapfmt.ConstructionRun) {
-		r.Spans[0] = спан(seedmap.StationSW1+mapfmt.PassageStraight, 0, 33.5)
+func TestConstructionRejectsRunOnDevicePassage(t *testing.T) {
+	m := seedmap.Station(withRun(seedmap.StationApproach, func(r *mapfmt.ConstructionRun) {
+		r.Spans[0] = span(seedmap.StationSW1+mapfmt.PassageStraight, 0, 33.5)
 	}))
-	отвергаетОтрисовка(t, m, "проход устройства")
+	rejectsConstruction(t, m, "проход устройства")
 }
 
-// TestОтрисовкаОтвергаетНеизвестныйТипСтрелки — крестовина считается по колее
+// TestConstructionRejectsUnknownTurnoutType — крестовина считается по колее
 // типа САМОГО устройства, поэтому неразрешимая ссылка — отказ, а не отложенная
 // ошибка.
-func TestОтрисовкаОтвергаетНеизвестныйТипСтрелки(t *testing.T) {
+func TestConstructionRejectsUnknownTurnoutType(t *testing.T) {
 	m := seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
 		m.Topology.Turnouts[0].Type = "NOPE"
 	}))
-	отвергаетОтрисовка(t, m, "стрелка")
+	rejectsConstruction(t, m, "стрелка")
 }
 
-// TestОтрисовкаТребуетРазмеровПлатформы — размеры обязательны и лежат в
+// TestConstructionRequiresPlatformDimensions — размеры обязательны и лежат в
 // правдоподобных пределах (спека §3). Пропущенное поле — ноль, а ноль вне
 // диапазона: обязательность обеспечена той же формулой !(v >= min && v <= max),
 // что и у типа, — валидатор не полагается на проверку конечности.
-func TestОтрисовкаТребуетРазмеровПлатформы(t *testing.T) {
-	случаи := []struct {
-		имя     string
-		порча   func(*mapfmt.Trackside)
-		причина string
+func TestConstructionRequiresPlatformDimensions(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(*mapfmt.Structure)
+		reason  string
 	}{
-		{"offset пропущен", func(ts *mapfmt.Trackside) { ts.Offset = 0 }, "offset"},
-		{"offset слишком мал", func(ts *mapfmt.Trackside) { ts.Offset = 0.5 }, "offset"},
-		{"offset слишком велик", func(ts *mapfmt.Trackside) { ts.Offset = 10 }, "offset"},
-		{"width пропущена", func(ts *mapfmt.Trackside) { ts.Width = 0 }, "width"},
-		{"width слишком мала", func(ts *mapfmt.Trackside) { ts.Width = 0.3 }, "width"},
-		{"width слишком велика", func(ts *mapfmt.Trackside) { ts.Width = 30 }, "width"},
+		{"offset пропущен", func(st *mapfmt.Structure) { st.Offset = 0 }, "offset"},
+		{"offset слишком мал", func(st *mapfmt.Structure) { st.Offset = 0.5 }, "offset"},
+		{"offset слишком велик", func(st *mapfmt.Structure) { st.Offset = 10 }, "offset"},
+		{"width пропущена", func(st *mapfmt.Structure) { st.Width = 0 }, "width"},
+		{"width слишком мала", func(st *mapfmt.Structure) { st.Width = 0.3 }, "width"},
+		{"width слишком велика", func(st *mapfmt.Structure) { st.Width = 30 }, "width"},
 	}
-	for _, c := range случаи {
-		t.Run(c.имя, func(t *testing.T) {
-			отвергаетОтрисовка(t, seedmap.Station(сПлатформой(c.порча)), c.причина)
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Station(withPlatform(c.corrupt)), c.reason)
 		})
 	}
 }
 
-// TestРазмерыПлатформыПроверяютсяБезБлокаРешётки — размеры платформы часть
+// TestPlatformDimensionsAreCheckedWithoutConstructionBlock — размеры платформы часть
 // контракта отрисовки, а не блока рецепта: карта с голой платформой не должна
 // выйти наружу, даже если решётка ещё не авторилась.
-func TestРазмерыПлатформыПроверяютсяБезБлокаРешётки(t *testing.T) {
-	голая := mapfmt.Trackside{
+func TestPlatformDimensionsAreCheckedWithoutConstructionBlock(t *testing.T) {
+	bare := mapfmt.Structure{
 		ID:   "PLAT",
 		Kind: "platform",
 		Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: 50}},
 		Side: "right",
 	}
-	отвергаетОтрисовка(t,
-		seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithTrackside(голая)), "offset")
+	rejectsConstruction(t,
+		seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithStructure(bare)), "offset")
 
-	сРазмерами := голая
-	сРазмерами.Offset = 1.75
-	сРазмерами.Width = 3
-	принимает(t, seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithTrackside(сРазмерами)))
+	withDimensions := bare
+	withDimensions.Offset = 1.75
+	withDimensions.Width = 3
+	accepts(t, seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithStructure(withDimensions)))
 }
 
-// TestУпорРазмеровНеНесёт — buffer_stop точечный объект: диапазоны платформы к
+// TestBufferStopCarriesNoDimensions — buffer_stop точечный объект: диапазоны платформы к
 // нему не применяются.
-func TestУпорРазмеровНеНесёт(t *testing.T) {
-	m := seedmap.Line(seedmap.WithTrackside(mapfmt.Trackside{
+func TestBufferStopCarriesNoDimensions(t *testing.T) {
+	m := seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
 		ID:   "BS",
 		Kind: "buffer_stop",
 		Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: seedmap.LineLengthM, To: seedmap.LineLengthM}},
 	}))
-	принимает(t, m)
+	accepts(t, m)
 }

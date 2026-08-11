@@ -13,11 +13,11 @@ import (
 
 func manifestOf(t *testing.T, m *mapfmt.Map) Manifest {
 	t.Helper()
-	ct, rg, err := Compile(m)
+	cn, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	man, err := BuildManifest(m, ct, rg)
+	man, err := BuildManifest(m, cn, rg)
 	if err != nil {
 		t.Fatalf("манифест: %v", err)
 	}
@@ -36,24 +36,25 @@ func TestManifestChangesOnGeometry(t *testing.T) {
 		a.Horizontal[0].Length = seedmap.LineLengthM + 0.001
 		m.Geometry.Edges[seedmap.LineEdgeID] = a
 	}))
-	if manifestOf(t, годная(t, base)).TrackHash == manifestOf(t, годная(t, changed)).TrackHash {
+	if manifestOf(t, valid(t, base)).NetworkModelHash == manifestOf(t, valid(t, changed)).NetworkModelHash {
 		t.Fatal("правка геометрии на миллиметр не изменила хеш")
 	}
 }
 
-// TestTrackHashCoversElementKind — вид пути обязан входить в track_hash.
+// TestNetworkModelHashCoversElementKind — вид пути обязан входить в
+// network_model_hash.
 //
 // # Зачем этот тест существует отдельно
 //
 // network_hash считается от САМИХ БАЙТОВ ответа: поле, попавшее в провод,
-// попадает в хеш само, забыть его нельзя. track_hash считается от РУКОПИСНОЙ
-// выжимки в writeTrackModel, и туда каждое новое поле модели надо вписать
-// рукой. Ровно так проекту однажды обошёлся Slope: тело менялось, хеш нет, и
-// клиент с immutable навсегда сохранял устаревшую геометрию — без единого
-// отказа. Вывод, записанный в hash.go, дословен: «забудут».
+// попадает в хеш само, забыть его нельзя. network_model_hash считается от
+// РУКОПИСНОЙ выжимки в writeNetworkModel, и туда каждое новое поле модели надо
+// вписать рукой. Ровно так проекту однажды обошёлся Slope: тело менялось, хеш
+// нет, и клиент с immutable навсегда сохранял устаревшую геометрию — без
+// единого отказа. Вывод, записанный в hash.go, дословен: «забудут».
 //
-// Тест — замок на этот случай: убери e.Kind из строки el| в writeTrackModel, и
-// он упадёт.
+// Тест — замок на этот случай: убери e.Kind из строки el| в writeNetworkModel,
+// и он упадёт.
 //
 // # Почему карта портится в обход валидатора
 //
@@ -62,19 +63,19 @@ func TestManifestChangesOnGeometry(t *testing.T) {
 // видом, не существует. Предмет теста — покрытие выжимки, а не перечень
 // значений; в день, когда "road" станет законным, тест продолжит проверять то же
 // самое, не изменившись.
-func TestTrackHashCoversElementKind(t *testing.T) {
-	случаи := map[string]func(*mapfmt.Map){
+func TestNetworkModelHashCoversElementKind(t *testing.T) {
+	cases := map[string]func(*mapfmt.Map){
 		// Ребро: вид пишет автор.
 		"вид ребра": func(m *mapfmt.Map) { m.Topology.Edges[0].Kind = "road" },
 		// Стрелка: её проходы — тоже элементы, и вид они берут у неё. Без этой
 		// половины подмена вида устройства прошла бы мимо хеша.
 		"вид стрелки": func(m *mapfmt.Map) { m.Topology.Turnouts[0].Kind = "road" },
 	}
-	base := manifestOf(t, seedmap.Station()).TrackHash
-	for имя, порча := range случаи {
-		t.Run(имя, func(t *testing.T) {
-			if h := manifestOf(t, seedmap.Station(seedmap.Mutate(порча))).TrackHash; h == base {
-				t.Fatalf("смена вида (%s) не изменила track_hash — выжимка описывает не всю модель пути", имя)
+	base := manifestOf(t, seedmap.Station()).NetworkModelHash
+	for name, corrupt := range cases {
+		t.Run(name, func(t *testing.T) {
+			if h := manifestOf(t, seedmap.Station(seedmap.Mutate(corrupt))).NetworkModelHash; h == base {
+				t.Fatalf("смена вида (%s) не изменила network_model_hash — выжимка описывает не всю модель сети", name)
 			}
 		})
 	}
@@ -99,14 +100,14 @@ func withGeoref(prov bool) seedmap.Option {
 }
 
 func TestManifestIgnoresProvenance(t *testing.T) {
-	if manifestOf(t, годная(t, seedmap.Line(withGeoref(false)))).TrackHash !=
-		manifestOf(t, годная(t, seedmap.Line(withGeoref(true)))).TrackHash {
+	if manifestOf(t, valid(t, seedmap.Line(withGeoref(false)))).NetworkModelHash !=
+		manifestOf(t, valid(t, seedmap.Line(withGeoref(true)))).NetworkModelHash {
 		t.Fatal("правка provenance изменила хеш")
 	}
 }
 
 func TestManifestChangesOnGeoreference(t *testing.T) {
-	if manifestOf(t, seedmap.Line()).TrackHash == manifestOf(t, годная(t, seedmap.Line(withGeoref(false)))).TrackHash {
+	if manifestOf(t, seedmap.Line()).NetworkModelHash == manifestOf(t, valid(t, seedmap.Line(withGeoref(false)))).NetworkModelHash {
 		t.Fatal("правка геопривязки не изменила хеш")
 	}
 }
@@ -130,7 +131,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 				Prims: []RenderPrimitive{{Kind: "arc", LengthM: 10, Radius: 300, Angle: 0.11}},
 				Role:  &RenderRole{Turnout: "SW1", Branch: "diverging", Hand: "right", Frog: "1/9"},
 			}},
-			Trackside: []RenderTrackside{{
+			Structures: []RenderStructure{{
 				ID: "TSP", Kind: "platform", Side: "right",
 				Spans: []netloc.IntervalU{{Element: "E1", From: 10, To: 150}},
 			}},
@@ -157,33 +158,35 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 	h0 := renderHashOf(t, base())
 
 	mutations := map[string]func(*RenderGeometry){
-		"region":                func(g *RenderGeometry) { g.Region = "Y" },
-		"revision":              func(g *RenderGeometry) { g.Revision = 2 },
-		"element id":            func(g *RenderGeometry) { g.Elements[0].ID = "E2" },
-		"element kind":          func(g *RenderGeometry) { g.Elements[0].Kind = "road" },
-		"start.plan.x":          func(g *RenderGeometry) { g.Elements[0].Start.Plan.X = 9 },
-		"start.plan.y":          func(g *RenderGeometry) { g.Elements[0].Start.Plan.Y = 9 },
-		"start.plan.heading":    func(g *RenderGeometry) { g.Elements[0].Start.Plan.Heading = 0.9 },
-		"start.z":               func(g *RenderGeometry) { g.Elements[0].Start.Z = 9 },
-		"start.slope":           func(g *RenderGeometry) { g.Elements[0].Start.Slope = 0.04 },
-		"primitive kind":        func(g *RenderGeometry) { g.Elements[0].Prims[0].Kind = "straight" },
-		"primitive length":      func(g *RenderGeometry) { g.Elements[0].Prims[0].LengthM = 11 },
-		"primitive radius":      func(g *RenderGeometry) { g.Elements[0].Prims[0].Radius = 400 },
-		"primitive angle":       func(g *RenderGeometry) { g.Elements[0].Prims[0].Angle = -0.11 },
-		"добавлен element":      func(g *RenderGeometry) { g.Elements = append(g.Elements, g.Elements[0]) },
-		"добавлен primitive":    func(g *RenderGeometry) { g.Elements[0].Prims = append(g.Elements[0].Prims, g.Elements[0].Prims[0]) },
-		"role.turnout":          func(g *RenderGeometry) { g.Elements[0].Role.Turnout = "SW2" },
-		"role.branch":           func(g *RenderGeometry) { g.Elements[0].Role.Branch = "straight" },
-		"role.hand":             func(g *RenderGeometry) { g.Elements[0].Role.Hand = "left" },
-		"role.frog":             func(g *RenderGeometry) { g.Elements[0].Role.Frog = "1/7" },
-		"роль снята":            func(g *RenderGeometry) { g.Elements[0].Role = nil },
-		"trackside id":          func(g *RenderGeometry) { g.Trackside[0].ID = "TSP2" },
-		"trackside kind":        func(g *RenderGeometry) { g.Trackside[0].Kind = "buffer_stop" },
-		"trackside side":        func(g *RenderGeometry) { g.Trackside[0].Side = "left" },
-		"span element":          func(g *RenderGeometry) { g.Trackside[0].Spans[0].Element = "E2" },
-		"span from":             func(g *RenderGeometry) { g.Trackside[0].Spans[0].From = 11 },
-		"span to":               func(g *RenderGeometry) { g.Trackside[0].Spans[0].To = 151 },
-		"добавлен span":         func(g *RenderGeometry) { g.Trackside[0].Spans = append(g.Trackside[0].Spans, g.Trackside[0].Spans[0]) },
+		"region":             func(g *RenderGeometry) { g.Region = "Y" },
+		"revision":           func(g *RenderGeometry) { g.Revision = 2 },
+		"element id":         func(g *RenderGeometry) { g.Elements[0].ID = "E2" },
+		"element kind":       func(g *RenderGeometry) { g.Elements[0].Kind = "road" },
+		"start.plan.x":       func(g *RenderGeometry) { g.Elements[0].Start.Plan.X = 9 },
+		"start.plan.y":       func(g *RenderGeometry) { g.Elements[0].Start.Plan.Y = 9 },
+		"start.plan.heading": func(g *RenderGeometry) { g.Elements[0].Start.Plan.Heading = 0.9 },
+		"start.z":            func(g *RenderGeometry) { g.Elements[0].Start.Z = 9 },
+		"start.slope":        func(g *RenderGeometry) { g.Elements[0].Start.Slope = 0.04 },
+		"primitive kind":     func(g *RenderGeometry) { g.Elements[0].Prims[0].Kind = "straight" },
+		"primitive length":   func(g *RenderGeometry) { g.Elements[0].Prims[0].LengthM = 11 },
+		"primitive radius":   func(g *RenderGeometry) { g.Elements[0].Prims[0].Radius = 400 },
+		"primitive angle":    func(g *RenderGeometry) { g.Elements[0].Prims[0].Angle = -0.11 },
+		"добавлен element":   func(g *RenderGeometry) { g.Elements = append(g.Elements, g.Elements[0]) },
+		"добавлен primitive": func(g *RenderGeometry) { g.Elements[0].Prims = append(g.Elements[0].Prims, g.Elements[0].Prims[0]) },
+		"role.turnout":       func(g *RenderGeometry) { g.Elements[0].Role.Turnout = "SW2" },
+		"role.branch":        func(g *RenderGeometry) { g.Elements[0].Role.Branch = "straight" },
+		"role.hand":          func(g *RenderGeometry) { g.Elements[0].Role.Hand = "left" },
+		"role.frog":          func(g *RenderGeometry) { g.Elements[0].Role.Frog = "1/7" },
+		"роль снята":         func(g *RenderGeometry) { g.Elements[0].Role = nil },
+		"structure id":       func(g *RenderGeometry) { g.Structures[0].ID = "TSP2" },
+		"structure kind":     func(g *RenderGeometry) { g.Structures[0].Kind = "buffer_stop" },
+		"structure side":     func(g *RenderGeometry) { g.Structures[0].Side = "left" },
+		"span element":       func(g *RenderGeometry) { g.Structures[0].Spans[0].Element = "E2" },
+		"span from":          func(g *RenderGeometry) { g.Structures[0].Spans[0].From = 11 },
+		"span to":            func(g *RenderGeometry) { g.Structures[0].Spans[0].To = 151 },
+		"добавлен span": func(g *RenderGeometry) {
+			g.Structures[0].Spans = append(g.Structures[0].Spans, g.Structures[0].Spans[0])
+		},
 		"тип id":                func(g *RenderGeometry) { g.TrackTypes[0].ID = "TRACK_SIDING" },
 		"тип gauge":             func(g *RenderGeometry) { g.TrackTypes[0].Gauge = 1.520 },
 		"тип pitch":             func(g *RenderGeometry) { g.TrackTypes[0].Sleeper.Pitch = 0.7 },
@@ -236,11 +239,11 @@ func renderHashOf(t *testing.T, rg *RenderGeometry) string {
 // Без этой связки хеш и ответ снова разъедутся, просто чуть позже.
 func TestManifestHashIsBodyHash(t *testing.T) {
 	m := seedmap.Line()
-	ct, rg, err := Compile(m)
+	cn, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	man, err := BuildManifest(m, ct, rg)
+	man, err := BuildManifest(m, cn, rg)
 	if err != nil {
 		t.Fatalf("манифест: %v", err)
 	}

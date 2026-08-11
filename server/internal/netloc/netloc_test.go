@@ -10,7 +10,7 @@ import (
 // Направление задаётся полем, а не перестановкой концов. Проверка отдельная,
 // потому что именно перестановка — соблазнительная и неверная альтернатива:
 // она делает вывернутый интервал неотличимым от опечатки автора.
-func TestИнтервалНеВыворачивается(t *testing.T) {
+func TestIntervalIsNotInverted(t *testing.T) {
 	iv := IntervalU{Element: "E1", From: 100, To: 20, Direction: DirReverse}
 	err := iv.Structural()
 	if err == nil {
@@ -23,7 +23,7 @@ func TestИнтервалНеВыворачивается(t *testing.T) {
 
 // Пустое направление — законное значение: у платформы направления нет. Это не
 // то же самое, что forward, и умолчания здесь нет.
-func TestПустоеНаправлениеЗаконно(t *testing.T) {
+func TestEmptyDirectionIsLegal(t *testing.T) {
 	iv := IntervalU{Element: "E1", From: 0, To: 300}
 	if err := iv.Structural(); err != nil {
 		t.Fatalf("интервал без направления отвергнут: %v", err)
@@ -36,14 +36,14 @@ func TestПустоеНаправлениеЗаконно(t *testing.T) {
 	}
 }
 
-func TestНеизвестноеНаправлениеОтвергается(t *testing.T) {
+func TestUnknownDirectionIsRejected(t *testing.T) {
 	iv := IntervalU{Element: "E1", From: 0, To: 10, Direction: Direction("вперёд")}
 	if err := iv.Structural(); err == nil {
 		t.Fatal("неизвестное направление принято")
 	}
 }
 
-func TestПустаяПротяжённостьОтвергается(t *testing.T) {
+func TestEmptyExtentIsRejected(t *testing.T) {
 	var l LinearU
 	if err := l.Structural(); err == nil {
 		t.Fatal("пустая протяжённость принята")
@@ -53,7 +53,7 @@ func TestПустаяПротяжённостьОтвергается(t *testing
 // Directed требует направление у ВСЕХ интервалов: run решётки, у которого
 // направление есть только у части спанов, недоописан, а не «частично
 // ненаправлен».
-func TestDirectedТребуетВсеИнтервалы(t *testing.T) {
+func TestDirectedRequiresAllIntervals(t *testing.T) {
 	full := LinearU{
 		{Element: "E1", From: 0, To: 10, Direction: DirForward},
 		{Element: "E2", From: 0, To: 20, Direction: DirReverse},
@@ -78,7 +78,7 @@ func TestDirectedТребуетВсеИнтервалы(t *testing.T) {
 // диапазоном. Требование связности здесь повторило бы ошибку первой редакции
 // формата, которая безусловно требовала связности карты и конфликтовала с
 // тупиком отстоя.
-func TestНесвязныеИнтервалыЗаконны(t *testing.T) {
+func TestDisjointIntervalsAreLegal(t *testing.T) {
 	l := LinearU{
 		{Element: "E1", From: 0, To: 10},
 		{Element: "E9", From: 500, To: 600},
@@ -91,7 +91,7 @@ func TestНесвязныеИнтервалыЗаконны(t *testing.T) {
 // Смысл параметризации: u и s — разные величины, и смешать их нельзя. Тест
 // фиксирует, что обе координаты живут в одной форме, оставаясь разными типами;
 // присвоение одного другому не компилируется и потому здесь не записано.
-func TestОбеКоординатыЖивутВОднойФорме(t *testing.T) {
+func TestBothCoordinatesShareOneForm(t *testing.T) {
 	u := IntervalU{Element: "E1", From: 0, To: 14.731}
 	s := IntervalS{Element: "E1", From: 0, To: 14731000 * units.Micrometer}
 

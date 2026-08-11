@@ -93,8 +93,8 @@ func allocID(m *mapfmt.Map, prefix string) string {
 	for _, n := range m.Topology.Nodes {
 		used[n.ID] = true
 	}
-	for _, ts := range m.Topology.Trackside {
-		used[ts.ID] = true
+	for _, st := range m.Topology.Structures {
+		used[st.ID] = true
 	}
 	// Run'ы и типы решётки — тоже занятые имена. Без них allocID мог выдать
 	// идентификатор, уже занятый в блоке construction.
@@ -483,7 +483,7 @@ func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
 		return fmt.Errorf("edit: платформа: width %v вне [1, 12]", in.Width)
 	}
 
-	m.Topology.Trackside = append(m.Topology.Trackside, mapfmt.Trackside{
+	m.Topology.Structures = append(m.Topology.Structures, mapfmt.Structure{
 		ID:     allocID(m, "PLAT"),
 		Kind:   "platform",
 		Span:   []netloc.IntervalU{{Element: in.Element, From: in.From, To: in.To}},
@@ -599,10 +599,10 @@ func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
 
 	// Путевые объекты, чьи спаны лежат на удалённых элементах (включая
 	// проходы удалённых стрелок), рвутся и уходят целиком.
-	trackside := m.Topology.Trackside[:0]
-	for _, ts := range m.Topology.Trackside {
+	kept := m.Topology.Structures[:0]
+	for _, st := range m.Topology.Structures {
 		broken := false
-		for _, sp := range ts.Span {
+		for _, sp := range st.Span {
 			if removed[sp.Element] {
 				broken = true
 				break
@@ -613,13 +613,13 @@ func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
 			}
 		}
 		if broken {
-			prev.RemovedTrackside = append(prev.RemovedTrackside, ts.ID)
+			prev.RemovedStructures = append(prev.RemovedStructures, st.ID)
 			continue
 		}
-		trackside = append(trackside, ts)
+		kept = append(kept, st)
 	}
-	m.Topology.Trackside = trackside
-	sort.Strings(prev.RemovedTrackside)
+	m.Topology.Structures = kept
+	sort.Strings(prev.RemovedStructures)
 
 	// Висящие концы: порт узла с менее чем двумя рёбрами и без назначения
 	// закрывается упором — валидатор отвергает висящее ребро без purpose.

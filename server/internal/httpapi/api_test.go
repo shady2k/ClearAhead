@@ -77,14 +77,14 @@ func TestManifestRejects(t *testing.T) {
 	}
 }
 
-// TestУдалённыйАдресГеометрииНеОтвечает — ресурс geometry убран, а не оставлен
+// TestRemovedGeometryAddressDoesNotRespond — ресурс geometry убран, а не оставлен
 // вторым адресом сети (бида ClearAhead-8kx).
 //
 // Проверка стоит отдельно и намеренно: два адреса одного тела — ровно та
 // двусмысленность, ради снятия которой затевался переезд, и вернуть старый
 // адрес «на всякий случай» проще всего молча. Клиента не существует, ломать
 // нечего.
-func TestУдалённыйАдресГеометрииНеОтвечает(t *testing.T) {
+func TestRemovedGeometryAddressDoesNotRespond(t *testing.T) {
 	h, man := newTestHandler(t)
 	for _, p := range []string{
 		"/maps/" + man.MapID + "/revisions/1/geometry",

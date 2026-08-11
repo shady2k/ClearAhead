@@ -38,12 +38,12 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 	return h, st, world
 }
 
-// TestМанифестРегионаНесётЧислаПравилаПодробности — то, ради чего манифест и
+// TestRegionManifestCarriesDetailRuleNumbers — то, ради чего манифест и
 // заведён наполовину: клиент обязан САМ выбрать уровень чанка по расстоянию до
 // оси (chunk.LevelFor), а числа правила он берёт отсюда. Зашитая в клиент копия
 // разошлась бы с сервером молча — не отказом, а сплошными 204 на уровень,
 // которого нет.
-func TestМанифестРегионаНесётЧислаПравилаПодробности(t *testing.T) {
+func TestRegionManifestCarriesDetailRuleNumbers(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/regions/"+st.Manifest.MapID, nil))
@@ -71,7 +71,7 @@ func TestМанифестРегионаНесётЧислаПравилаПод�
 	if got.Revision != st.Manifest.Revision {
 		t.Fatalf("ревизия %d, у карты %d", got.Revision, st.Manifest.Revision)
 	}
-	if got.TrackHash != st.Manifest.TrackHash || got.NetworkHash != st.Manifest.NetworkHash {
+	if got.NetworkModelHash != st.Manifest.NetworkModelHash || got.NetworkHash != st.Manifest.NetworkHash {
 		t.Fatalf("хеши манифеста региона разошлись с манифестом карты: %+v", got)
 	}
 	want := chunkRule{
@@ -100,12 +100,12 @@ func TestМанифестРегионаНесётЧислаПравилаПод�
 	}
 }
 
-// TestМанифестРегионаНеОтдаётПереченьПокрытия — список имеющихся чанков в
+// TestRegionManifestDoesNotServeCoverageList — список имеющихся чанков в
 // манифест не входит и входить не должен: он устареет быстрее, чем доедет, как
 // только появится режим строителя (ClearAhead-vo0). Проверяется по форме
 // ответа: строгий разбор выше уже не пустил бы лишнее поле, но здесь названа
 // причина, а не только факт.
-func TestМанифестРегионаНеОтдаётПереченьПокрытия(t *testing.T) {
+func TestRegionManifestDoesNotServeCoverageList(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/regions/"+st.Manifest.MapID, nil))
@@ -125,10 +125,10 @@ func TestМанифестРегионаНеОтдаётПереченьПокр�
 	}
 }
 
-// TestМанифестРегионаРевалидируется — адрес не называет версию, значит
+// TestRegionManifestRevalidates — адрес не называет версию, значит
 // immutable был бы ложью ценой в навсегда устаревшую ревизию у того, кто
 // манифест уже загрузил.
-func TestМанифестРегионаРевалидируется(t *testing.T) {
+func TestRegionManifestRevalidates(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	url := "/regions/" + st.Manifest.MapID
 
@@ -153,7 +153,7 @@ func TestМанифестРегионаРевалидируется(t *testing.T
 	}
 }
 
-func TestМанифестНесуществующегоРегиона404(t *testing.T) {
+func TestManifestOfUnknownRegionIs404(t *testing.T) {
 	h, _, _ := newRegionsTestHandler(t)
 	for _, p := range []string{"/regions/нетакого", "/regions/" + testRegion} {
 		// testRegion существует в базе мира, но карты с таким именем в памяти
@@ -166,7 +166,7 @@ func TestМанифестНесуществующегоРегиона404(t *test
 	}
 }
 
-func TestМанифестРегионаЧужойМетод405(t *testing.T) {
+func TestRegionManifestForeignMethodIs405(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	rec := do(t, h, http.MethodPost, "/regions/"+st.Manifest.MapID, nil)
 	if rec.Code != http.StatusMethodNotAllowed {
@@ -177,7 +177,7 @@ func TestМанифестРегионаЧужойМетод405(t *testing.T) {
 	}
 }
 
-func TestМанифестРегионаHEAD(t *testing.T) {
+func TestRegionManifestHEAD(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	url := "/regions/" + st.Manifest.MapID
 	get := do(t, h, http.MethodGet, url, nil)
@@ -192,10 +192,10 @@ func TestМанифестРегионаHEAD(t *testing.T) {
 	}
 }
 
-// TestГеопривязкаРегионаДоезжаетКакЕсть — frame отдаётся без перепаковки, а
+// TestRegionGeoreferenceArrivesAsIs — frame отдаётся без перепаковки, а
 // пустой не отдаётся вовсе: пустой объект в ответе клиент был бы обязан
 // отличать от заданной привязки с нулями.
-func TestГеопривязкаРегионаДоезжаетКакЕсть(t *testing.T) {
+func TestRegionGeoreferenceArrivesAsIs(t *testing.T) {
 	h, st, world := newRegionsTestHandler(t)
 	url := "/regions/" + st.Manifest.MapID
 
@@ -234,9 +234,9 @@ func TestГеопривязкаРегионаДоезжаетКакЕсть(t *t
 	}
 }
 
-// TestКореньРегионаРазводитПодресурсы — все три ресурса живут под одним корнем,
+// TestRegionRootRoutesSubresources — все три ресурса живут под одним корнем,
 // и чужая форма адреса даёт 404 при любом методе.
-func TestКореньРегионаРазводитПодресурсы(t *testing.T) {
+func TestRegionRootRoutesSubresources(t *testing.T) {
 	h, st, _ := newRegionsTestHandler(t)
 	region := st.Manifest.MapID
 	rev := strconv.Itoa(st.Manifest.Revision)

@@ -8,7 +8,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-func TestУПрофиляЕстьВерсия(t *testing.T) {
+func TestProfileHasVersion(t *testing.T) {
 	p := mapfmt.DefaultProfile()
 	if p.Version != mapfmt.ProfileVersion {
 		t.Fatalf("версия профиля %d, ожидали %d", p.Version, mapfmt.ProfileVersion)
@@ -18,30 +18,30 @@ func TestУПрофиляЕстьВерсия(t *testing.T) {
 	}
 }
 
-// TestНормыОтвергаютТесныйРадиус — модуль норм обязан назвать себя в тексте
+// TestProfileRejectsTightRadius — модуль норм обязан назвать себя в тексте
 // отказа: карту отвергают по невозможности постройки, а не по форме, и автор
 // карты должен видеть разницу.
 //
 // Рецепт решётки снят: дуга короче прямой, и покрытие ребра run'ом сломалось бы
 // заодно — отказ пришёл бы от модуля отрисовки, который зовётся раньше.
-func TestНормыОтвергаютТесныйРадиус(t *testing.T) {
+func TestProfileRejectsTightRadius(t *testing.T) {
 	m := seedmap.Line(seedmap.WithoutConstruction(),
-		геометрияПерегона([]mapfmt.HPrim{дуга(100, 0.2)}, nil))
-	текст := отказ(t, m)
-	if !strings.Contains(текст, "нормы:") {
-		t.Fatalf("отказ обязан называть модуль «нормы», получено: %s", текст)
+		lineGeometry([]mapfmt.HPrim{arc(100, 0.2)}, nil))
+	text := refusal(t, m)
+	if !strings.Contains(text, "нормы:") {
+		t.Fatalf("отказ обязан называть модуль «нормы», получено: %s", text)
 	}
-	if !strings.Contains(текст, "радиус") {
-		t.Fatalf("отказ обязан называть причину, получено: %s", текст)
+	if !strings.Contains(text, "радиус") {
+		t.Fatalf("отказ обязан называть причину, получено: %s", text)
 	}
 }
 
-func TestНормыОтвергаютКрутойУклон(t *testing.T) {
-	m := seedmap.Line(геометрияПерегона(
-		[]mapfmt.HPrim{прямая(seedmap.LineLengthM)},
+func TestProfileRejectsSteepGrade(t *testing.T) {
+	m := seedmap.Line(lineGeometry(
+		[]mapfmt.HPrim{straight(seedmap.LineLengthM)},
 		[]mapfmt.VPrim{{Kind: "grade", Length: seedmap.LineLengthM, SlopePermille: 50}}))
-	текст := отказ(t, m)
-	if !strings.Contains(текст, "нормы:") || !strings.Contains(текст, "уклон") {
-		t.Fatalf("отказ обязан называть модуль и причину, получено: %s", текст)
+	text := refusal(t, m)
+	if !strings.Contains(text, "нормы:") || !strings.Contains(text, "уклон") {
+		t.Fatalf("отказ обязан называть модуль и причину, получено: %s", text)
 	}
 }

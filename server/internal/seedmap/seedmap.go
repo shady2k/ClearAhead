@@ -69,21 +69,36 @@ func WithTerrain() Option {
 	}
 }
 
-// WithStructure объявляет участок пути несомым сооружением: мостом или
-// тоннелем. На его протяжении рельеф с осью не примиряется.
-func WithStructure(kind, id, element string, fromM, toM float64) Option {
-	return func(m *mapfmt.Map) {
-		m.Topology.Trackside = append(m.Topology.Trackside, mapfmt.Trackside{
-			ID:   id,
-			Kind: kind,
-			Span: netloc.LinearU{{Element: element, From: fromM, To: toM}},
-		})
-	}
+// Две опции на сооружения — ОБЩАЯ и ЧАСТНАЯ, и разница между ними ровно та же,
+// что между двумя объёмами слова «сооружение» (разбор — в шапке mapfmt.Structure):
+//
+//   - WithStructure кладёт ЛЮБОЕ сооружение целиком, как его написал автор
+//     теста. Это класс: платформа с размерами, упор, мост — что угодно;
+//   - WithCarryingStructure объявляет участок пути НЕСОМЫМ — мостом или
+//     тоннелем. Это подмножество {bridge, tunnel}, то самое «искусственное
+//     сооружение», которое единственное меняет поведение рельефа.
+//
+// Частная опция оставлена отдельной, а не свёрнута в общую, ровно потому, что
+// её вызов ЧИТАЕТСЯ как утверждение о рельефе: Line(WithTerrain(),
+// WithCarryingStructure("bridge", ...)) говорит «здесь земля природная», а
+// WithStructure(mapfmt.Structure{Kind: "bridge", ...}) говорит только «в карте
+// лежит запись». Цена — два имени с общим корнем, и различает их причастие
+// «несущее»; это дешевле, чем тест про земляные работы, из вызова которого не
+// видно, что он про земляные работы.
+
+// WithStructure кладёт в карту готовое сооружение любого вида.
+func WithStructure(st mapfmt.Structure) Option {
+	return func(m *mapfmt.Map) { m.Topology.Structures = append(m.Topology.Structures, st) }
 }
 
-// WithTrackside добавляет произвольный путевой объект.
-func WithTrackside(ts mapfmt.Trackside) Option {
-	return func(m *mapfmt.Map) { m.Topology.Trackside = append(m.Topology.Trackside, ts) }
+// WithCarryingStructure объявляет участок пути несомым: мостом или тоннелем. На
+// его протяжении рельеф с осью не примиряется (terrain.carriedSpans).
+func WithCarryingStructure(kind, id, element string, fromM, toM float64) Option {
+	return WithStructure(mapfmt.Structure{
+		ID:   id,
+		Kind: kind,
+		Span: netloc.LinearU{{Element: element, From: fromM, To: toM}},
+	})
 }
 
 // Mutate — точка для порчи карты в тестах валидатора. Отдельное имя нужно
@@ -179,7 +194,7 @@ func Station(opts ...Option) *mapfmt.Map {
 				edge(StationSiding, StationSW2+".S", "N_STOP_SIDING.P1"),
 				edge(StationStub, StationSW2+".D", "N_STOP_STUB.P1"),
 			},
-			Trackside: []mapfmt.Trackside{{
+			Structures: []mapfmt.Structure{{
 				ID:     "PLAT_MAIN",
 				Kind:   "platform",
 				Span:   netloc.LinearU{{Element: StationMain, From: 40, To: 100}},
@@ -293,8 +308,8 @@ func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
 				{ID: "N3", Ports: []mapfmt.Port{{ID: "P1"}}},
 				{ID: "N4", Ports: []mapfmt.Port{{ID: "P1"}}},
 			},
-			Turnouts:  []mapfmt.Turnout{},
-			Trackside: []mapfmt.Trackside{},
+			Turnouts:   []mapfmt.Turnout{},
+			Structures: []mapfmt.Structure{},
 			Edges: []mapfmt.Edge{
 				edge("E1", "N1.P1", "N2.P1"),
 				edge("E2", "N2.P1", "N3.P1"),

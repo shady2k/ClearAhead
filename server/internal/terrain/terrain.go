@@ -207,21 +207,29 @@ func (f *Field) buildGrid() {
 	f.lodGrid = newPointGrid(chunk.Level0RadiusM, f.axis)
 }
 
-// carriedSpans собирает интервалы, на которых путь НЕСОМ сооружением — мостом
-// или тоннелем, — сгруппированные по элементу.
+// carriedSpans собирает интервалы, на которых путь НЕСОМ искусственным
+// сооружением — мостом или тоннелем, — сгруппированные по элементу.
+//
+// ЗДЕСЬ И ЖИВЁТ РАЗНИЦА МЕЖДУ ДВУМЯ СМЫСЛАМИ СЛОВА «СООРУЖЕНИЕ». Массив
+// m.Topology.Structures — это КЛАСС: платформы, упоры, мосты, тоннели. Земляные
+// работы касаются не класса, а подмножества {bridge, tunnel} — того, что путь
+// НЕСЁТ. Платформа стоит рядом с путём, землю под ним не отменяет, и попади она
+// в отбор — рельеф перестал бы примиряться с осью на длине платформы, то есть
+// станция встала бы в природной канаве. Отбор по kind, а не по типу-обёртке,
+// ровно потому, что обёртка называет класс (разбор — mapfmt.Structure).
 //
 // Это первый потребитель общего типа протяжённости за пределами платформ и
 // решётки: сооружение занимает интервал, а не точку, и может пересекать
 // границы элементов (netloc.LinearU, бида ClearAhead-xm7).
 func carriedSpans(m *mapfmt.Map) map[string]netloc.LinearU {
 	out := map[string]netloc.LinearU{}
-	for _, ts := range m.Topology.Trackside {
-		switch ts.Kind {
+	for _, st := range m.Topology.Structures {
+		switch st.Kind {
 		case "bridge", "tunnel":
 		default:
 			continue
 		}
-		for _, iv := range ts.Span {
+		for _, iv := range st.Span {
 			out[iv.Element] = append(out[iv.Element], iv)
 		}
 	}

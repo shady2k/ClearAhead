@@ -14,7 +14,7 @@ func swFixture() Turnout {
 // Проходы стрелки — единственное место, где записано, что от чего идёт. До
 // этого набор был выписан руками в трёх местах (intersect, propagate, compile),
 // и любое устройство с другим числом портов потребовало бы править все три.
-func TestПроходыСтрелки(t *testing.T) {
+func TestTurnoutPassages(t *testing.T) {
 	ps := swFixture().Passages()
 	if len(ps) != 2 {
 		t.Fatalf("проходов %d, у обыкновенной стрелки два", len(ps))
@@ -37,7 +37,7 @@ func TestПроходыСтрелки(t *testing.T) {
 }
 
 // Порядок проходов входит в хеш компиляции, поэтому он часть контракта.
-func TestПорядокПроходовУстойчив(t *testing.T) {
+func TestPassageOrderIsStable(t *testing.T) {
 	a := swFixture().Passages()
 	b := swFixture().Passages()
 	for i := range a {
@@ -52,7 +52,7 @@ func TestПорядокПроходовУстойчив(t *testing.T) {
 
 // ElementEnds обязан покрыть и рёбра, и проходы: он заменил две одинаковые
 // рукописные таблицы, и пропуск любой половины сломал бы распространение поз.
-func TestElementEndsПокрываетРёбраИПроходы(t *testing.T) {
+func TestElementEndsCoversEdgesAndPassages(t *testing.T) {
 	m := &Map{
 		Topology: Topology{
 			Edges:    []Edge{{ID: "E1", Kind: KindRail, From: "N1.P1", To: "ST_A_SW_1.C"}},

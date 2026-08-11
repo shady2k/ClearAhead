@@ -13,7 +13,7 @@ import (
 // была проба, а не дефект недостижимым: порты стрелки просто не заняли рёбрами.
 // Здесь проба доведена до конца.
 //
-// РЕЗУЛЬТАТ: схлопывание реально (TestДубликатСтрелкиСхлопываетПроходы — оба
+// РЕЗУЛЬТАТ: схлопывание реально (TestDuplicateTurnoutCollapsesPassages — оба
 // прохода достаются ЛИШЬ ОДНОЙ из двух стрелок), но карта с таким дубликатом
 // невалидна и БЕЗ проверки повтора: её ловит правило «сколько проходов у порта
 // стрелки» в разборе стыков (validateAxisIntersections). Проверка повтора —
@@ -38,43 +38,43 @@ import (
 // Выбора без третьего варианта: не занять порты рёбрами — отказ
 // validateEdgeEnds; занять — отказ по числу проходов у порта стрелки.
 
-// картаСДвумяСтрелками строит карту, в которой ВСЕ инварианты удовлетворены
+// mapWithTwoTurnouts строит карту, в которой ВСЕ инварианты удовлетворены
 // нарочно: порты стрелок различны и каждый занят своим ребром, у каждого ребра
 // есть геометрия, у стрелки есть геометрия по ключу ID, висящие концы объявлены
 // упорами, якорь один и стоит на порту с одним концом, оси не пересекаются.
 //
 // Единственная переменная — идентификаторы стрелок. Одинаковые дают дефект,
 // разные — контрольную карту, которая обязана проходить валидацию целиком.
-func картаСДвумяСтрелками(ид1, ид2 string) *Map {
-	прямая := func(l float64) Alignments {
+func mapWithTwoTurnouts(id1, id2 string) *Map {
+	straight := func(l float64) Alignments {
 		return Alignments{Horizontal: []HPrim{{Kind: "straight", Length: l}}}
 	}
 	// Боковой проход обязан РАСХОДИТЬСЯ с прямым: два коллинеарных прохода из
 	// одного острия — наложение осей, и карту отвергли бы за него.
-	боковой := Alignments{Horizontal: []HPrim{{Kind: "arc", Radius: 200, Angle: 0.15}}}
+	diverging := Alignments{Horizontal: []HPrim{{Kind: "arc", Radius: 200, Angle: 0.15}}}
 
 	// Порты второй стрелки названы иначе даже при одинаковом ID: одинаковые
 	// имена дали бы повтор квалифицированного порта, и карта умерла бы раньше.
-	стрелки := []Turnout{
-		{ID: ид1, Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-		{ID: ид2, Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
+	turnouts := []Turnout{
+		{ID: id1, Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+		{ID: id2, Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
 	}
 
-	порты := []Port{}
-	рёбра := []Edge{}
-	геомРёбер := map[string]Alignments{}
-	геомСтрелок := map[string]TurnoutGeometry{}
-	for _, t := range стрелки {
-		геомСтрелок[t.ID] = TurnoutGeometry{Straight: прямая(30), Diverging: боковой}
+	ports := []Port{}
+	edges := []Edge{}
+	edgeGeometry := map[string]Alignments{}
+	turnoutGeometry := map[string]TurnoutGeometry{}
+	for _, t := range turnouts {
+		turnoutGeometry[t.ID] = TurnoutGeometry{Straight: straight(30), Diverging: diverging}
 	}
 	i := 0
-	for _, t := range стрелки {
-		for _, конец := range t.PortIDs() {
-			имя := string(rune('A' + i))
+	for _, t := range turnouts {
+		for _, end := range t.PortIDs() {
+			name := string(rune('A' + i))
 			i++
-			порты = append(порты, Port{ID: "P" + имя, Purpose: "buffer_stop"})
-			рёбра = append(рёбра, Edge{ID: "E" + имя, Kind: KindRail, From: "N1.P" + имя, To: конец})
-			геомРёбер["E"+имя] = прямая(100)
+			ports = append(ports, Port{ID: "P" + name, Purpose: "buffer_stop"})
+			edges = append(edges, Edge{ID: "E" + name, Kind: KindRail, From: "N1.P" + name, To: end})
+			edgeGeometry["E"+name] = straight(100)
 		}
 	}
 	return &Map{
@@ -83,11 +83,11 @@ func картаСДвумяСтрелками(ид1, ид2 string) *Map {
 		MapRevision:   1,
 		Anchors:       map[string]Anchor{"N1.PA": {}},
 		Topology: Topology{
-			Nodes:    []Node{{ID: "N1", Ports: порты}},
-			Turnouts: стрелки,
-			Edges:    рёбра,
+			Nodes:    []Node{{ID: "N1", Ports: ports}},
+			Turnouts: turnouts,
+			Edges:    edges,
 		},
-		Geometry: Geometry{Turnouts: геомСтрелок, Edges: геомРёбер},
+		Geometry: Geometry{Turnouts: turnoutGeometry, Edges: edgeGeometry},
 	}
 }
 
@@ -95,16 +95,16 @@ func картаСДвумяСтрелками(ид1, ид2 string) *Map {
 // целиком. Без него разбор ниже ничего не стоил бы: карта, сломанная ещё
 // чем-нибудь, отвергалась бы по любой причине, и вывод о повторе был бы
 // подгонкой.
-func TestКонтрольнаяКартаБезПовтораВалидна(t *testing.T) {
-	if err := Validate(картаСДвумяСтрелками("SW1", "SW2")); err != nil {
+func TestControlMapWithoutDuplicateIsValid(t *testing.T) {
+	if err := Validate(mapWithTwoTurnouts("SW1", "SW2")); err != nil {
 		t.Fatalf("контрольная карта отвергнута: %v — тогда разбор повтора недоказателен", err)
 	}
 }
 
 // Дубликат ID стрелки отвергается прямо — с указанием причины, а не окольным
 // правилом про число проходов у порта.
-func TestДубликатСтрелкиОтвергается(t *testing.T) {
-	err := Validate(картаСДвумяСтрелками("SW", "SW"))
+func TestDuplicateTurnoutIsRejected(t *testing.T) {
+	err := Validate(mapWithTwoTurnouts("SW", "SW"))
 	if err == nil {
 		t.Fatal("карта с двумя стрелками одного ID принята")
 	}
@@ -119,8 +119,8 @@ func TestДубликатСтрелкиОтвергается(t *testing.T) {
 //
 // Тест закрепляет сам механизм — он и есть причина, по которой повтор ID
 // недопустим, независимо от того, каким правилом карта отвергается сегодня.
-func TestДубликатСтрелкиСхлопываетПроходы(t *testing.T) {
-	m := картаСДвумяСтрелками("SW", "SW")
+func TestDuplicateTurnoutCollapsesPassages(t *testing.T) {
+	m := mapWithTwoTurnouts("SW", "SW")
 
 	if len(m.Geometry.Turnouts) != 1 {
 		t.Fatalf("геометрия стрелок: записей %d, у двух одноимённых стрелок она одна", len(m.Geometry.Turnouts))
@@ -144,8 +144,8 @@ func TestДубликатСтрелкиСхлопываетПроходы(t *tes
 // Проверка повтора живёт в collectElements, поэтому прежнее поведение
 // воспроизводится вызовом остальных модулей напрямую, а не правкой валидатора.
 // Порядок тот же, что в Validate.
-func TestДубликатСтрелкиЛовилсяИБезПроверкиПовтора(t *testing.T) {
-	m := картаСДвумяСтрелками("SW", "SW")
+func TestDuplicateTurnoutWasCaughtWithoutDuplicateCheck(t *testing.T) {
+	m := mapWithTwoTurnouts("SW", "SW")
 
 	// Порты: шесть квалифицированных имён стрелок различны, повтора нет.
 	ports, err := m.collectPorts()

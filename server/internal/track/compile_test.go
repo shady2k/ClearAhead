@@ -12,12 +12,12 @@ import (
 // TestCompileFlatLengths — станция плоская, поэтому пространственная длина
 // совпадает с плановой, а порядок элементов в проводе детерминирован.
 func TestCompileFlatLengths(t *testing.T) {
-	ct, rg, err := Compile(seedmap.Station())
+	cn, rg, err := Compile(seedmap.Station())
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
 	// Подход — прямая 120 м.
-	approach := ct.Elements[seedmap.StationApproach]
+	approach := cn.Elements[seedmap.StationApproach]
 	if approach.LengthS != 120*units.Meter || approach.LengthU != 120*units.Meter {
 		t.Fatalf("%s: u=%s s=%s, ожидалось по 120m", seedmap.StationApproach, approach.LengthU, approach.LengthS)
 	}
@@ -44,11 +44,11 @@ func TestCompileRoundingRule(t *testing.T) {
 			Horizontal: []mapfmt.HPrim{half, half, half},
 		}
 	}))
-	ct, _, err := Compile(годная(t, m))
+	cn, _, err := Compile(valid(t, m))
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	if got := ct.Elements[seedmap.LineEdgeID].LengthU; got != 3*units.Micrometer {
+	if got := cn.Elements[seedmap.LineEdgeID].LengthU; got != 3*units.Micrometer {
 		t.Fatalf("длина %d мкм, ожидалось 3: правило округления не сумма округлённых", int64(got))
 	}
 }
@@ -70,16 +70,16 @@ func TestCompileDeterministic(t *testing.T) {
 	}
 }
 
-// подходСУклоном — станция, у которой подход получил вертикальный профиль, и
+// approachWithGrade — станция, у которой подход получил вертикальный профиль, и
 // платформа TSP на нём.
 //
 // Профиль подхода начинается и кончается нулевым уклоном (замыкание с якорем и
 // с проходами стрелки), а в середине уходит в 20‰: пространственная координата
 // s расходится с u, поэтому тест видит, что спаны клиента взяты в u из карты, а
 // симуляции — в s.
-func подходСУклоном() *mapfmt.Map {
+func approachWithGrade() *mapfmt.Map {
 	return seedmap.Station(
-		seedmap.WithTrackside(платформа("TSP", seedmap.StationApproach, 10, 90)),
+		seedmap.WithStructure(platform("TSP", seedmap.StationApproach, 10, 90)),
 		seedmap.Mutate(func(m *mapfmt.Map) {
 			a := m.Geometry.Edges[seedmap.StationApproach]
 			a.Vertical = []mapfmt.VPrim{
@@ -93,9 +93,9 @@ func подходСУклоном() *mapfmt.Map {
 	)
 }
 
-// платформа — путевой объект на элементе от fromM до toM.
-func платформа(id, element string, fromM, toM float64) mapfmt.Trackside {
-	return mapfmt.Trackside{
+// платформа — сооружение на элементе от fromM до toM.
+func platform(id, element string, fromM, toM float64) mapfmt.Structure {
+	return mapfmt.Structure{
 		ID:     id,
 		Kind:   "platform",
 		Span:   netloc.LinearU{{Element: element, From: fromM, To: toM}},
@@ -106,7 +106,7 @@ func платформа(id, element string, fromM, toM float64) mapfmt.Trackside
 }
 
 func TestCompileRenderRole(t *testing.T) {
-	_, rg, err := Compile(годная(t, подходСУклоном()))
+	_, rg, err := Compile(valid(t, approachWithGrade()))
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
@@ -138,41 +138,41 @@ func TestCompileRenderRole(t *testing.T) {
 	}
 }
 
-// TestCompileTracksideSpansInU — спаны клиента в координате u, ровно как в
+// TestCompileStructureSpansInU — спаны клиента в координате u, ровно как в
 // карте; симуляционный спан в s и на уклоне длиннее. Конвертировать обратно
 // из s нельзя: для плоской станции они совпадают, в общем случае нет.
-func TestCompileTracksideSpansInU(t *testing.T) {
-	ct, rg, err := Compile(годная(t, подходСУклоном()))
+func TestCompileStructureSpansInU(t *testing.T) {
+	cn, rg, err := Compile(valid(t, approachWithGrade()))
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
 	// Платформа фабрики на главном пути плюс добавленная на подходе.
-	if len(rg.Trackside) != 2 {
-		t.Fatalf("в RenderGeometry %d путевых объектов, ожидалось 2", len(rg.Trackside))
+	if len(rg.Structures) != 2 {
+		t.Fatalf("в RenderGeometry %d сооружений, ожидалось 2", len(rg.Structures))
 	}
-	var ts RenderTrackside
-	for _, cand := range rg.Trackside {
+	var st RenderStructure
+	for _, cand := range rg.Structures {
 		if cand.ID == "TSP" {
-			ts = cand
+			st = cand
 		}
 	}
-	if ts.ID != "TSP" || ts.Kind != "platform" || ts.Side != "right" {
-		t.Fatalf("объект %+v, ожидался TSP platform right", ts)
+	if st.ID != "TSP" || st.Kind != "platform" || st.Side != "right" {
+		t.Fatalf("объект %+v, ожидался TSP platform right", st)
 	}
-	if ts.Offset != 1.75 || ts.Width != 3.0 {
-		t.Fatalf("размеры платформы (%v, %v) — ожидались (1.75, 3.0) из карты", ts.Offset, ts.Width)
+	if st.Offset != 1.75 || st.Width != 3.0 {
+		t.Fatalf("размеры платформы (%v, %v) — ожидались (1.75, 3.0) из карты", st.Offset, st.Width)
 	}
-	if len(ts.Spans) != 1 {
-		t.Fatalf("у %s %d спанов, ожидался 1", ts.ID, len(ts.Spans))
+	if len(st.Spans) != 1 {
+		t.Fatalf("у %s %d спанов, ожидался 1", st.ID, len(st.Spans))
 	}
-	sp := ts.Spans[0]
+	sp := st.Spans[0]
 	if sp.Element != seedmap.StationApproach || sp.From != 10.0 || sp.To != 90.0 {
 		t.Fatalf("спан клиента (%s, %v, %v) — ожидались значения u из карты (%s, 10, 90)",
 			sp.Element, sp.From, sp.To, seedmap.StationApproach)
 	}
-	ss := ct.Trackside["TSP"]
+	ss := cn.Structures["TSP"]
 	if len(ss) != 1 {
-		t.Fatalf("у CompiledTrack %d спанов, ожидался 1", len(ss))
+		t.Fatalf("у CompiledNetwork %d спанов, ожидался 1", len(ss))
 	}
 	// Начало в плоском участке: s == u. Конец на уклоне: s > u.
 	if ss[0].From.Meters() != 10.0 || ss[0].To.Meters() <= 90.0 {
@@ -221,7 +221,7 @@ func TestCompileConstructionWire(t *testing.T) {
 		t.Fatalf("порядок run'ов в карте не перевёрнут: первый %s — проверять сортировку не на чем",
 			m.Construction.Runs[0].ID)
 	}
-	_, rg, err := Compile(годная(t, m))
+	_, rg, err := Compile(valid(t, m))
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}

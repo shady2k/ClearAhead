@@ -145,9 +145,9 @@ func assertValid(t *testing.T, m *mapfmt.Map, what string) {
 }
 
 // mapDiff — фактические изменения между старой и новой картой: удалённые
-// элементы (рёбра и стрелки), удалённые путевые объекты, порты, получившие
+// элементы (рёбра и стрелки), удалённые сооружения, порты, получившие
 // упор. Независимая проверка предпросмотра.
-func mapDiff(old, new mapfmt.Map) (removed, removedTS, capped []string) {
+func mapDiff(old, new mapfmt.Map) (removed, removedStructures, capped []string) {
 	for _, e := range old.Topology.Edges {
 		found := false
 		for _, ne := range new.Topology.Edges {
@@ -170,15 +170,15 @@ func mapDiff(old, new mapfmt.Map) (removed, removedTS, capped []string) {
 			removed = append(removed, t.ID)
 		}
 	}
-	for _, ts := range old.Topology.Trackside {
+	for _, st := range old.Topology.Structures {
 		found := false
-		for _, nts := range new.Topology.Trackside {
-			if nts.ID == ts.ID {
+		for _, nst := range new.Topology.Structures {
+			if nst.ID == st.ID {
 				found = true
 			}
 		}
 		if !found {
-			removedTS = append(removedTS, ts.ID)
+			removedStructures = append(removedStructures, st.ID)
 		}
 	}
 	purposeOf := func(m mapfmt.Map, port string) string {
@@ -201,15 +201,15 @@ func mapDiff(old, new mapfmt.Map) (removed, removedTS, capped []string) {
 		}
 	}
 	sort.Strings(removed)
-	sort.Strings(removedTS)
+	sort.Strings(removedStructures)
 	sort.Strings(capped)
-	return removed, removedTS, capped
+	return removed, removedStructures, capped
 }
 
-func assertCascade(t *testing.T, prev *ErasePreview, wantRemoved, wantTS, wantCapped []string) {
+func assertCascade(t *testing.T, prev *ErasePreview, wantRemoved, wantStructures, wantCapped []string) {
 	t.Helper()
 	assertJSONEqual(t, wantRemoved, prev.RemovedElements, "каскад: удалённые элементы")
-	assertJSONEqual(t, wantTS, prev.RemovedTrackside, "каскад: порванные путевые объекты")
+	assertJSONEqual(t, wantStructures, prev.RemovedStructures, "каскад: порванные сооружения")
 	assertJSONEqual(t, wantCapped, prev.CappedPorts, "каскад: закрытые упором концы")
 }
 
@@ -360,7 +360,7 @@ func TestFailedApplyLeavesMapByteIdentical(t *testing.T) {
 		{Op: OpExtend, Extend: ExtendIntent{Port: "SW1.C", Chain: mustChain(t, 10)}},
 		// Стирка несуществующей цели.
 		{Op: OpErase, Erase: EraseIntent{Target: "NO_SUCH", Mode: EraseCascade}},
-		// Стирка путевого объекта (не ребро и не стрелка).
+		// Стирка сооружения (не ребро и не стрелка).
 		{Op: OpErase, Erase: EraseIntent{Target: "PLAT_X", Mode: EraseCascade}},
 		// Неизвестная правка.
 		{Op: Op(99)},
@@ -387,12 +387,12 @@ func TestFailedApplyLeavesMapByteIdentical(t *testing.T) {
 
 func TestErasePreviewMatchesActual(t *testing.T) {
 	cases := []struct {
-		name        string
-		target      string
-		mode        EraseMode
-		wantRemoved []string
-		wantTS      []string
-		wantCapped  []string
+		name           string
+		target         string
+		mode           EraseMode
+		wantRemoved    []string
+		wantStructures []string
+		wantCapped     []string
 	}{
 		// Концевое ребро: его конец на стыке становится висящим и закрывается
 		// упором, порт с назначением остаётся как есть.
@@ -419,7 +419,7 @@ func TestErasePreviewMatchesActual(t *testing.T) {
 			if st.Revision() != rev {
 				t.Fatalf("Preview изменил ревизию: %d → %d", rev, st.Revision())
 			}
-			assertCascade(t, prev.Cascade, tc.wantRemoved, tc.wantTS, tc.wantCapped)
+			assertCascade(t, prev.Cascade, tc.wantRemoved, tc.wantStructures, tc.wantCapped)
 
 			before := st.Current()
 			res, err := st.Apply(in)
@@ -432,9 +432,9 @@ func TestErasePreviewMatchesActual(t *testing.T) {
 			assertJSONEqual(t, prev.Map, res.Map, "карта предпросмотра и факта")
 			assertJSONEqual(t, prev.Cascade, res.Cascade, "отчёт предпросмотра и факта")
 
-			gotRemoved, gotTS, gotCapped := mapDiff(before, res.Map)
+			gotRemoved, gotStructures, gotCapped := mapDiff(before, res.Map)
 			assertJSONEqual(t, tc.wantRemoved, gotRemoved, "фактически удалённые элементы")
-			assertJSONEqual(t, tc.wantTS, gotTS, "фактически порванные путевые объекты")
+			assertJSONEqual(t, tc.wantStructures, gotStructures, "фактически порванные сооружения")
 			assertJSONEqual(t, tc.wantCapped, gotCapped, "фактически закрытые упором концы")
 			assertValid(t, &res.Map, "карта после стерки")
 		})
@@ -445,7 +445,7 @@ func TestErasePreviewMatchesActual(t *testing.T) {
 // ребра и платформа на одном из них.
 func TestEraseTurnoutCascade(t *testing.T) {
 	m := testBaseMap()
-	m.Topology.Trackside = []mapfmt.Trackside{{
+	m.Topology.Structures = []mapfmt.Structure{{
 		ID: "PLAT_EA", Kind: "platform",
 		Span: []netloc.IntervalU{{Element: "EA", From: 10, To: 30}},
 		Side: "right", Offset: 1.75, Width: 3.0,
@@ -499,15 +499,15 @@ func TestEraseTurnoutCascade(t *testing.T) {
 		t.Fatalf("Apply: %v", err)
 	}
 	assertJSONEqual(t, prev.Map, res.Map, "карта предпросмотра и факта")
-	gotRemoved, gotTS, gotCapped := mapDiff(before, res.Map)
+	gotRemoved, gotStructures, gotCapped := mapDiff(before, res.Map)
 	assertJSONEqual(t, []string{"EA", "EB", "EC", "SWX"}, gotRemoved, "удалённые элементы")
-	assertJSONEqual(t, []string{"PLAT_EA"}, gotTS, "порванные путевые объекты")
+	assertJSONEqual(t, []string{"PLAT_EA"}, gotStructures, "порванные сооружения")
 	assertJSONEqual(t, []string(nil), gotCapped, "закрытые упором концы")
 	assertValid(t, &res.Map, "карта после стерки стрелки")
 
 	// Платформа лежала на ушедшем ребре EA — её не осталось.
-	if len(res.Map.Topology.Trackside) != 0 {
-		t.Fatalf("путевые объекты уцелели: %s", jsonString(t, res.Map.Topology.Trackside))
+	if len(res.Map.Topology.Structures) != 0 {
+		t.Fatalf("сооружения уцелели: %s", jsonString(t, res.Map.Topology.Structures))
 	}
 }
 

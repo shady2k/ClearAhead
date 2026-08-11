@@ -7,25 +7,25 @@ import (
 
 // Разделители составных адресов не бывают внутри имени. Каждый случай ниже —
 // не гипотеза, а закрытая дыра.
-func TestРазделителиЗапрещеныВИдентификаторе(t *testing.T) {
+func TestSeparatorsAreForbiddenInIdentifier(t *testing.T) {
 	cases := []struct {
 		id     string
-		опасен string
+		hazard string
 	}{
 		{"SW:straight", "ребро с таким именем молча подменяло геометрию прохода стрелки"},
 		{"N1.P1", "порт становится неоднозначным: узел A + порт B.C и узел A.B + порт C дают один адрес"},
-		{"E|1", "поток хеша разделён вертикальной чертой — две разные карты дали бы один track_hash"},
+		{"E|1", "поток хеша разделён вертикальной чертой — две разные карты дали бы один network_model_hash"},
 		{"E/1", "map_id уезжает сегментом URL: карта стала бы недостижимой молча, а не отказом"},
 		{"E@2", "редактор использует собачку при разрезании ребра"},
 	}
 	for _, c := range cases {
 		if err := ValidID("ребро", c.id); err == nil {
-			t.Errorf("принят идентификатор %q, хотя %s", c.id, c.опасен)
+			t.Errorf("принят идентификатор %q, хотя %s", c.id, c.hazard)
 		}
 	}
 }
 
-func TestУправляющиеИПробелыВИдентификаторе(t *testing.T) {
+func TestControlCharsAndSpacesInIdentifier(t *testing.T) {
 	bad := []string{
 		"E\n1",     // ломает построчный поток хеша
 		"E‮1",      // RTL-override: два разных ID выглядят одинаково
@@ -42,7 +42,7 @@ func TestУправляющиеИПробелыВИдентификаторе(t 
 	}
 }
 
-func TestЗаконныеИдентификаторыПринимаются(t *testing.T) {
+func TestLegalIdentifiersAreAccepted(t *testing.T) {
 	good := []string{"ST_A", "ST_A_SW_1", "TRACK_MAIN_1435", "RUN_ST_A_E_T1", "Путь_2", "E1_CONT"}
 	for _, id := range good {
 		if err := ValidID("ребро", id); err != nil {
@@ -57,7 +57,7 @@ func TestЗаконныеИдентификаторыПринимаются(t *t
 // рёбер), а в общей таблице выравниваний проход МОЛЧА затирал геометрию
 // ребра: объявленное автором просто исчезало. Проверка держится на запрете
 // разделителя, поэтому тест стоит здесь, а не в валидаторе топологии.
-func TestРеброПодИменемПроходаОтвергается(t *testing.T) {
+func TestEdgeNamedAsPassageIsRejected(t *testing.T) {
 	m := &Map{
 		FormatVersion: FormatVersion,
 		MapID:         "ST_A",

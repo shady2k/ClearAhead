@@ -13,8 +13,8 @@ import (
 // CompiledElement — линейный элемент после компиляции. Длины в s.
 type CompiledElement struct {
 	ID string
-	// Kind — вид пути (mapfmt.KindRail). Входит в track_hash: это факт о самой
-	// модели пути, а не украшение провода.
+	// Kind — вид пути (mapfmt.KindRail). Входит в network_model_hash: это факт о
+	// самой модели сети, а не украшение провода.
 	Kind    string
 	From    string
 	To      string
@@ -23,7 +23,7 @@ type CompiledElement struct {
 	Prof    Profile
 }
 
-// Протяжённость путевого объекта живёт в общем типе netloc: одна форма на файл,
+// Протяжённость сооружения живёт в общем типе netloc: одна форма на файл,
 // компиляцию и провод, координата — параметр типа (бида ClearAhead-xm7).
 
 // Traversal — направленный переход устройства: проход от порта к порту.
@@ -56,13 +56,25 @@ type CompiledDevice struct {
 	Resource   string
 }
 
-// CompiledTrack — вход физики и безопасности. Координат не содержит.
-type CompiledTrack struct {
-	MapID     string
-	Revision  int
-	Elements  map[string]CompiledElement
-	Trackside map[string]netloc.LinearS
-	Devices   map[string]CompiledDevice
+// CompiledNetwork — вход физики и безопасности. Координат не содержит.
+//
+// Назывался CompiledTrack, и это то же имя вида вместо класса, за которое
+// переименован ресурс: сюда лягут автомобильные дороги, а различает их поле Kind
+// у элемента, а не тип-обёртка. Хеш этой модели зовётся network_model_hash — имя
+// хеша обязано называть то, от чего он считается, иначе повисает в воздухе.
+//
+// Пакет при этом остался track, и это отдельное решение, а не забывчивость:
+// переименование пакета — шум во всех импортах ради того же слова, и делать его
+// стоит тогда, когда в пакет реально приедут дороги. Цена названа: до того дня
+// тип читается как track.CompiledNetwork, где пакет говорит «рельсы», а тип —
+// «сеть». CompiledElement и CompiledDevice трогать не пришлось: они и так
+// называют класс.
+type CompiledNetwork struct {
+	MapID      string
+	Revision   int
+	Elements   map[string]CompiledElement
+	Structures map[string]netloc.LinearS
+	Devices    map[string]CompiledDevice
 }
 
 // RenderPrimitive — примитив плана для клиента. Метры и радианы.
@@ -100,13 +112,13 @@ type RenderElement struct {
 	Role  *RenderRole       `json:"role,omitempty"`
 }
 
-// RenderTrackside — путевой объект на плане (платформа и пр.).
+// RenderStructure — сооружение на плане (платформа и пр.).
 //
 // Размеры платформы — offset (от оси пути до ближней кромки) и width (поперёк)
-// — едут на самом объекте (спека §3): платформа — самостоятельный путевой
-// объект, тип решётки её размеры не определяет. Точечные объекты (buffer_stop)
+// — едут на самом сооружении (спека §3): платформа — самостоятельное
+// сооружение, тип решётки её размеры не определяет. Точечные виды (buffer_stop)
 // размеров не несут.
-type RenderTrackside struct {
+type RenderStructure struct {
 	ID     string         `json:"id"`
 	Kind   string         `json:"kind"`
 	Side   string         `json:"side,omitempty"`
@@ -146,7 +158,7 @@ type RenderGeometry struct {
 	Region             string            `json:"region"`
 	Revision           int               `json:"revision"`
 	Elements           []RenderElement   `json:"elements"`
-	Trackside          []RenderTrackside `json:"trackside,omitempty"`
+	Structures         []RenderStructure `json:"structures,omitempty"`
 	TrackTypes         []RenderTrackType `json:"track_types"`
 	ConstructionRuns   []RenderRun       `json:"construction_runs"`
 	Features           []RenderFeature   `json:"features"`
@@ -216,7 +228,7 @@ type RenderVec struct {
 const PlacementAlgorithm = "placement-v1"
 
 // Compile строит оба артефакта из одной карты.
-func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
+func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 	_, els, err := Propagate(m)
 	if err != nil {
 		return nil, nil, err
@@ -228,12 +240,12 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 	}
 	sort.Strings(ids)
 
-	ct := &CompiledTrack{
-		MapID:     m.MapID,
-		Revision:  m.MapRevision,
-		Elements:  make(map[string]CompiledElement, len(els)),
-		Trackside: map[string]netloc.LinearS{},
-		Devices:   make(map[string]CompiledDevice, len(m.Topology.Turnouts)),
+	cn := &CompiledNetwork{
+		MapID:      m.MapID,
+		Revision:   m.MapRevision,
+		Elements:   make(map[string]CompiledElement, len(els)),
+		Structures: map[string]netloc.LinearS{},
+		Devices:    make(map[string]CompiledDevice, len(m.Topology.Turnouts)),
 	}
 	// Проходы стрелок: элемент {ID}:straight или {ID}:diverging получает роль
 	// ветви. Обычные рёбра роли не несут.
@@ -264,7 +276,7 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("track: %s: %w", id, err)
 		}
-		ct.Elements[id] = CompiledElement{
+		cn.Elements[id] = CompiledElement{
 			ID:      id,
 			Kind:    e.Kind,
 			From:    e.From,
@@ -301,7 +313,7 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		for _, p := range ps {
 			tr = append(tr, Traversal{Passage: p.ID, From: p.From, To: p.To})
 		}
-		ct.Devices[t.ID] = CompiledDevice{
+		cn.Devices[t.ID] = CompiledDevice{
 			ID:         t.ID,
 			Hand:       t.Hand,
 			Ports:      t.PortIDs(),
@@ -320,38 +332,38 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		return nil, nil, err
 	}
 
-	for _, ts := range m.Topology.Trackside {
-		rt := RenderTrackside{
-			ID:     ts.ID,
-			Kind:   ts.Kind,
-			Side:   ts.Side,
-			Offset: ts.Offset,
-			Width:  ts.Width,
-			Spans:  make(netloc.LinearU, 0, len(ts.Span)),
+	for _, st := range m.Topology.Structures {
+		rt := RenderStructure{
+			ID:     st.ID,
+			Kind:   st.Kind,
+			Side:   st.Side,
+			Offset: st.Offset,
+			Width:  st.Width,
+			Spans:  make(netloc.LinearU, 0, len(st.Span)),
 		}
-		spans := make(netloc.LinearS, 0, len(ts.Span))
-		for _, iv := range ts.Span {
+		spans := make(netloc.LinearS, 0, len(st.Span))
+		for _, iv := range st.Span {
 			e, ok := els[iv.Element]
 			if !ok {
-				return nil, nil, fmt.Errorf("track: объект %s ссылается на элемент %s, которого нет", ts.ID, iv.Element)
+				return nil, nil, fmt.Errorf("track: объект %s ссылается на элемент %s, которого нет", st.ID, iv.Element)
 			}
 			// Спан в u уезжает клиенту как есть, из карты: план рисуется в u.
 			rt.Spans = append(rt.Spans, iv)
 			fromU, err := units.MetersToDistance(iv.From)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: %w", ts.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: %w", st.ID, err)
 			}
 			toU, err := units.MetersToDistance(iv.To)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: %w", ts.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: %w", st.ID, err)
 			}
 			fromS, err := e.Prof.UToS(fromU)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: начало: %w", ts.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: начало: %w", st.ID, err)
 			}
 			toS, err := e.Prof.UToS(toU)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: конец: %w", ts.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: конец: %w", st.ID, err)
 			}
 			spans = append(spans, netloc.IntervalS{
 				Element:   iv.Element,
@@ -360,8 +372,8 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 				Direction: iv.Direction,
 			})
 		}
-		rg.Trackside = append(rg.Trackside, rt)
-		ct.Trackside[ts.ID] = spans
+		rg.Structures = append(rg.Structures, rt)
+		cn.Structures[st.ID] = spans
 	}
-	return ct, rg, nil
+	return cn, rg, nil
 }

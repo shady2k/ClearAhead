@@ -5,7 +5,7 @@ import "testing"
 // Инварианты сетки. Именно они были нарушены в согласованном «256 м, шаг 5 м,
 // 53×53», и проверка стоит здесь затем, чтобы та же арифметика не повторилась
 // при следующей правке чисел.
-func TestИнвариантыСетки(t *testing.T) {
+func TestGridInvariants(t *testing.T) {
 	if SideM0%StepM0 != 0 {
 		t.Fatalf("шаг %d не делит сторону %d нацело — сетка невыразима целым числом отсчётов",
 			StepM0, SideM0)
@@ -23,7 +23,7 @@ func TestИнвариантыСетки(t *testing.T) {
 
 // Число отсчётов постоянно на всех уровнях: от этого зависит то, что размер
 // блоба не зависит от уровня и клиент выделяет буфер один раз.
-func TestОтсчётовПоровнуНаВсехУровнях(t *testing.T) {
+func TestSampleCountIsEqualOnAllLevels(t *testing.T) {
 	for level := range 8 {
 		if got := int(SideM(level)/StepM(level)) + 1; got != Samples {
 			t.Fatalf("уровень %d: отсчётов %d, ожидалось %d", level, got, Samples)
@@ -32,7 +32,7 @@ func TestОтсчётовПоровнуНаВсехУровнях(t *testing.T) 
 }
 
 // Каждый следующий уровень вдвое шире и вдвое грубее.
-func TestУровеньВдвоеШиреИГрубее(t *testing.T) {
+func TestLevelIsTwiceWiderAndCoarser(t *testing.T) {
 	for level := range 7 {
 		if SideM(level+1) != 2*SideM(level) {
 			t.Fatalf("уровень %d: сторона не удвоилась", level)
@@ -48,21 +48,21 @@ func TestУровеньВдвоеШиреИГрубее(t *testing.T) {
 //
 // Проверяется координатами, а не значениями рельефа: совпадение обеспечивается
 // тем, что у общего узла один аргумент, и именно это здесь и утверждается.
-func TestОбщийРядСовпадаетССоседом(t *testing.T) {
+func TestSharedRowMatchesNeighbor(t *testing.T) {
 	a := Address{Region: "KRD", Level: 0, CX: 3, CZ: -2}
-	справа := Address{Region: "KRD", Level: 0, CX: 4, CZ: -2}
-	снизу := Address{Region: "KRD", Level: 0, CX: 3, CZ: -1}
+	right := Address{Region: "KRD", Level: 0, CX: 4, CZ: -2}
+	below := Address{Region: "KRD", Level: 0, CX: 3, CZ: -1}
 
 	for j := range Samples {
 		ax, az := a.SampleM(Samples-1, j)
-		bx, bz := справа.SampleM(0, j)
+		bx, bz := right.SampleM(0, j)
 		if ax != bx || az != bz {
 			t.Fatalf("столбец %d: (%v, %v) против (%v, %v)", j, ax, az, bx, bz)
 		}
 	}
 	for i := range Samples {
 		ax, az := a.SampleM(i, Samples-1)
-		bx, bz := снизу.SampleM(i, 0)
+		bx, bz := below.SampleM(i, 0)
 		if ax != bx || az != bz {
 			t.Fatalf("ряд %d: (%v, %v) против (%v, %v)", i, ax, az, bx, bz)
 		}
@@ -70,7 +70,7 @@ func TestОбщийРядСовпадаетССоседом(t *testing.T) {
 }
 
 // Чанк покрывает ровно свою сторону: от угла до угла следующего.
-func TestЧанкПокрываетСвоюСторону(t *testing.T) {
+func TestChunkCoversItsSide(t *testing.T) {
 	a := Address{Level: 2, CX: 5, CZ: 7}
 	ox, oz := a.OriginM()
 	fx, fz := a.SampleM(Samples-1, Samples-1)
@@ -81,7 +81,7 @@ func TestЧанкПокрываетСвоюСторону(t *testing.T) {
 
 // Порядок байт назван в контракте явно — значит должен проверяться, а не
 // подразумеваться. Автор адаптера читает блоб по этому правилу.
-func TestПорядокБайтLittleEndian(t *testing.T) {
+func TestByteOrderIsLittleEndian(t *testing.T) {
 	h := make([]int16, Samples*Samples)
 	h[0] = 0x0102
 	h[1] = -2 // 0xFFFE
@@ -102,7 +102,7 @@ func TestПорядокБайтLittleEndian(t *testing.T) {
 
 // Порядок обхода — строками: индекс (i, j) обязан совпасть с j*Samples+i,
 // иначе клиент прочтёт поверхность транспонированной.
-func TestПорядокОбходаСтроками(t *testing.T) {
+func TestTraversalOrderIsRowMajor(t *testing.T) {
 	if Index(0, 1) != Samples {
 		t.Fatalf("Index(0,1) = %d, ожидалось %d — обход должен идти строками", Index(0, 1), Samples)
 	}
@@ -112,7 +112,7 @@ func TestПорядокОбходаСтроками(t *testing.T) {
 }
 
 // Блоб неверного размера — отказ, а не молчаливое усечение.
-func TestБлобНеверногоРазмераОтвергается(t *testing.T) {
+func TestBlobOfWrongSizeIsRejected(t *testing.T) {
 	if _, err := DecodeHeights(make([]byte, HeightsBytes-1)); err == nil {
 		t.Fatal("короткий блоб принят")
 	}

@@ -40,8 +40,11 @@ var ErrInvalid = errors.New("mapstore: карта не прошла провер
 // не мутируют старое, поэтому держать *State и читать его поля можно без
 // блокировок.
 type State struct {
-	Map          mapfmt.Map
-	Track        *track.CompiledTrack
+	Map mapfmt.Map
+	// Network — нормализованная модель сети, вход физики и безопасности. Поле
+	// звалось Track вслед за типом track.CompiledTrack; оба имени называли ВИД
+	// (рельсы), тогда как модель держит КЛАСС — дороги приедут в неё же.
+	Network      *track.CompiledNetwork
 	Render       *track.RenderGeometry
 	RenderBody   []byte // сериализованная геометрия — то же, что описывает ETag
 	Manifest     track.Manifest
@@ -98,11 +101,11 @@ func buildState(m mapfmt.Map) (*State, error) {
 	if err := mapfmt.Validate(&owned); err != nil {
 		return nil, err
 	}
-	ct, rg, err := track.Compile(&owned)
+	cn, rg, err := track.Compile(&owned)
 	if err != nil {
 		return nil, err
 	}
-	man, err := track.BuildManifest(&owned, ct, rg)
+	man, err := track.BuildManifest(&owned, cn, rg)
 	if err != nil {
 		return nil, err
 	}
@@ -118,7 +121,7 @@ func buildState(m mapfmt.Map) (*State, error) {
 		return nil, err
 	}
 	return &State{
-		Map: owned, Track: ct, Render: rg,
+		Map: owned, Network: cn, Render: rg,
 		RenderBody: body, Manifest: man, ManifestBody: manBody,
 	}, nil
 }

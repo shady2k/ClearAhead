@@ -29,7 +29,7 @@ func main() {
 		log.Fatalf("затравочная карта не проходит вход: %v", err)
 	}
 	log.Printf("карта %s ревизия %d: %d элементов, сеть %s",
-		st.Manifest.MapID, st.Manifest.Revision, len(st.Track.Elements), st.Manifest.NetworkHash[:12])
+		st.Manifest.MapID, st.Manifest.Revision, len(st.Network.Elements), st.Manifest.NetworkHash[:12])
 
 	world, err := worldstore.Open(*dbPath)
 	if err != nil {
@@ -40,11 +40,11 @@ func main() {
 	// Бутстрап идемпотентен: заполняет только пустую базу. Затравка строится
 	// кодом, а не читается файлом, — карта, собранная кодом, не может разойтись
 	// со схемой формата, потому что перестаёт компилироваться.
-	rep, сделан, err := worldgen.Bootstrap(world, seed, 1)
+	rep, seeded, err := worldgen.Bootstrap(world, seed, 1)
 	if err != nil {
 		log.Fatalf("бутстрап мира: %v", err)
 	}
-	if сделан {
+	if seeded {
 		log.Printf("мир засеян: регион %s, чанков %d, %.1f МБ",
 			rep.Region, rep.TotalChunks, float64(rep.TotalBytes)/1e6)
 	} else {

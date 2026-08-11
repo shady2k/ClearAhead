@@ -15,7 +15,7 @@ import (
 // которых не начинается там же, где другой. Здесь оно строится напрямую в
 // скомпилированной форме — файл карты такое устройство пока не записывает, и
 // это разные вопросы: обобщена форма, которую видит код.
-func TestСкомпилированноеУстройствоНеТрёхпортовое(t *testing.T) {
+func TestCompiledDeviceIsNotThreePorted(t *testing.T) {
 	diamond := CompiledDevice{
 		ID:    "ST_A_DK_1",
 		Ports: []string{"ST_A_DK_1.A", "ST_A_DK_1.B", "ST_A_DK_1.C", "ST_A_DK_1.D"},
@@ -60,15 +60,15 @@ func TestСкомпилированноеУстройствоНеТрёхпор�
 
 // Стрелка из карты компилируется в устройство с тремя портами и двумя
 // переходами, оба из общего порта.
-func TestСтрелкаКомпилируетсяВУстройство(t *testing.T) {
-	ct, _, err := Compile(seedmap.Station())
+func TestTurnoutCompilesToDevice(t *testing.T) {
+	cn, _, err := Compile(seedmap.Station())
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	if len(ct.Devices) == 0 {
+	if len(cn.Devices) == 0 {
 		t.Fatal("устройств нет")
 	}
-	for id, d := range ct.Devices {
+	for id, d := range cn.Devices {
 		if len(d.Ports) != 3 {
 			t.Fatalf("%s: портов %d, у обыкновенной стрелки три", id, len(d.Ports))
 		}

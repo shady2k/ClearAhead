@@ -8,14 +8,14 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// перевёрнутыйПодход разворачивает запись подхода к общему порту SW1: было
+// reversedApproach разворачивает запись подхода к общему порту SW1: было
 // ребро, приходящее в C, стало ребро, выходящее из C.
 //
 // Якорь НЕ меняется. Поза якоря смотрит внутрь своего элемента, а не «по ходу
 // движения»: на конце To она указывает назад в ребро, на конце From — вперёд. В
 // обоих вариантах это одно и то же направление, поэтому физическая станция одна
 // и та же, записанная с разных концов, и геометрия обязана совпасть.
-func перевёрнутыйПодход() seedmap.Option {
+func reversedApproach() seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) {
 		for i, e := range m.Topology.Edges {
 			if e.ID == seedmap.StationApproach {
@@ -33,7 +33,7 @@ func TestTurnoutBothOrientations(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ребро приходит в C: %v", err)
 	}
-	posesFrom, _, err := Propagate(годная(t, seedmap.Station(перевёрнутыйПодход())))
+	posesFrom, _, err := Propagate(valid(t, seedmap.Station(reversedApproach())))
 	if err != nil {
 		t.Fatalf("ребро выходит из C: %v", err)
 	}

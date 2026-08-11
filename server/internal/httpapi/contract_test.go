@@ -38,7 +38,7 @@ type wireNetwork struct {
 	Region             string          `json:"region"`
 	Revision           int             `json:"revision"`
 	Elements           []wireElement   `json:"elements"`
-	Trackside          []wireTrackside `json:"trackside"`
+	Structures         []wireStructure `json:"structures"`
 	TrackTypes         []wireTrackType `json:"track_types"`
 	ConstructionRuns   []wireRun       `json:"construction_runs"`
 	Features           []wireFeature   `json:"features"`
@@ -110,7 +110,7 @@ type wireRole struct {
 	Frog    string `json:"frog,omitempty"`
 }
 
-type wireTrackside struct {
+type wireStructure struct {
 	ID     string     `json:"id"`
 	Kind   string     `json:"kind"`
 	Side   string     `json:"side"`
@@ -230,27 +230,27 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 
 	// Путевые объекты: спаны в координате u, как в карте. Unknown kind не
 	// пройдёт — клиент рисует только то, что знает.
-	if len(w.Trackside) == 0 {
-		t.Fatal("в контракте нет trackside")
+	if len(w.Structures) == 0 {
+		t.Fatal("в контракте нет structures")
 	}
-	for _, ts := range w.Trackside {
-		if ts.ID == "" {
-			t.Fatal("путевой объект без ID")
+	for _, st := range w.Structures {
+		if st.ID == "" {
+			t.Fatal("сооружение без ID")
 		}
-		switch ts.Kind {
+		switch st.Kind {
 		case "platform", "buffer_stop":
 		default:
-			t.Fatalf("неизвестный kind путевого объекта: %q", ts.Kind)
+			t.Fatalf("неизвестный kind сооружения: %q", st.Kind)
 		}
-		if ts.Kind == "platform" && (ts.Offset <= 0 || ts.Width <= 0) {
-			t.Fatalf("платформа %s без размеров: offset %g, width %g", ts.ID, ts.Offset, ts.Width)
+		if st.Kind == "platform" && (st.Offset <= 0 || st.Width <= 0) {
+			t.Fatalf("платформа %s без размеров: offset %g, width %g", st.ID, st.Offset, st.Width)
 		}
-		if len(ts.Spans) == 0 {
-			t.Fatalf("путевой объект %s без спанов", ts.ID)
+		if len(st.Spans) == 0 {
+			t.Fatalf("сооружение %s без спанов", st.ID)
 		}
-		for _, s := range ts.Spans {
+		for _, s := range st.Spans {
 			if s.Element == "" || s.From < 0 || s.To < s.From {
-				t.Fatalf("путевой объект %s: неверный спан %+v", ts.ID, s)
+				t.Fatalf("сооружение %s: неверный спан %+v", st.ID, s)
 			}
 		}
 	}
@@ -312,17 +312,17 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 
 // compileFixture грузит карту-фикстуру и компилирует её — общий вход для тестов
 // провода и манифеста.
-func compileFixture(t *testing.T) (*mapfmt.Map, *track.CompiledTrack, *track.RenderGeometry) {
+func compileFixture(t *testing.T) (*mapfmt.Map, *track.CompiledNetwork, *track.RenderGeometry) {
 	t.Helper()
 	m := seedmap.Station()
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("валидация: %v", err)
 	}
-	ct, rg, err := track.Compile(m)
+	cn, rg, err := track.Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	return m, ct, rg
+	return m, cn, rg
 }
 
 // renderStation компилирует карту-фикстуру и сериализует сеть так же, как это
@@ -348,8 +348,8 @@ func renderStation(t *testing.T) []byte {
 // клиент не знает map_id и ревизию заранее и берёт их из этого ответа, поэтому
 // манифест обязан доехать без искажений и без лишних полей.
 func TestManifestFromFixture(t *testing.T) {
-	m, ct, rg := compileFixture(t)
-	man, err := track.BuildManifest(m, ct, rg)
+	m, cn, rg := compileFixture(t)
+	man, err := track.BuildManifest(m, cn, rg)
 	if err != nil {
 		t.Fatalf("манифест: %v", err)
 	}

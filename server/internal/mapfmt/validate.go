@@ -49,7 +49,7 @@ func Validate(m *Map) error {
 	if err := m.validateEdgeEnds(ports); err != nil {
 		return err
 	}
-	if err := m.validateTrackside(elements); err != nil {
+	if err := m.validateStructures(elements); err != nil {
 		return err
 	}
 	if err := validateGeoreference(m.Georeference); err != nil {
@@ -127,7 +127,7 @@ func validateAlignments(id string, a Alignments) error {
 			return fmt.Errorf("mapfmt: %s[%d]: неизвестный примитив плана %q", id, i, p.Kind)
 		}
 	}
-	// Длина считается единственной функцией — той же, что зовёт validateTrackside.
+	// Длина считается единственной функцией — той же, что зовёт validateStructures.
 	uH, err := horizontalLengthU(a)
 	if err != nil {
 		return fmt.Errorf("mapfmt: %s: %w", id, err)
@@ -388,56 +388,66 @@ func (m *Map) validateEdgeEnds(ports map[string]Port) error {
 	return nil
 }
 
-func (m *Map) validateTrackside(elements map[string]bool) error {
+// validateStructures — перечень видов сооружений и единственное место, где он
+// записан. Здесь же видно, ПОЧЕМУ массив зовётся structures, а не trackside:
+// половина перечня стоит не сбоку от пути, а под ним (разбор — в шапке типа
+// Structure).
+func (m *Map) validateStructures(elements map[string]bool) error {
 	all := m.AllAlignments()
 	seen := map[string]bool{}
-	for _, ts := range m.Topology.Trackside {
-		if err := ValidID("путевой объект", ts.ID); err != nil {
+	for _, st := range m.Topology.Structures {
+		if err := ValidID("сооружение", st.ID); err != nil {
 			return err
 		}
-		if seen[ts.ID] {
-			return fmt.Errorf("mapfmt: путевой объект %q объявлен дважды", ts.ID)
+		if seen[st.ID] {
+			return fmt.Errorf("mapfmt: сооружение %q объявлено дважды", st.ID)
 		}
-		seen[ts.ID] = true
-		switch ts.Kind {
+		seen[st.ID] = true
+		switch st.Kind {
 		case "platform", "buffer_stop":
+			// Стоит РЯДОМ с путём и на землю не влияет.
 		case "bridge", "tunnel":
-			// Искусственное сооружение. Для симуляции сегодня это аннотация;
-			// для рельефа — исключение: на протяжении моста и тоннеля земля НЕ
-			// примиряется с осью пути (см. пакет terrain). Без этого земляные
-			// работы сравняли бы долину под мостом и прокопали траншею над
-			// тоннелем.
+			// ИСКУССТВЕННОЕ СООРУЖЕНИЕ — узкий смысл слова внутри класса
+			// structures: путь здесь НЕСОМ, а не обрамлён. Для симуляции сегодня
+			// это аннотация; для рельефа — исключение: на протяжении моста и
+			// тоннеля земля НЕ примиряется с осью пути (terrain.carriedSpans
+			// отбирает ровно эти два вида). Без этого земляные работы сравняли бы
+			// долину под мостом и прокопали траншею над тоннелем.
+			//
+			// Отсюда и правило на будущее: новый вид дописывается в верхнюю ветку,
+			// если он землю не трогает, и в нижнюю, если несёт путь. Ветки
+			// различаются не оформлением, а тем, кто их читает.
 		default:
-			return fmt.Errorf("mapfmt: путевой объект %s: неизвестный kind %q", ts.ID, ts.Kind)
+			return fmt.Errorf("mapfmt: сооружение %s: неизвестный kind %q", st.ID, st.Kind)
 		}
 		// Форма протяжённости — непустота, порядок концов, допустимость
 		// направления — проверяется один раз на все слои (пакет netloc).
-		if err := ts.Span.Structural(); err != nil {
-			return fmt.Errorf("mapfmt: путевой объект %s: %w", ts.ID, err)
+		if err := st.Span.Structural(); err != nil {
+			return fmt.Errorf("mapfmt: сооружение %s: %w", st.ID, err)
 		}
-		for _, iv := range ts.Span {
+		for _, iv := range st.Span {
 			if !elements[iv.Element] {
-				return fmt.Errorf("mapfmt: путевой объект %s ссылается на несуществующий элемент %s", ts.ID, iv.Element)
+				return fmt.Errorf("mapfmt: сооружение %s ссылается на несуществующий элемент %s", st.ID, iv.Element)
 			}
 			u, err := horizontalLengthU(all[iv.Element])
 			if err != nil {
-				return fmt.Errorf("mapfmt: путевой объект %s: длина элемента %s: %w", ts.ID, iv.Element, err)
+				return fmt.Errorf("mapfmt: сооружение %s: длина элемента %s: %w", st.ID, iv.Element, err)
 			}
 			from, err := units.MetersToDistance(iv.From)
 			if err != nil {
-				return fmt.Errorf("mapfmt: путевой объект %s: начало интервала: %w", ts.ID, err)
+				return fmt.Errorf("mapfmt: сооружение %s: начало интервала: %w", st.ID, err)
 			}
 			to, err := units.MetersToDistance(iv.To)
 			if err != nil {
-				return fmt.Errorf("mapfmt: путевой объект %s: конец интервала: %w", ts.ID, err)
+				return fmt.Errorf("mapfmt: сооружение %s: конец интервала: %w", st.ID, err)
 			}
 			// Границы — в целых микрометрах, а не в метрах-float: округление к
 			// ближайшему микрометру есть правило формата (спека §3), и
 			// сравнение float'ов отвергало бы интервал, кончающийся ровно на
 			// конце элемента. Порядок концов уже проверен выше.
 			if from < 0 || to > u {
-				return fmt.Errorf("mapfmt: путевой объект %s: интервал [%v, %v] вне элемента %s длиной %s",
-					ts.ID, iv.From, iv.To, iv.Element, u)
+				return fmt.Errorf("mapfmt: сооружение %s: интервал [%v, %v] вне элемента %s длиной %s",
+					st.ID, iv.From, iv.To, iv.Element, u)
 			}
 		}
 	}
@@ -445,7 +455,7 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 }
 
 // horizontalLengthU — единственное место, где считается длина горизонтальной
-// цепочки. И validateAlignments, и validateTrackside зовут её: два независимых
+// цепочки. И validateAlignments, и validateStructures зовут её: два независимых
 // расчёта одного и того же числа рано или поздно разойдутся.
 //
 // Правило округления спеки §3: сумма индивидуально округлённых длин.

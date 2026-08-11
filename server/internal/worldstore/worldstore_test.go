@@ -11,7 +11,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
-func открыть(t *testing.T) *Store {
+func openStore(t *testing.T) *Store {
 	t.Helper()
 	s, err := Open(filepath.Join(t.TempDir(), "world.db"))
 	if err != nil {
@@ -21,14 +21,14 @@ func открыть(t *testing.T) *Store {
 	return s
 }
 
-func регион(t *testing.T, s *Store) {
+func putRegion(t *testing.T, s *Store) {
 	t.Helper()
 	if err := s.PutRegion(Region{ID: "ST_A", Frame: `{"datum":"WGS84"}`, Epoch: 1}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 }
 
-func рельеф(t *testing.T) *terrain.Field {
+func newField(t *testing.T) *terrain.Field {
 	t.Helper()
 	m := seedmap.Station(seedmap.WithTerrain())
 	if err := mapfmt.Validate(m); err != nil {
@@ -45,7 +45,7 @@ func рельеф(t *testing.T) *terrain.Field {
 	return field
 }
 
-func положитьЧанк(t *testing.T, s *Store, f *terrain.Field, a chunk.Address) {
+func putChunk(t *testing.T, s *Store, f *terrain.Field, a chunk.Address) {
 	t.Helper()
 	h, err := f.ChunkHeights(a)
 	if err != nil {
@@ -69,35 +69,35 @@ func положитьЧанк(t *testing.T, s *Store, f *terrain.Field, a chunk.
 //
 // Проверка идёт через базу намеренно: она ловит не только арифметику сетки, но
 // и кодирование блоба — порядок байт и порядок обхода.
-func TestОбщийРядСходитсяЧерезБазу(t *testing.T) {
-	s := открыть(t)
-	регион(t, s)
-	f := рельеф(t)
+func TestSharedRowAgreesThroughStore(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
+	f := newField(t)
 
-	левый := chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 0}
-	правый := chunk.Address{Region: "ST_A", Level: 0, CX: 1, CZ: 0}
-	нижний := chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 1}
-	for _, a := range []chunk.Address{левый, правый, нижний} {
-		положитьЧанк(t, s, f, a)
+	left := chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 0}
+	right := chunk.Address{Region: "ST_A", Level: 0, CX: 1, CZ: 0}
+	below := chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 1}
+	for _, a := range []chunk.Address{left, right, below} {
+		putChunk(t, s, f, a)
 	}
 
-	л, ok, err := s.GetChunk(левый)
+	leftChunk, ok, err := s.GetChunk(left)
 	if err != nil || !ok {
 		t.Fatalf("левый чанк: ok=%v err=%v", ok, err)
 	}
-	п, _, _ := s.GetChunk(правый)
-	н, _, _ := s.GetChunk(нижний)
+	rightChunk, _, _ := s.GetChunk(right)
+	belowChunk, _, _ := s.GetChunk(below)
 
 	for j := range chunk.Samples {
-		a := л.Heights[chunk.Index(chunk.Samples-1, j)]
-		b := п.Heights[chunk.Index(0, j)]
+		a := leftChunk.Heights[chunk.Index(chunk.Samples-1, j)]
+		b := rightChunk.Heights[chunk.Index(0, j)]
 		if a != b {
 			t.Fatalf("столбец %d: левый %d см, правый %d см", j, a, b)
 		}
 	}
 	for i := range chunk.Samples {
-		a := л.Heights[chunk.Index(i, chunk.Samples-1)]
-		b := н.Heights[chunk.Index(i, 0)]
+		a := leftChunk.Heights[chunk.Index(i, chunk.Samples-1)]
+		b := belowChunk.Heights[chunk.Index(i, 0)]
 		if a != b {
 			t.Fatalf("ряд %d: верхний %d см, нижний %d см", i, a, b)
 		}
@@ -106,9 +106,9 @@ func TestОбщийРядСходитсяЧерезБазу(t *testing.T) {
 
 // Разреженность — свойство хранилища, а не сбой: спросивший пустоту получает
 // «здесь ничего нет», а не отказ.
-func TestОтсутствующийЧанкНеОшибка(t *testing.T) {
-	s := открыть(t)
-	регион(t, s)
+func TestMissingChunkIsNotAnError(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
 
 	c, ok, err := s.GetChunk(chunk.Address{Region: "ST_A", Level: 0, CX: 9999, CZ: -9999})
 	if err != nil {
@@ -121,9 +121,9 @@ func TestОтсутствующийЧанкНеОшибка(t *testing.T) {
 
 // Блоб переживает запись и чтение без потерь, включая отрицательные отсчёты:
 // int16 знаковый, и ошибка в знаке дала бы выемки высотой в 655 метров.
-func TestБлобПереживаетКруг(t *testing.T) {
-	s := открыть(t)
-	регион(t, s)
+func TestBlobSurvivesRoundTrip(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
 
 	h := make([]int16, chunk.Samples*chunk.Samples)
 	for i := range h {
@@ -152,13 +152,13 @@ func TestБлобПереживаетКруг(t *testing.T) {
 
 // Хеш служит ETag'ом, значит обязан меняться вместе с телом и не меняться без
 // него.
-func TestХешСледуетЗаТелом(t *testing.T) {
-	s := открыть(t)
-	регион(t, s)
+func TestHashFollowsBody(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
 	a := chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 0}
 
 	h := make([]int16, chunk.Samples*chunk.Samples)
-	положить := func(base int64) string {
+	put := func(base int64) string {
 		t.Helper()
 		if err := s.PutChunk(Chunk{Address: a, Revision: 1, BaseZmm: base, Heights: h}); err != nil {
 			t.Fatalf("запись: %v", err)
@@ -167,24 +167,24 @@ func TestХешСледуетЗаТелом(t *testing.T) {
 		return c.Hash
 	}
 
-	первый := положить(140000)
-	if положить(140000) != первый {
+	first := put(140000)
+	if put(140000) != first {
 		t.Fatal("хеш изменился без изменения тела")
 	}
 	h[42] = 7
-	if положить(140000) == первый {
+	if put(140000) == first {
 		t.Fatal("хеш не изменился при изменении отсчёта")
 	}
 	h[42] = 0
-	if положить(999000) == первый {
+	if put(999000) == first {
 		t.Fatal("хеш не изменился при смене опорной высоты")
 	}
 }
 
 // Ссылка чанка на несуществующий регион не должна проходить: без включённых
 // внешних ключей SQLite пропустил бы её молча.
-func TestЧанкБезРегионаОтвергается(t *testing.T) {
-	s := открыть(t)
+func TestChunkWithoutRegionIsRejected(t *testing.T) {
+	s := openStore(t)
 	h := make([]int16, chunk.Samples*chunk.Samples)
 	err := s.PutChunk(Chunk{
 		Address: chunk.Address{Region: "НЕТ_ТАКОГО", Level: 0},

@@ -32,7 +32,7 @@ func newNetworkTestHandler(t *testing.T) (http.Handler, *mapstore.State) {
 	return NewNetworkHandler(s), st
 }
 
-func TestСетьРегионаОтдаётсяЦеликом(t *testing.T) {
+func TestRegionNetworkIsServedWhole(t *testing.T) {
 	h, st := newNetworkTestHandler(t)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", networkURL(st.Manifest.MapID, st.Manifest.Revision), nil))
@@ -63,7 +63,7 @@ func TestСетьРегионаОтдаётсяЦеликом(t *testing.T) {
 	}
 }
 
-func TestСетьОтдаёт304НаСвойETag(t *testing.T) {
+func TestNetworkIsServed304ForItsOwnETag(t *testing.T) {
 	h, st := newNetworkTestHandler(t)
 	r := httptest.NewRequest("GET", networkURL(st.Manifest.MapID, st.Manifest.Revision), nil)
 	r.Header.Set("If-None-Match", `"`+st.Manifest.NetworkHash+`"`)
@@ -77,7 +77,7 @@ func TestСетьОтдаёт304НаСвойETag(t *testing.T) {
 	}
 }
 
-func TestСетьОтвергаетЧужойРегионРевизиюИМетод(t *testing.T) {
+func TestNetworkRejectsForeignRegionRevisionAndMethod(t *testing.T) {
 	h, st := newNetworkTestHandler(t)
 	id := st.Manifest.MapID
 	cases := []struct {
@@ -98,7 +98,7 @@ func TestСетьОтвергаетЧужойРегионРевизиюИМет�
 	}
 }
 
-func TestСетьНеверныйАдресОтдаётся404(t *testing.T) {
+func TestNetworkBadAddressIsServed404(t *testing.T) {
 	h, st := newNetworkTestHandler(t)
 	id := st.Manifest.MapID
 	rev := strconv.Itoa(st.Manifest.Revision)
@@ -120,10 +120,10 @@ func TestСетьНеверныйАдресОтдаётся404(t *testing.T) {
 	}
 }
 
-// TestСетьHEAD — HEAD обязателен наравне с GET (RFC 9110): на нём держится
+// TestNetworkHEAD — HEAD обязателен наравне с GET (RFC 9110): на нём держится
 // проверка кэша прокси и клиентов. Первая редакция ручки геометрии отвечала на
 // него 405, и поймано это было не тестом, а живым curl -I на гейте эпика.
-func TestСетьHEAD(t *testing.T) {
+func TestNetworkHEAD(t *testing.T) {
 	h, st := newNetworkTestHandler(t)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("HEAD", networkURL(st.Manifest.MapID, st.Manifest.Revision), nil))
@@ -135,8 +135,8 @@ func TestСетьHEAD(t *testing.T) {
 	}
 }
 
-// TestСетьПустойСтарт — карты в памяти нет: 404, а не паника.
-func TestСетьПустойСтарт(t *testing.T) {
+// TestNetworkEmptyStart — карты в памяти нет: 404, а не паника.
+func TestNetworkEmptyStart(t *testing.T) {
 	h := NewNetworkHandler(mapstore.Open())
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", networkURL("ST_A", 1), nil))

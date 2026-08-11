@@ -15,7 +15,7 @@ func TestStationCompiles(t *testing.T) {
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("валидация: %v", err)
 	}
-	ct, rg, err := Compile(m)
+	cn, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция (замыкание не сошлось?): %v", err)
 	}
@@ -25,15 +25,15 @@ func TestStationCompiles(t *testing.T) {
 	if len(m.Topology.Turnouts) != 2 {
 		t.Fatalf("стрелок %d, у горловины две", len(m.Topology.Turnouts))
 	}
-	if len(ct.Elements) != len(rg.Elements) {
-		t.Fatalf("элементов в CompiledTrack %d, в RenderGeometry %d", len(ct.Elements), len(rg.Elements))
+	if len(cn.Elements) != len(rg.Elements) {
+		t.Fatalf("элементов в CompiledNetwork %d, в RenderGeometry %d", len(cn.Elements), len(rg.Elements))
 	}
 	// Станция плоская: пространственная длина совпадает с плановой.
-	for id, e := range ct.Elements {
+	for id, e := range cn.Elements {
 		if e.LengthS != e.LengthU {
 			t.Fatalf("%s: s=%s u=%s, станция объявлена плоской", id, e.LengthS, e.LengthU)
 		}
 	}
-	t.Logf("станция скомпилирована: %d элементов, %d устройств, %d путевых объектов",
-		len(ct.Elements), len(ct.Devices), len(ct.Trackside))
+	t.Logf("станция скомпилирована: %d элементов, %d устройств, %d сооружений",
+		len(cn.Elements), len(cn.Devices), len(cn.Structures))
 }

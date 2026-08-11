@@ -12,7 +12,7 @@ import (
 
 // Карта строится фабрикой, а не читается файлом: тест не должен зависеть от
 // боевых данных и ломаться от их правки.
-func загрузитьКарту(t *testing.T) *mapfmt.Map {
+func loadMap(t *testing.T) *mapfmt.Map {
 	t.Helper()
 	m := seedmap.Station(seedmap.WithTerrain())
 	if err := mapfmt.Validate(m); err != nil {
@@ -21,7 +21,7 @@ func загрузитьКарту(t *testing.T) *mapfmt.Map {
 	return m
 }
 
-func поле(t *testing.T, m *mapfmt.Map) (*Field, map[string]track.Element) {
+func buildField(t *testing.T, m *mapfmt.Map) (*Field, map[string]track.Element) {
 	t.Helper()
 	_, els, err := track.Propagate(m)
 	if err != nil {
@@ -36,11 +36,11 @@ func поле(t *testing.T, m *mapfmt.Map) (*Field, map[string]track.Element) {
 
 // Приёмочный критерий биды: высоты согласованы с уклоном пути. Под осью земля
 // обязана лежать на отметке оси — иначе путь висел бы в воздухе или тонул.
-func TestПодОсьюЗемляНаОтметкеПути(t *testing.T) {
-	m := загрузитьКарту(t)
-	f, els := поле(t, m)
+func TestGroundUnderAxisSitsAtTrackElevation(t *testing.T) {
+	m := loadMap(t)
+	f, els := buildField(t, m)
 
-	проверено := 0
+	checked := 0
 	for id, e := range els {
 		pts, err := sampleAxis(e, nil)
 		if err != nil {
@@ -52,13 +52,13 @@ func TestПодОсьюЗемляНаОтметкеПути(t *testing.T) {
 				t.Fatalf("%s: под осью в (%.3f, %.3f) земля на %.6f, ось на %.6f",
 					id, p.X, p.Y, got, p.Z)
 			}
-			проверено++
+			checked++
 		}
 	}
-	if проверено == 0 {
+	if checked == 0 {
 		t.Fatal("не проверено ни одной точки")
 	}
-	t.Logf("проверено точек оси: %d", проверено)
+	t.Logf("проверено точек оси: %d", checked)
 }
 
 // РЕГРЕССИЯ ClearAhead-27n: ось на нуле при базе рельефа 140.
@@ -84,62 +84,62 @@ func TestПодОсьюЗемляНаОтметкеПути(t *testing.T) {
 //
 // Мост и тоннель порог не задевают: там ось землю не тянет, и sampleAxis такие
 // участки в выборку не берёт вовсе.
-func TestОтметкаОсиСогласованаСБазойРельефа(t *testing.T) {
-	карты := map[string]*mapfmt.Map{
+func TestAxisElevationAgreesWithTerrainBase(t *testing.T) {
+	maps := map[string]*mapfmt.Map{
 		"перегон": seedmap.Line(seedmap.WithTerrain()),
 		"станция": seedmap.Station(seedmap.WithTerrain()),
 		"перегон из двух рёбер": seedmap.Corridor(seedmap.WithTerrain()),
 	}
-	for имя, m := range карты {
-		t.Run(имя, func(t *testing.T) {
-			f, els := поле(t, m)
+	for name, m := range maps {
+		t.Run(name, func(t *testing.T) {
+			f, els := buildField(t, m)
 
-			размах := 0.0
+			amplitude := 0.0
 			for _, o := range m.Terrain.Octaves {
-				размах += o.AmplitudeM
+				amplitude += o.AmplitudeM
 			}
-			if размах <= 0 {
+			if amplitude <= 0 {
 				t.Fatal("рецепт без амплитуд: порогу неоткуда взяться")
 			}
 
-			худшийОтступ, худшаяГлубина := 0.0, 0.0
-			var худшая axisPoint
-			проверено := 0
+			worstOffset, worstDepth := 0.0, 0.0
+			var worstPoint axisPoint
+			checked := 0
 			for id, e := range els {
 				pts, err := sampleAxis(e, nil)
 				if err != nil {
 					t.Fatalf("%s: выборка оси: %v", id, err)
 				}
 				for _, p := range pts {
-					отступ := math.Abs(p.Z - f.BaseZ())
-					if отступ > худшийОтступ {
-						худшийОтступ, худшая = отступ, p
-						худшаяГлубина = math.Abs(p.Z - f.NaturalM(p.X, p.Y))
+					offset := math.Abs(p.Z - f.BaseZ())
+					if offset > worstOffset {
+						worstOffset, worstPoint = offset, p
+						worstDepth = math.Abs(p.Z - f.NaturalM(p.X, p.Y))
 					}
-					проверено++
+					checked++
 				}
 			}
-			if проверено == 0 {
+			if checked == 0 {
 				t.Fatal("не проверено ни одной точки оси")
 			}
-			if худшийОтступ > размах {
+			if worstOffset > amplitude {
 				t.Fatalf("ось в (%.1f, %.1f) на отметке %.2f, база рельефа %.2f: "+
 					"отступ %.2f м при размахе рельефа %.2f м; "+
 					"земляные работы роют здесь %.2f м",
-					худшая.X, худшая.Y, худшая.Z, f.BaseZ(),
-					худшийОтступ, размах, худшаяГлубина)
+					worstPoint.X, worstPoint.Y, worstPoint.Z, f.BaseZ(),
+					worstOffset, amplitude, worstDepth)
 			}
 			t.Logf("точек оси %d, худший отступ от базы %.2f м при размахе %.2f м",
-				проверено, худшийОтступ, размах)
+				checked, worstOffset, amplitude)
 		})
 	}
 }
 
 // Вдали от пути земля природная: земляные работы не должны доставать до
 // горизонта.
-func TestВдалиОтПутиЗемляПриродная(t *testing.T) {
-	m := загрузитьКарту(t)
-	f, _ := поле(t, m)
+func TestGroundFarFromTrackIsNatural(t *testing.T) {
+	m := loadMap(t)
+	f, _ := buildField(t, m)
 
 	x, y := 50000.0, 50000.0
 	if got, want := f.WorkedM(x, y), f.NaturalM(x, y); got != want {
@@ -149,9 +149,9 @@ func TestВдалиОтПутиЗемляПриродная(t *testing.T) {
 
 // Рецепт с одной затравкой даёт один рельеф; с разной — разный. Без первого
 // карта не воспроизводима, без второго затравка не работает.
-func TestЗатравкаОпределяетРельеф(t *testing.T) {
-	m := загрузитьКарту(t)
-	f1, _ := поле(t, m)
+func TestSeedDeterminesTerrain(t *testing.T) {
+	m := loadMap(t)
+	f1, _ := buildField(t, m)
 
 	a := f1.NaturalM(1234.5, -678.9)
 	b := f1.NaturalM(1234.5, -678.9)
@@ -159,9 +159,9 @@ func TestЗатравкаОпределяетРельеф(t *testing.T) {
 		t.Fatalf("один вызов дал %v, другой %v", a, b)
 	}
 
-	m2 := загрузитьКарту(t)
+	m2 := loadMap(t)
 	m2.Terrain.Seed++
-	f2, _ := поле(t, m2)
+	f2, _ := buildField(t, m2)
 	if f2.NaturalM(1234.5, -678.9) == a {
 		t.Fatal("смена затравки не изменила рельеф")
 	}
@@ -170,9 +170,9 @@ func TestЗатравкаОпределяетРельеф(t *testing.T) {
 // Квантование — не украшение, а условие переносимости между машинами: даже при
 // расхождении в последних битах сантиметр совпадёт. Проверяем, что округление
 // происходит ровно один раз и от рабочей высоты.
-func TestКвантованиеВСантиметры(t *testing.T) {
-	m := загрузитьКарту(t)
-	f, _ := поле(t, m)
+func TestQuantizationToCentimeters(t *testing.T) {
+	m := loadMap(t)
+	f, _ := buildField(t, m)
 
 	for _, p := range [][2]float64{{0, 0}, {150.25, -3.5}, {-800, 900}} {
 		cm, err := f.HeightCm(p[0], p[1])
@@ -194,11 +194,11 @@ func TestКвантованиеВСантиметры(t *testing.T) {
 // Карта здесь одноэлементная намеренно. На станции соседние пути тянут землю к
 // себе, и на её геометрии проверка вышла бы неубедительной: земля сдвинулась
 // бы, но не до природной. Изолированный перегон даёт однозначный ответ.
-func TestПодМостомЗемляОстаётсяПриродной(t *testing.T) {
+func TestGroundUnderBridgeStaysNatural(t *testing.T) {
 	for _, kind := range []string{"bridge", "tunnel"} {
 		t.Run(kind, func(t *testing.T) {
-			m := одноРебро(t, nil)
-			безСооружения, els := поле(t, m)
+			m := singleEdge(t, nil)
+			withoutStructure, els := buildField(t, m)
 
 			e := els[seedmap.LineEdgeID]
 			pts, err := sampleAxis(e, nil)
@@ -208,38 +208,38 @@ func TestПодМостомЗемляОстаётсяПриродной(t *testi
 			p := pts[len(pts)/2]
 
 			// Контроль: без сооружения земля притянута к оси.
-			if !математическиРавны(безСооружения.WorkedM(p.X, p.Y), p.Z) {
+			if !nearlyEqual(withoutStructure.WorkedM(p.X, p.Y), p.Z) {
 				t.Fatalf("без сооружения земля %v, ось %v",
-					безСооружения.WorkedM(p.X, p.Y), p.Z)
+					withoutStructure.WorkedM(p.X, p.Y), p.Z)
 			}
 			// И она заметно отличается от природной — иначе проверка ниже
 			// прошла бы сама собой на плоском рельефе.
-			if математическиРавны(безСооружения.WorkedM(p.X, p.Y), безСооружения.NaturalM(p.X, p.Y)) {
+			if nearlyEqual(withoutStructure.WorkedM(p.X, p.Y), withoutStructure.NaturalM(p.X, p.Y)) {
 				t.Fatal("природная земля совпала с осью — тест ничего не докажет")
 			}
 
-			сСооружением, _ := поле(t, одноРебро(t, &mapfmt.Trackside{
+			withStructure, _ := buildField(t, singleEdge(t, &mapfmt.Structure{
 				ID:   "SOORUZHENIE",
 				Kind: kind,
 				Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: seedmap.LineLengthM}},
 			}))
 
-			got := сСооружением.WorkedM(p.X, p.Y)
-			want := сСооружением.NaturalM(p.X, p.Y)
-			if !математическиРавны(got, want) {
+			got := withStructure.WorkedM(p.X, p.Y)
+			want := withStructure.NaturalM(p.X, p.Y)
+			if !nearlyEqual(got, want) {
 				t.Fatalf("%s: земля %v, ожидалась природная %v", kind, got, want)
 			}
 		})
 	}
 }
 
-// одноРебро — минимальный перегон с рельефом, при необходимости несомый
+// singleEdge — минимальный перегон с рельефом, при необходимости несомый
 // сооружением.
-func одноРебро(t *testing.T, ts *mapfmt.Trackside) *mapfmt.Map {
+func singleEdge(t *testing.T, st *mapfmt.Structure) *mapfmt.Map {
 	t.Helper()
 	opts := []seedmap.Option{seedmap.WithTerrain()}
-	if ts != nil {
-		opts = append(opts, seedmap.WithTrackside(*ts))
+	if st != nil {
+		opts = append(opts, seedmap.WithStructure(*st))
 	}
 	m := seedmap.Line(opts...)
 	if err := mapfmt.Validate(m); err != nil {
@@ -248,4 +248,4 @@ func одноРебро(t *testing.T, ts *mapfmt.Trackside) *mapfmt.Map {
 	return m
 }
 
-func математическиРавны(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+func nearlyEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
