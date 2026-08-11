@@ -194,14 +194,34 @@ func Station(opts ...Option) *mapfmt.Map {
 				edge(StationSiding, StationSW2+".S", "N_STOP_SIDING.P1"),
 				edge(StationStub, StationSW2+".D", "N_STOP_STUB.P1"),
 			},
-			Structures: []mapfmt.Structure{{
-				ID:     "PLAT_MAIN",
-				Kind:   "platform",
-				Span:   netloc.LinearU{{Element: StationMain, From: 40, To: 100}},
-				Side:   "right",
-				Offset: 1.75,
-				Width:  3,
-			}},
+			Structures: []mapfmt.Structure{
+				{
+					ID:   "PLAT_MAIN",
+					Kind: "platform",
+					Span: netloc.LinearU{{Element: StationMain, From: 40, To: 100}},
+					Side: "right",
+					// Отступ 1.745 — не округление прежних 1.75, а СЛЕДСТВИЕ:
+					// это нормируемое расстояние от оси до кромки НИЗКОЙ
+					// платформы (профиль норм 2). Высота 0.2 выбрана не вкусом,
+					// а согласием с ним: высокая платформа при таком отступе
+					// нарушила бы габарит и была бы отвергнута валидатором.
+					// Прежние 1.75 стояли до появления высоты, когда отличить
+					// низкую от высокой было нечем.
+					Offset:        1.745,
+					Width:         3,
+					Height:        0.2,
+					SlabThickness: 0.35,
+				},
+				// Упоры. Их не было НИ ОДНОГО до 2026-08-12, и это была дыра
+				// затравки, а не контракта: валидатор принимал вид buffer_stop,
+				// провод умел его везти, а создавать их было некому. Разбор
+				// снесённого спайка назвал это дырой Д8 и заодно объяснил,
+				// почему её не замечали: спайк выводил упоры ИЗ ТОПОЛОГИИ сам,
+				// то есть рисовал то, чего ему не присылали.
+				bufferStop("BS_MAIN", StationMain, 230),
+				bufferStop("BS_SIDING", StationSiding, 60),
+				bufferStop("BS_STUB", StationStub, 30),
+			},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{
@@ -235,6 +255,27 @@ func Station(opts ...Option) *mapfmt.Map {
 // TrackTypeID — единственный тип решётки, порождаемый фабрикой.
 const TrackTypeID = "TRACK_MAIN_1435"
 
+// bufferStop — тупиковый упор в конце элемента.
+//
+// Интервал ТОЧЕЧНЫЙ (from == to): упор стоит на конце, а не занимает
+// протяжённость. Валидатор это проверяет и заодно требует, чтобы порт в этом
+// конце был объявлен тупиковым: сооружение тупик ПОДТВЕРЖДАЕТ, а объявляет его
+// топология (mapfmt.checkBufferStopPort).
+//
+// Размеры предварительные, происхождение названо: 1.10 и поперечник около
+// 1.8 м — константы снесённого спайка (BUFFER_H, gauge/2 + 0.20 на сторону),
+// замеренные брифом разбора §1.5. Происхождение не есть норма, и когда источник
+// норм появится, числа поменяются вместе с профилем, а не поодиночке.
+func bufferStop(id, element string, atU float64) mapfmt.Structure {
+	return mapfmt.Structure{
+		ID:     id,
+		Kind:   "buffer_stop",
+		Span:   netloc.LinearU{{Element: element, From: atU, To: atU}},
+		Height: 1.10,
+		Width:  1.8,
+	}
+}
+
 func turnout(id string) mapfmt.Turnout {
 	return mapfmt.Turnout{
 		ID:    id,
@@ -257,11 +298,26 @@ func turnoutGeometry() mapfmt.TurnoutGeometry {
 func construction(runs []mapfmt.ConstructionRun) *mapfmt.Construction {
 	return &mapfmt.Construction{
 		DefaultType: TrackTypeID,
+		// Вертикальный стек. Числа ПРЕДВАРИТЕЛЬНЫЕ, и происхождение у них
+		// честное: константы снесённого спайка, замеренные брифом разбора §1.5
+		// (BALLAST_DEPTH 0.30, SLEEPER_H 0.20, CRIB_Y 0.10, откос 1:1,5), а
+		// rail.height 0.18 — высота Р65. Происхождение не есть норма: источник
+		// не назначен, и когда он появится, числа поменяются вместе с профилем.
+		//
+		// Сумма важнее слагаемых: 0.30 + 0.20 + 0.18 = 0.68 м — ровно на
+		// столько земляные работы клали землю выше должного, пока z считался
+		// отметкой земли, а не поверхности катания.
 		Types: []mapfmt.TrackType{{
 			ID:      TrackTypeID,
 			Gauge:   1.435,
-			Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28},
-			Ballast: mapfmt.TrackBallast{HalfWidth: 1.75},
+			Rail:    mapfmt.TrackRail{Height: 0.18},
+			Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
+			Ballast: mapfmt.TrackBallast{
+				HalfWidth: 1.75,
+				Depth:     0.30,
+				CribDepth: 0.10,
+				SideSlope: 1.5,
+			},
 		}},
 		Runs: runs,
 	}

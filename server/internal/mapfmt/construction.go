@@ -222,7 +222,47 @@ func checkTrackType(prefix string, t *TrackType) error {
 	if !(t.Ballast.HalfWidth >= MinBallastHalfWidth && t.Ballast.HalfWidth <= MaxBallastHalfWidth) {
 		return bad("ballast.half_width", t.Ballast.HalfWidth, MinBallastHalfWidth, MaxBallastHalfWidth)
 	}
+
+	// Вертикальный стек (редакция 6 §3). Обязательность обеспечивается
+	// ДИАПАЗОНОМ: пропущенное поле — ноль, ноль вне [min, max], карта
+	// отвергнута. Отдельной проверки «поле задано» не заводится — две проверки
+	// одного рано или поздно разойдутся.
+	if !(t.Rail.Height >= MinRailHeight && t.Rail.Height <= MaxRailHeight) {
+		return bad("rail.height", t.Rail.Height, MinRailHeight, MaxRailHeight)
+	}
+	if !(t.Sleeper.Height >= MinSleeperHeight && t.Sleeper.Height <= MaxSleeperHeight) {
+		return bad("sleeper.height", t.Sleeper.Height, MinSleeperHeight, MaxSleeperHeight)
+	}
+	if !(t.Ballast.Depth >= MinBallastDepth && t.Ballast.Depth <= MaxBallastDepth) {
+		return bad("ballast.depth", t.Ballast.Depth, MinBallastDepth, MaxBallastDepth)
+	}
+	if !(t.Ballast.SideSlope >= MinBallastSideSlope && t.Ballast.SideSlope <= MaxBallastSideSlope) {
+		return bad("ballast.side_slope", t.Ballast.SideSlope, MinBallastSideSlope, MaxBallastSideSlope)
+	}
+	// CribDepth — единственная величина стека, чья граница не константа:
+	// засыпать ящик выше верха шпалы значит закопать её, а ниже постели —
+	// отрицательная засыпка. Ноль законен (призма вровень с постелью), поэтому
+	// нижняя граница включающая, и «поле не задано» здесь НЕ отличается от
+	// «задан ноль» — намеренно: это единственное поле стека, у которого ноль
+	// осмыслен.
+	if !(t.Ballast.CribDepth >= 0 && t.Ballast.CribDepth <= t.Sleeper.Height) {
+		return fmt.Errorf(
+			"%sтип %q: ballast.crib_depth %g вне [0, sleeper.height = %g]: шпальный ящик нельзя засыпать выше верха шпалы",
+			prefix, t.ID, t.Ballast.CribDepth, t.Sleeper.Height)
+	}
 	return nil
+}
+
+// FormationToRailTop — расстояние от верха основной площадки до поверхности
+// катания. ПРОИЗВОДНАЯ величина, и это решение, а не удобство (редакция 6 §3.2).
+//
+// В карте её нет: авторское поле рядом со слагаемыми — второй источник истины,
+// допуск согласования и вопрос «какое из двух верно» при расхождении. В проводе
+// она есть, потому что провод производен, автора у него нет, и разойтись с
+// собой он не может; зато сложение, выполненное клиентом и рельефом по
+// отдельности, разойдётся округлением.
+func (t TrackType) FormationToRailTop() float64 {
+	return t.Ballast.Depth + t.Sleeper.Height + t.Rail.Height
 }
 
 // elementDomains возвращает домены [0, U] всех линейных элементов (рёбер и
@@ -262,26 +302,48 @@ const (
 	MinPlatformWidth, MaxPlatformWidth   = 1.0, 12.0 // поперёк: реальные пассажирские платформы 2–12 м
 )
 
-// checkPlatformSizes проверяет размеры платформ: offset и width обязательны
-// (платформа без ширины не рисуется никак) и лежат в правдоподобных пределах.
-// Обязательность обеспечивается диапазоном: пропущенное поле — ноль, а ноль вне
-// [min, max]. Проверка !(v >= min && v <= max) отвергает и NaN, и бесконечность
-// наравне с выходом за границы — валидатор не обязан полагаться на checkFinite.
-// Остальные kind'ы (buffer_stop) размеров не несут: это точечные объекты.
+// checkPlatformSizes проверяет размеры сооружений, несущих габарит: платформы и
+// упора. Обязательность обеспечивается диапазоном: пропущенное поле — ноль, а
+// ноль вне [min, max]. Проверка !(v >= min && v <= max) отвергает и NaN, и
+// бесконечность наравне с выходом за границы — валидатор не обязан полагаться на
+// checkFinite.
+//
+// Имя осталось платформенным, хотя проверяется уже не только платформа: упор
+// получил габарит редакцией 6 §4.2 и попал сюда же, потому что довод один —
+// сооружение без размеров не рисуется никак, а умолчание в клиенте запрещено.
+// Мост и тоннель размеров по-прежнему не несут: их геометрия — отдельный слой
+// (map-content-design §9а), и заводить им ширину сейчас значило бы объявить
+// форму без исполнителя.
 func (m *Map) checkPlatformSizes(prefix string) error {
-	bad := func(id, what string, v, min, max float64) error {
-		return fmt.Errorf("%sплатформа %q: %s %g вне [%g, %g]", prefix, id, what, v, min, max)
+	bad := func(what, id, field string, v, min, max float64) error {
+		return fmt.Errorf("%s%s %q: %s %g вне [%g, %g]", prefix, what, id, field, v, min, max)
 	}
 	for i := range m.Topology.Structures {
 		st := &m.Topology.Structures[i]
-		if st.Kind != "platform" {
-			continue
-		}
-		if !(st.Offset >= MinPlatformOffset && st.Offset <= MaxPlatformOffset) {
-			return bad(st.ID, "offset", st.Offset, MinPlatformOffset, MaxPlatformOffset)
-		}
-		if !(st.Width >= MinPlatformWidth && st.Width <= MaxPlatformWidth) {
-			return bad(st.ID, "width", st.Width, MinPlatformWidth, MaxPlatformWidth)
+		switch st.Kind {
+		case "platform":
+			if !(st.Offset >= MinPlatformOffset && st.Offset <= MaxPlatformOffset) {
+				return bad("платформа", st.ID, "offset", st.Offset, MinPlatformOffset, MaxPlatformOffset)
+			}
+			if !(st.Width >= MinPlatformWidth && st.Width <= MaxPlatformWidth) {
+				return bad("платформа", st.ID, "width", st.Width, MinPlatformWidth, MaxPlatformWidth)
+			}
+			// Вертикаль платформы (редакция 6 §4.1). Height — НАД ПОВЕРХНОСТЬЮ
+			// КАТАНИЯ: до объявления датума это число было бессмысленным, и
+			// потому его не было.
+			if !(st.Height >= MinPlatformHeight && st.Height <= MaxPlatformHeight) {
+				return bad("платформа", st.ID, "height", st.Height, MinPlatformHeight, MaxPlatformHeight)
+			}
+			if !(st.SlabThickness >= MinPlatformSlabThick && st.SlabThickness <= MaxPlatformSlabThick) {
+				return bad("платформа", st.ID, "slab_thickness", st.SlabThickness, MinPlatformSlabThick, MaxPlatformSlabThick)
+			}
+		case "buffer_stop":
+			if !(st.Height >= MinBufferStopHeight && st.Height <= MaxBufferStopHeight) {
+				return bad("упор", st.ID, "height", st.Height, MinBufferStopHeight, MaxBufferStopHeight)
+			}
+			if !(st.Width >= MinBufferStopWidth && st.Width <= MaxBufferStopWidth) {
+				return bad("упор", st.ID, "width", st.Width, MinBufferStopWidth, MaxBufferStopWidth)
+			}
 		}
 	}
 	return nil

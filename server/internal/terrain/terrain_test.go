@@ -34,23 +34,52 @@ func buildField(t *testing.T, m *mapfmt.Map) (*Field, map[string]track.Element) 
 	return f, els
 }
 
-// Приёмочный критерий биды: высоты согласованы с уклоном пути. Под осью земля
-// обязана лежать на отметке оси — иначе путь висел бы в воздухе или тонул.
-func TestGroundUnderAxisSitsAtTrackElevation(t *testing.T) {
+// Под осью земля лежит НЕ на отметке оси, а на высоту конструкции ниже, и это
+// главное следствие датума z.
+//
+// # Что здесь изменилось 2026-08-12 и почему это была ошибка, а не выбор
+//
+// Тест звался TestGroundUnderAxisSitsAtTrackElevation и требовал совпадения
+// земли с отметкой оси. Требование было верным ровно до тех пор, пока не было
+// сказано, ЧТО ТАКОЕ отметка оси. Контракт отрисовки редакции 6 §2 назвал её
+// поверхностью катания — верхом головки рельса, — и совпадение земли с ней
+// стало означать, что балласт, шпала и рельс занимают нулевую высоту.
+//
+// Цена прежней трактовки посчитана, а не оценена: на затравке ST_A земля
+// строилась на 0.68 м выше должного (0.30 балласт + 0.20 шпала + 0.18 рельс).
+// Бида ClearAhead-s6v оценивала «примерно полметра» — оценка была занижена на
+// треть, и это записано затем, чтобы её не приняли задним числом за замер.
+//
+// Выборка идёт с nil-раскладкой НАМЕРЕННО: так p.Z остаётся отметкой ГОЛОВКИ
+// РЕЛЬСА, и разность с землёй видна числом. Передай сюда настоящие спаны —
+// тест снова стал бы проверять равенство и молча прошёл бы при нулевой
+// поправке, то есть перестал бы ловить ровно ту ошибку, ради которой написан.
+func TestGroundSitsBelowRailheadByTrackStructure(t *testing.T) {
 	m := loadMap(t)
 	f, els := buildField(t, m)
 
+	// Ожидаемая высота конструкции берётся из карты, а не пишется числом:
+	// правка затравки обязана менять ожидание вместе с фактом. Но ОДНО число
+	// названо явно ниже — иначе тест согласится с любой поправкой, включая
+	// нулевую.
+	typ := m.Construction.Types[0]
+	wantDrop := typ.FormationToRailTop()
+	if math.Abs(wantDrop-0.68) > 1e-9 {
+		t.Fatalf("высота конструкции затравки %.6f, ожидалось 0.68 — поменялись числа стека", wantDrop)
+	}
+
 	checked := 0
 	for id, e := range els {
-		pts, err := sampleAxis(e, nil)
+		pts, err := sampleAxis(e, nil, nil)
 		if err != nil {
 			t.Fatalf("%s: выборка оси: %v", id, err)
 		}
 		for _, p := range pts {
 			got := f.WorkedM(p.X, p.Y)
-			if math.Abs(got-p.Z) > 1e-9 {
-				t.Fatalf("%s: под осью в (%.3f, %.3f) земля на %.6f, ось на %.6f",
-					id, p.X, p.Y, got, p.Z)
+			want := p.Z - wantDrop
+			if math.Abs(got-want) > 1e-9 {
+				t.Fatalf("%s: под осью в (%.3f, %.3f) земля на %.6f, ожидалось %.6f (головка рельса %.6f минус конструкция %.6f)",
+					id, p.X, p.Y, got, want, p.Z, wantDrop)
 			}
 			checked++
 		}
@@ -106,7 +135,7 @@ func TestAxisElevationAgreesWithTerrainBase(t *testing.T) {
 			var worstPoint axisPoint
 			checked := 0
 			for id, e := range els {
-				pts, err := sampleAxis(e, nil)
+				pts, err := sampleAxis(e, nil, nil)
 				if err != nil {
 					t.Fatalf("%s: выборка оси: %v", id, err)
 				}
@@ -201,16 +230,20 @@ func TestGroundUnderBridgeStaysNatural(t *testing.T) {
 			withoutStructure, els := buildField(t, m)
 
 			e := els[seedmap.LineEdgeID]
-			pts, err := sampleAxis(e, nil)
+			pts, err := sampleAxis(e, nil, nil)
 			if err != nil {
 				t.Fatalf("выборка оси: %v", err)
 			}
 			p := pts[len(pts)/2]
 
-			// Контроль: без сооружения земля притянута к оси.
-			if !nearlyEqual(withoutStructure.WorkedM(p.X, p.Y), p.Z) {
-				t.Fatalf("без сооружения земля %v, ось %v",
-					withoutStructure.WorkedM(p.X, p.Y), p.Z)
+			// Контроль: без сооружения земля притянута к оси — на высоту
+			// конструкции ниже поверхности катания (см.
+			// TestGroundSitsBelowRailheadByTrackStructure о том, почему не
+			// вровень).
+			wantAxis := p.Z - m.Construction.Types[0].FormationToRailTop()
+			if !nearlyEqual(withoutStructure.WorkedM(p.X, p.Y), wantAxis) {
+				t.Fatalf("без сооружения земля %v, ожидалось %v (ось %v)",
+					withoutStructure.WorkedM(p.X, p.Y), wantAxis, p.Z)
 			}
 			// И она заметно отличается от природной — иначе проверка ниже
 			// прошла бы сама собой на плоском рельефе.

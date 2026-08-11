@@ -270,18 +270,48 @@ func TestPlatformDimensionsAreCheckedWithoutConstructionBlock(t *testing.T) {
 		seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithStructure(bare)), "offset")
 
 	withDimensions := bare
-	withDimensions.Offset = 1.75
+	withDimensions.Offset = 1.745
 	withDimensions.Width = 3
+	// Вертикаль с редакции 6 так же обязательна, как ширина, и по тому же
+	// доводу: платформа без высоты не рисуется, а умолчание в клиенте
+	// запрещено. Проверяем это отдельным отказом, чтобы «забыли height» не
+	// пряталось за «забыли offset».
+	rejectsConstruction(t,
+		seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithStructure(withDimensions)), "height")
+	withDimensions.Height = 0.2
+	withDimensions.SlabThickness = 0.35
 	accepts(t, seedmap.Line(seedmap.WithoutConstruction(), seedmap.WithStructure(withDimensions)))
 }
 
-// TestBufferStopCarriesNoDimensions — buffer_stop точечный объект: диапазоны платформы к
-// нему не применяются.
-func TestBufferStopCarriesNoDimensions(t *testing.T) {
-	m := seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
-		ID:   "BS",
+// TestBufferStopNeedsDimensionsAndDeclaredDeadEnd — упор с 2026-08-12 несёт
+// габарит и обязан стоять там, где тупик ОБЪЯВЛЕН топологией.
+//
+// # Что здесь изменилось и почему прежнее утверждение умерло
+//
+// Тест звался TestBufferStopCarriesNoDimensions и утверждал обратное: упор —
+// точечный объект, диапазоны к нему не применяются. Утверждение держалось на
+// том, что упор никто не рисует: затравка его не создавала (дыра Д8 разбора
+// спайка), а снесённый клиент выводил упоры ИЗ ТОПОЛОГИИ сам, то есть рисовал
+// то, чего ему не присылали. Оба основания отпали разом.
+//
+// Проверка порта — лечение двойного выражения одного факта (редакция 6 §4.3):
+// Port.Purpose объявляет тупик, Structure его подтверждает, и подтверждение
+// неутверждённого есть расхождение двух записей, а расхождение обязано быть
+// отказом.
+func TestBufferStopNeedsDimensionsAndDeclaredDeadEnd(t *testing.T) {
+	at := netloc.LinearU{{Element: seedmap.LineEdgeID, From: seedmap.LineLengthM, To: seedmap.LineLengthM}}
+	bare := mapfmt.Structure{ID: "BS", Kind: "buffer_stop", Span: at}
+
+	// Перегон кончается границей карты, а не тупиком: сооружение утверждает то,
+	// чего топология не объявляла.
+	rejects(t, seedmap.Line(seedmap.WithStructure(bare)), "топология его не объявляет")
+
+	// На станции конец главного пути объявлен тупиковым портом — там упор
+	// законен, и без габарита он отвергается уже по размерам.
+	noSize := mapfmt.Structure{
+		ID:   "BS_X",
 		Kind: "buffer_stop",
-		Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: seedmap.LineLengthM, To: seedmap.LineLengthM}},
-	}))
-	accepts(t, m)
+		Span: netloc.LinearU{{Element: seedmap.StationMain, From: 230, To: 230}},
+	}
+	rejectsConstruction(t, seedmap.Station(seedmap.WithStructure(noSize)), "height")
 }

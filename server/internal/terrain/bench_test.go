@@ -260,7 +260,7 @@ func BenchmarkAxisSampling(b *testing.B) {
 		b.Run(lengthName(length), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				if _, err := sampleAxis(e, nil); err != nil {
+				if _, err := sampleAxis(e, nil, nil); err != nil {
 					b.Fatal(err)
 				}
 			}

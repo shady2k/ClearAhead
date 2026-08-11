@@ -39,12 +39,23 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 		rg.TrackTypes = append(rg.TrackTypes, RenderTrackType{
 			ID:    t.ID,
 			Gauge: t.Gauge,
+			Rail:  RenderRail{Height: t.Rail.Height},
 			Sleeper: RenderSleeper{
 				Pitch:  t.Sleeper.Pitch,
 				Length: t.Sleeper.Length,
 				Width:  t.Sleeper.Width,
+				Height: t.Sleeper.Height,
 			},
-			Ballast: RenderBallast{HalfWidth: t.Ballast.HalfWidth},
+			Ballast: RenderBallast{
+				HalfWidth: t.Ballast.HalfWidth,
+				Depth:     t.Ballast.Depth,
+				CribDepth: t.Ballast.CribDepth,
+				SideSlope: t.Ballast.SideSlope,
+			},
+			// Сумма считается ЗДЕСЬ и один раз: см. RenderTrackType.
+			// FormationToRailTop — почему производное поле едет в провод, хотя
+			// в карте его нет.
+			FormationToRailTop: t.FormationToRailTop(),
 		})
 	}
 

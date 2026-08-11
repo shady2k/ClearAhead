@@ -474,22 +474,33 @@ func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
 	if in.Side != "left" && in.Side != "right" {
 		return fmt.Errorf("edit: платформа: сторона %q, ожидается left или right", in.Side)
 	}
-	// Границы валидатора — единственный источник правды о размерах (спека §3);
-	// здесь проверяем заранее ради внятной ошибки, вердикт всё равно за ним.
-	if !(in.Offset >= 1.0 && in.Offset <= 4.0) {
-		return fmt.Errorf("edit: платформа: offset %v вне [1, 4]", in.Offset)
+	// Границы валидатора — единственный источник правды о размерах (контракт
+	// отрисовки, редакция 6, §7.1); здесь проверяем заранее ради внятной
+	// ошибки, вердикт всё равно за ним. Константы взяты из mapfmt, а не
+	// повторены числами: повторённая граница расходится с оригиналом ровно
+	// тогда, когда оригинал правят.
+	if !(in.Offset >= mapfmt.MinPlatformOffset && in.Offset <= mapfmt.MaxPlatformOffset) {
+		return fmt.Errorf("edit: платформа: offset %v вне [%v, %v]", in.Offset, mapfmt.MinPlatformOffset, mapfmt.MaxPlatformOffset)
 	}
-	if !(in.Width >= 1.0 && in.Width <= 12.0) {
-		return fmt.Errorf("edit: платформа: width %v вне [1, 12]", in.Width)
+	if !(in.Width >= mapfmt.MinPlatformWidth && in.Width <= mapfmt.MaxPlatformWidth) {
+		return fmt.Errorf("edit: платформа: width %v вне [%v, %v]", in.Width, mapfmt.MinPlatformWidth, mapfmt.MaxPlatformWidth)
+	}
+	if !(in.Height >= mapfmt.MinPlatformHeight && in.Height <= mapfmt.MaxPlatformHeight) {
+		return fmt.Errorf("edit: платформа: height %v вне [%v, %v]", in.Height, mapfmt.MinPlatformHeight, mapfmt.MaxPlatformHeight)
+	}
+	if !(in.SlabThickness >= mapfmt.MinPlatformSlabThick && in.SlabThickness <= mapfmt.MaxPlatformSlabThick) {
+		return fmt.Errorf("edit: платформа: slab_thickness %v вне [%v, %v]", in.SlabThickness, mapfmt.MinPlatformSlabThick, mapfmt.MaxPlatformSlabThick)
 	}
 
 	m.Topology.Structures = append(m.Topology.Structures, mapfmt.Structure{
-		ID:     allocID(m, "PLAT"),
-		Kind:   "platform",
-		Span:   []netloc.IntervalU{{Element: in.Element, From: in.From, To: in.To}},
-		Side:   in.Side,
-		Offset: in.Offset,
-		Width:  in.Width,
+		ID:            allocID(m, "PLAT"),
+		Kind:          "platform",
+		Span:          []netloc.IntervalU{{Element: in.Element, From: in.From, To: in.To}},
+		Side:          in.Side,
+		Offset:        in.Offset,
+		Width:         in.Width,
+		Height:        in.Height,
+		SlabThickness: in.SlabThickness,
 	})
 	return nil
 }

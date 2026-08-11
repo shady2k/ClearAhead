@@ -137,8 +137,9 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 			}},
 			TrackTypes: []RenderTrackType{{
 				ID: "TRACK_MAIN", Gauge: 1.435,
-				Sleeper: RenderSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28},
-				Ballast: RenderBallast{HalfWidth: 1.75},
+				Rail:    RenderRail{Height: 0.18},
+				Sleeper: RenderSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
+				Ballast: RenderBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
 			}},
 			ConstructionRuns: []RenderRun{{
 				ID: "RUN_1", Type: "TRACK_MAIN", Coordinate: "u", Phase: 0.15,

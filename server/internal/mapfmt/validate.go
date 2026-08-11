@@ -450,6 +450,90 @@ func (m *Map) validateStructures(elements map[string]bool) error {
 					st.ID, iv.From, iv.To, iv.Element, u)
 			}
 		}
+		if st.Kind == "buffer_stop" {
+			if err := m.checkBufferStopPort(st, all); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// checkBufferStopPort — упор обязан стоять там, где путь объявлен кончающимся.
+//
+// # Зачем проверка, если оба факта уже записаны
+//
+// Тупик выразим ДВАЖДЫ, и это надо было развести, а не оставить как есть
+// (контракт отрисовки, редакция 6, §4.3):
+//
+//   - Port.Purpose == "buffer_stop" — ТОПОЛОГИЧЕСКОЕ утверждение: продолжения
+//     нет и искать его не надо. Вход связности;
+//   - Structure{Kind: "buffer_stop"} — ПОСТРОЕННОЕ сооружение с габаритом. Вход
+//     отрисовки.
+//
+// Одно не влечёт другого: тупик может кончаться земляным валом или ничем, и
+// тогда порт есть, а сооружения нет — это законно. Обратного не бывает: упор,
+// стоящий там, где путь по топологии продолжается, есть расхождение двух записей
+// об одном, а расхождение обязано быть отказом, а не выбором одной из версий.
+//
+// Проект уже лечил двойные имена одной вещи (ClearAhead-0jq, ClearAhead-8kx), и
+// лечение записано: одно имя с оговоркой либо два с проверенной связью. Здесь
+// выбрано второе, потому что смыслы разные — и вот проверка связи.
+func (m *Map) checkBufferStopPort(st Structure, all map[string]Alignments) error {
+	// Упор — точечное сооружение, и его span вырожден. Многоинтервальный упор
+	// отвергается здесь, а не молча берётся первым интервалом: «упор на двух
+	// концах» — это два упора с разными ID.
+	if len(st.Span) != 1 {
+		return fmt.Errorf("mapfmt: упор %s: ожидался один интервал, объявлено %d", st.ID, len(st.Span))
+	}
+	iv := st.Span[0]
+	u, err := horizontalLengthU(all[iv.Element])
+	if err != nil {
+		return fmt.Errorf("mapfmt: упор %s: длина элемента %s: %w", st.ID, iv.Element, err)
+	}
+	from, _ := units.MetersToDistance(iv.From)
+	to, _ := units.MetersToDistance(iv.To)
+	if from != to {
+		return fmt.Errorf("mapfmt: упор %s: интервал [%v, %v] не точечный", st.ID, iv.From, iv.To)
+	}
+
+	// Ребро ищется по ID элемента: упор на ПРОХОДЕ СТРЕЛКИ невозможен — проход
+	// кончается портом стрелки, за которым продолжение есть по построению.
+	var edge *Edge
+	for i := range m.Topology.Edges {
+		if m.Topology.Edges[i].ID == iv.Element {
+			edge = &m.Topology.Edges[i]
+			break
+		}
+	}
+	if edge == nil {
+		return fmt.Errorf("mapfmt: упор %s стоит на элементе %s, который не является ребром", st.ID, iv.Element)
+	}
+
+	// u растёт от порта From к порту To — соглашение распространения поз.
+	port := ""
+	switch {
+	case from == 0:
+		port = edge.From
+	case from == u:
+		port = edge.To
+	default:
+		return fmt.Errorf("mapfmt: упор %s стоит при u = %v внутри ребра %s длиной %s, а не на его конце",
+			st.ID, iv.From, iv.Element, u)
+	}
+
+	ports, err := m.collectPorts()
+	if err != nil {
+		return err
+	}
+	p, ok := ports[port]
+	if !ok {
+		return fmt.Errorf("mapfmt: упор %s: ребро %s ссылается на несуществующий порт %s", st.ID, edge.ID, port)
+	}
+	if p.Purpose != "buffer_stop" {
+		return fmt.Errorf(
+			"mapfmt: упор %s стоит в порту %s с purpose %q: сооружение подтверждает тупик, а топология его не объявляет",
+			st.ID, port, p.Purpose)
 	}
 	return nil
 }

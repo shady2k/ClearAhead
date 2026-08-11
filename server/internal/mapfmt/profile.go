@@ -12,21 +12,39 @@ import (
 // появления профиль отвергает только заведомо невозможное. Менять числа —
 // значит поднимать ProfileVersion, иначе одна карта будет приниматься одной
 // сборкой и отвергаться другой, а причину не увидеть.
-const ProfileVersion = 1
+//
+//	1 — радиус в плане, предельный уклон, междупутье
+//	2 — габарит приближения платформы (контракт отрисовки, редакция 6, §7.2):
+//	    величины появились вместе с ВЫСОТОЙ платформы, а до неё отличить низкую
+//	    от высокой было нечем, и проверять — нечего
+const ProfileVersion = 2
 
 type Profile struct {
 	Version          int
 	MinRadiusM       float64 // минимальный радиус кривой в плане
 	MaxGrade         float64 // предельный уклон, доля (0.030 = 30 промилле)
 	MinTrackSpacingM float64 // минимальное междупутье вне горловин
+	// Габарит приближения платформы: ближняя кромка не ближе к оси пути, чем
+	// нормировано для её высоты. Величины разные потому, что высокая платформа
+	// подходит к габариту подвижного состава сбоку кузова, а низкая — ниже него.
+	//
+	// PlatformHighThresholdM — граница, выше которой платформа считается
+	// высокой. Порог, а не перечень видов: вид платформы в формате не заводится
+	// (потребителя нет), а высота есть, и по ней граница проводится однозначно.
+	PlatformHighThresholdM float64
+	PlatformOffsetLowMinM  float64
+	PlatformOffsetHighMinM float64
 }
 
 func DefaultProfile() Profile {
 	return Profile{
-		Version:          ProfileVersion,
-		MinRadiusM:       180.0,
-		MaxGrade:         0.030,
-		MinTrackSpacingM: 4.1,
+		Version:                ProfileVersion,
+		MinRadiusM:             180.0,
+		MaxGrade:               0.030,
+		MinTrackSpacingM:       4.1,
+		PlatformHighThresholdM: 0.5,
+		PlatformOffsetLowMinM:  1.745,
+		PlatformOffsetHighMinM: 1.920,
 	}
 }
 
@@ -71,6 +89,32 @@ func (m *Map) validateProfile(p Profile) error {
 					"нормы: %s: вертикаль[%d]: уклон %.0f‰ превышает предел %.0f‰ (профиль %d)",
 					id, i, permille, p.MaxGrade*1000, p.Version)
 			}
+		}
+	}
+
+	// Габарит платформы — норма, а не отрисовка, поэтому проверка здесь, а не в
+	// checkPlatformSizes. Различие не формальное: диапазон отвечает на вопрос
+	// «правдоподобно ли число», норма — на вопрос «можно ли это построить», и
+	// смена источника норм не должна трогать модуль отрисовки.
+	//
+	// Проверка стала возможна только с появлением высоты платформы: без неё
+	// нельзя было отличить низкую от высокой, а у них разный габарит. Это второй
+	// раз за редакцию, когда объявление датума z сняло отказ, стоявший по
+	// причине «число формы не задаёт».
+	for _, st := range m.Topology.Structures {
+		if st.Kind != "platform" {
+			continue
+		}
+		min := p.PlatformOffsetLowMinM
+		what := "низкой"
+		if st.Height > p.PlatformHighThresholdM {
+			min = p.PlatformOffsetHighMinM
+			what = "высокой"
+		}
+		if st.Offset < min {
+			return fmt.Errorf(
+				"нормы: платформа %s высотой %.3f м: ближняя кромка на %.3f м от оси, для %s платформы нужно не менее %.3f м (профиль %d)",
+				st.ID, st.Height, st.Offset, what, min, p.Version)
 		}
 	}
 	return nil

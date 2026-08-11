@@ -100,8 +100,14 @@ func platform(id, element string, fromM, toM float64) mapfmt.Structure {
 		Kind:   "platform",
 		Span:   netloc.LinearU{{Element: element, From: fromM, To: toM}},
 		Side:   "right",
-		Offset: 1.75,
+		Offset: 1.745,
 		Width:  3.0,
+		// Вертикаль обязательна с редакции 6: платформа без высоты не рисуется
+		// и отвергается валидатором. Отступ 1.745 — нормируемый для НИЗКОЙ
+		// платформы, и высота 0.2 с ним согласована: высокая при таком отступе
+		// нарушила бы габарит.
+		Height:        0.2,
+		SlabThickness: 0.35,
 	}
 }
 
@@ -146,9 +152,11 @@ func TestCompileStructureSpansInU(t *testing.T) {
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	// Платформа фабрики на главном пути плюс добавленная на подходе.
-	if len(rg.Structures) != 2 {
-		t.Fatalf("в RenderGeometry %d сооружений, ожидалось 2", len(rg.Structures))
+	// Платформа фабрики на главном пути, три её упора (заведены 2026-08-12
+	// вместе с вертикалью: до того затравка их не создавала вовсе) и
+	// добавленная платформа на подходе.
+	if len(rg.Structures) != 5 {
+		t.Fatalf("в RenderGeometry %d сооружений, ожидалось 5", len(rg.Structures))
 	}
 	var st RenderStructure
 	for _, cand := range rg.Structures {
@@ -159,8 +167,13 @@ func TestCompileStructureSpansInU(t *testing.T) {
 	if st.ID != "TSP" || st.Kind != "platform" || st.Side != "right" {
 		t.Fatalf("объект %+v, ожидался TSP platform right", st)
 	}
-	if st.Offset != 1.75 || st.Width != 3.0 {
-		t.Fatalf("размеры платформы (%v, %v) — ожидались (1.75, 3.0) из карты", st.Offset, st.Width)
+	if st.Offset != 1.745 || st.Width != 3.0 {
+		t.Fatalf("размеры платформы (%v, %v) — ожидались (1.745, 3.0) из карты", st.Offset, st.Width)
+	}
+	// Вертикаль едет тем же путём и из той же карты: без неё платформа
+	// рисуется полосой на отметке оси, а высота верха плиты — выдумкой клиента.
+	if st.Height != 0.2 || st.SlabThickness != 0.35 {
+		t.Fatalf("вертикаль платформы (%v, %v) — ожидались (0.2, 0.35) из карты", st.Height, st.SlabThickness)
 	}
 	if len(st.Spans) != 1 {
 		t.Fatalf("у %s %d спанов, ожидался 1", st.ID, len(st.Spans))

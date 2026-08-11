@@ -48,18 +48,30 @@ type wireNetwork struct {
 type wireTrackType struct {
 	ID      string      `json:"id"`
 	Gauge   float64     `json:"gauge"`
+	Rail    wireRail    `json:"rail"`
 	Sleeper wireSleeper `json:"sleeper"`
 	Ballast wireBallast `json:"ballast"`
+	// Производное поле: сумма стека. Зеркалится наравне с остальными — контракт
+	// проверяет ФОРМУ ответа, а не происхождение чисел в нём.
+	FormationToRailTop float64 `json:"formation_to_rail_top"`
+}
+
+type wireRail struct {
+	Height float64 `json:"height"`
 }
 
 type wireSleeper struct {
 	Pitch  float64 `json:"pitch"`
 	Length float64 `json:"length"`
 	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type wireBallast struct {
 	HalfWidth float64 `json:"half_width"`
+	Depth     float64 `json:"depth"`
+	CribDepth float64 `json:"crib_depth"`
+	SideSlope float64 `json:"side_slope"`
 }
 
 type wireRun struct {
@@ -96,11 +108,19 @@ type wireAddress struct {
 }
 
 type wireElement struct {
-	ID    string          `json:"id"`
-	Kind  string          `json:"kind"`
-	Start wireStart       `json:"start"`
-	Prims []wirePrimitive `json:"primitives"`
-	Role  *wireRole       `json:"role"`
+	ID      string          `json:"id"`
+	Kind    string          `json:"kind"`
+	Start   wireStart       `json:"start"`
+	Prims   []wirePrimitive `json:"primitives"`
+	Profile []wireVPrim     `json:"profile"`
+	Role    *wireRole       `json:"role"`
+}
+
+type wireVPrim struct {
+	Kind             string  `json:"kind"`
+	Length           float64 `json:"length"`
+	SlopePermille    float64 `json:"slope_permille,omitempty"`
+	EndSlopePermille float64 `json:"end_slope_permille,omitempty"`
 }
 
 type wireRole struct {
@@ -108,15 +128,18 @@ type wireRole struct {
 	Branch  string `json:"branch"`
 	Hand    string `json:"hand"`
 	Frog    string `json:"frog,omitempty"`
+	Type    string `json:"type"`
 }
 
 type wireStructure struct {
-	ID     string     `json:"id"`
-	Kind   string     `json:"kind"`
-	Side   string     `json:"side"`
-	Offset float64    `json:"offset,omitempty"`
-	Width  float64    `json:"width,omitempty"`
-	Spans  []wireSpan `json:"spans"`
+	ID            string     `json:"id"`
+	Kind          string     `json:"kind"`
+	Side          string     `json:"side"`
+	Offset        float64    `json:"offset,omitempty"`
+	Width         float64    `json:"width,omitempty"`
+	Height        float64    `json:"height,omitempty"`
+	SlabThickness float64    `json:"slab_thickness,omitempty"`
+	Spans         []wireSpan `json:"spans"`
 }
 
 type wireSpan struct {

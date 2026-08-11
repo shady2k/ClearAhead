@@ -95,6 +95,22 @@ type RenderRole struct {
 	Branch  string `json:"branch"`         // "straight" | "diverging"
 	Hand    string `json:"hand"`           // "right" | "left"
 	Frog    string `json:"frog,omitempty"` // марка крестовины, напр. "1/9"
+	// Type — тип путевой конструкции устройства, ВСЕГДА ЯВНЫЙ.
+	//
+	// Редакция 5 объявила это поле обязательным и назвала цену пропуска; поле не
+	// доехало, и цена наступила. Проходы стрелок run'ами не покрываются по
+	// правилу (их решётка нерегулярна), а типа у них не было — значит на ветвях
+	// стрелки у клиента не было НИ ОДНОГО размера: ни колеи, ни шага шпал, ни
+	// полуширины балласта. На кадре это видно: ветви рисовались ниткой.
+	//
+	// Отдельно вредно было то, что валидатор поле ПРОВЕРЯЛ (construction.go:
+	// неразрешимая ссылка — отказ), а компилятор разрешал умолчание для себя,
+	// чтобы взять gauge крестовины, и разрешённое значение выбрасывал. Проверка
+	// стояла, польза терялась по дороге.
+	//
+	// Умолчание разрешает компилятор; клиент скрытого умолчания не применяет
+	// никогда — то же правило, что у run'а (редакция 6 §6).
+	Type string `json:"type"`
 }
 
 // RenderElement — элемент с абсолютной стартовой позой: клиент рисует цепочку
@@ -109,7 +125,35 @@ type RenderElement struct {
 	Kind  string            `json:"kind"`
 	Start PortPose          `json:"start"`
 	Prims []RenderPrimitive `json:"primitives"`
-	Role  *RenderRole       `json:"role,omitempty"`
+	// Profile — цепочка вертикального профиля (редакция 6 §5).
+	//
+	// До неё в проводе была вертикаль из двух чисел на элемент — start.z и
+	// start.slope, — и это называлось «контракт нейтрален к представлению только
+	// в плане». Называлось неверно: цепочка ЕСТЬ в карте (mapfmt.VPrim),
+	// компилятор её РАЗБИРАЕТ (profile.go), CompiledElement.Prof её НЕСЁТ — и в
+	// провод не шло ничего. Это была не нейтральность, а потеря на последнем
+	// шаге: данные доходили до компилятора и останавливались.
+	//
+	// start.slope при этом не стал избыточным: он задаёт уклон ДО первого
+	// примитива и служит начальным условием параболы, если первый примитив —
+	// vertical_curve. При пустой цепочке он один описывает элемент целиком, и
+	// это ровно прежнее поведение — оно не сломано.
+	Profile []RenderVPrim `json:"profile"`
+	Role    *RenderRole   `json:"role,omitempty"`
+}
+
+// RenderVPrim — примитив вертикального профиля. Формы те же, что в карте:
+// grade — постоянный уклон, vertical_curve — уклон, меняющийся по u линейно до
+// EndSlopePermille, то есть парабола.
+//
+// Двух форм достаточно потому, что в карте их две. Изобретать третью форму для
+// провода значило бы завести перевод между двумя языками профиля и место, где
+// они разойдутся.
+type RenderVPrim struct {
+	Kind             string  `json:"kind"`
+	LengthM          float64 `json:"length"`
+	SlopePermille    float64 `json:"slope_permille,omitempty"`
+	EndSlopePermille float64 `json:"end_slope_permille,omitempty"`
 }
 
 // RenderStructure — сооружение на плане (платформа и пр.).
@@ -119,12 +163,19 @@ type RenderElement struct {
 // сооружение, тип решётки её размеры не определяет. Точечные виды (buffer_stop)
 // размеров не несут.
 type RenderStructure struct {
-	ID     string         `json:"id"`
-	Kind   string         `json:"kind"`
-	Side   string         `json:"side,omitempty"`
-	Offset float64        `json:"offset,omitempty"`
-	Width  float64        `json:"width,omitempty"`
-	Spans  netloc.LinearU `json:"spans"`
+	ID     string  `json:"id"`
+	Kind   string  `json:"kind"`
+	Side   string  `json:"side,omitempty"`
+	Offset float64 `json:"offset,omitempty"`
+	Width  float64 `json:"width,omitempty"`
+	// Height — верх сооружения над ПОВЕРХНОСТЬЮ КАТАНИЯ (редакция 6 §4).
+	// У платформы величина нормируемая и проверяется профилем норм: высокая
+	// платформа ближе габарита к оси — отказ.
+	Height float64 `json:"height,omitempty"`
+	// SlabThickness — толщина плиты платформы: платформа видна сбоку, и торец
+	// плиты — то, чем она отличается от прямоугольника на земле.
+	SlabThickness float64        `json:"slab_thickness,omitempty"`
+	Spans         netloc.LinearU `json:"spans"`
 }
 
 // RenderGeometry — вход клиента и инструментов.
@@ -165,22 +216,57 @@ type RenderGeometry struct {
 	PlacementAlgorithm string            `json:"placement_algorithm"`
 }
 
-// RenderTrackType — тип путевой конструкции в проводе (спека §3).
+// RenderTrackType — тип путевой конструкции в проводе (редакция 6 §3).
+//
+// Вертикальный стек отсчитывается ВНИЗ от поверхности катания: датум z — верх
+// головки рельса (редакция 6 §2). Клиенту этого достаточно, чтобы построить
+// путь телом и не выдумать ни одного числа.
 type RenderTrackType struct {
 	ID      string        `json:"id"`
 	Gauge   float64       `json:"gauge"`
+	Rail    RenderRail    `json:"rail"`
 	Sleeper RenderSleeper `json:"sleeper"`
 	Ballast RenderBallast `json:"ballast"`
+	// FormationToRailTop — от верха основной площадки до поверхности катания.
+	//
+	// ПРОИЗВОДНОЕ поле: сумма ballast.depth + sleeper.height + rail.height. В
+	// карте его нет намеренно (редакция 6 §3.2) — авторское поле рядом со
+	// слагаемыми есть второй источник истины. Здесь оно есть потому, что провод
+	// производен и разойтись с собой не может, а вот клиент и terrain, каждый
+	// складывающий свои три числа, разойдутся округлением.
+	FormationToRailTop float64 `json:"formation_to_rail_top"`
+}
+
+// RenderRail — рельс. Одно число: высота от подошвы до поверхности катания.
+//
+// Профиль рельса НЕ заводится (редакция 6 §8): одной высоты для честного рельса
+// мало — нужны либо размеры головки, шейки и подошвы, либо идентификатор
+// стандартного профиля. Клиент рисует ОБЪЯВЛЕННОЕ упрощение (прямоугольник), и
+// разница между «упрощение объявлено» и «клиент выдумал» — вся разница, которую
+// контракт защищает. Цена умолчания измерена: у снесённого спайка отсутствие
+// ширины головки дало колею 1.335 вместо 1.435.
+type RenderRail struct {
+	Height float64 `json:"height"`
 }
 
 type RenderSleeper struct {
 	Pitch  float64 `json:"pitch"`
 	Length float64 `json:"length"`
 	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
 }
 
 type RenderBallast struct {
+	// HalfWidth — по верху призмы; нижняя полуширина выводится:
+	// half_width + side_slope·(depth + crib_depth).
 	HalfWidth float64 `json:"half_width"`
+	// Depth — от верха основной площадки до низа шпалы.
+	Depth float64 `json:"depth"`
+	// CribDepth — засыпка шпального ящика выше низа шпалы. Верх призмы — это
+	// низ шпалы плюс CribDepth, и видно именно его, а не постель.
+	CribDepth float64 `json:"crib_depth"`
+	// SideSlope — заложение откоса: метров по горизонтали на метр по вертикали.
+	SideSlope float64 `json:"side_slope"`
 }
 
 // RenderRun — run размещения в проводе (спека §4). Type всегда явный:
@@ -227,6 +313,44 @@ type RenderVec struct {
 // смена алгоритма не должна молча менять старую ревизию (спека §4).
 const PlacementAlgorithm = "placement-v1"
 
+// renderProfile переводит скомпилированный профиль обратно в формы провода
+// (редакция 6 §5).
+//
+// «Обратно» — точное слово: ProfileFrom свела обе формы карты к одной паре
+// уклонов на звено, и здесь пара разворачивается в ту форму, из которой пришла.
+// Так сделано затем, чтобы провод говорил на языке карты, а не на внутреннем
+// языке компилятора: клиент, читающий контракт, и автор, пишущий карту, обязаны
+// видеть одни и те же два вида.
+//
+// Пустая цепочка в карте даёт ОДНО звено нулевого уклона во всю длину элемента
+// (ProfileFrom), и здесь оно превращается в grade 0‰. Это не подстановка
+// вместо данных: плоский элемент и есть плоский элемент, а инвариант «сумма
+// длин цепочки равна длине элемента» держится всегда — то есть z(u) определена
+// всюду, а не почти всюду.
+//
+// Уклоны уезжают в ПРОМИЛЛЕ, как в карте: компилятор держит их безразмерными
+// (dz/du), но менять единицу на границе провода значило бы завести третью
+// единицу одного числа.
+func renderProfile(p Profile) []RenderVPrim {
+	out := make([]RenderVPrim, 0, len(p))
+	for _, seg := range p {
+		if seg.StartSlope == seg.EndSlope {
+			out = append(out, RenderVPrim{
+				Kind:          "grade",
+				LengthM:       seg.LengthU.Meters(),
+				SlopePermille: seg.StartSlope * 1000,
+			})
+			continue
+		}
+		out = append(out, RenderVPrim{
+			Kind:             "vertical_curve",
+			LengthM:          seg.LengthU.Meters(),
+			EndSlopePermille: seg.EndSlope * 1000,
+		})
+	}
+	return out
+}
+
 // Compile строит оба артефакта из одной карты.
 func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 	_, els, err := Propagate(m)
@@ -259,6 +383,15 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 			passage[ps.ID] = passageRole{t, ps.Branch}
 		}
 	}
+	// Тип по умолчанию — единственное, что нужно от блока construction ДО его
+	// переноса в провод: им разрешается опущенный тип устройства (редакция 6
+	// §6). Карта без блока законна, и тогда строка пуста — это «типа нет ни у
+	// кого», а не «клиент подставит своё».
+	deviceType := ""
+	if m.Construction != nil {
+		deviceType = m.Construction.DefaultType
+	}
+
 	rg := &RenderGeometry{
 		// m.MapID кладётся в region без перевода: карта И ЕСТЬ регион
 		// (world-storage §3, см. поле Region).
@@ -285,13 +418,27 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 			LengthS: lengthS,
 			Prof:    e.Prof,
 		}
-		re := RenderElement{ID: id, Kind: e.Kind, Start: e.Start, Prims: make([]RenderPrimitive, 0, len(e.Plan))}
+		re := RenderElement{
+			ID:      id,
+			Kind:    e.Kind,
+			Start:   e.Start,
+			Prims:   make([]RenderPrimitive, 0, len(e.Plan)),
+			Profile: renderProfile(e.Prof),
+		}
 		if p, ok := passage[id]; ok {
 			re.Role = &RenderRole{
 				Turnout: p.turnout.ID,
 				Branch:  p.branch,
 				Hand:    p.turnout.Hand,
 				Frog:    p.turnout.Frog,
+				Type:    deviceType,
+			}
+			// Тип устройства разрешается тем же правилом, что у run'а, но
+			// разрешить его надо было ДО этого цикла: карта без блока
+			// construction законна, и тогда типа нет ни у кого. Пустая строка
+			// здесь означает ровно это, а не «клиент подставит своё».
+			if t := p.turnout.Type; t != "" {
+				re.Role.Type = t
 			}
 		}
 		for _, p := range e.Plan {
@@ -334,12 +481,14 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 
 	for _, st := range m.Topology.Structures {
 		rt := RenderStructure{
-			ID:     st.ID,
-			Kind:   st.Kind,
-			Side:   st.Side,
-			Offset: st.Offset,
-			Width:  st.Width,
-			Spans:  make(netloc.LinearU, 0, len(st.Span)),
+			ID:            st.ID,
+			Kind:          st.Kind,
+			Side:          st.Side,
+			Offset:        st.Offset,
+			Width:         st.Width,
+			Height:        st.Height,
+			SlabThickness: st.SlabThickness,
+			Spans:         make(netloc.LinearU, 0, len(st.Span)),
 		}
 		spans := make(netloc.LinearS, 0, len(st.Span))
 		for _, iv := range st.Span {

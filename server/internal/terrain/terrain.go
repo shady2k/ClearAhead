@@ -182,8 +182,9 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 	// полный размах шума. Откос от него уходит на total*SideSlope в стороны.
 	f.reach = recipe.Earthworks.FormationHalfWidth + total*recipe.Earthworks.SideSlope
 
+	drops := formationDrops(m)
 	for _, e := range els {
-		pts, err := sampleAxis(e, carried[e.ID])
+		pts, err := sampleAxis(e, carried[e.ID], drops[e.ID])
 		if err != nil {
 			return nil, fmt.Errorf("terrain: элемент %s: %w", e.ID, err)
 		}
@@ -246,7 +247,102 @@ func carriedSpans(m *mapfmt.Map) map[string]netloc.LinearU {
 // сооружение, а земля остаётся природной. Без этого рельеф сравнял бы долину
 // под мостом и прокопал траншею над тоннелем — то есть авторитет пути над
 // землёй применился бы там, где путь земли не касается.
-func sampleAxis(e track.Element, carried netloc.LinearU) ([]axisPoint, error) {
+// dropSpan — участок элемента и высота конструкции пути на нём: сколько метров
+// от поверхности катания вниз до верха основной площадки.
+type dropSpan struct {
+	from, to units.Distance
+	drop     float64
+}
+
+// formationDrops собирает по элементам высоту конструкции пути.
+//
+// # Зачем это рельефу
+//
+// Датум z — ПОВЕРХНОСТЬ КАТАНИЯ (контракт отрисовки, редакция 6, §2), а земля
+// лежит не под колесом, а под балластом. До объявления датума WorkedM клал землю
+// ровно на отметку оси, то есть трактовал z как землю; на затравке ST_A это
+// давало насыпь на 68 см выше должного (0.30 балласт + 0.20 шпала + 0.18 рельс).
+// Ошибка не была видна ровно потому, что второй трактовки не существовало.
+//
+// # Откуда берётся тип в точке
+//
+// Оттуда же, откуда его берёт провод, и это не совпадение, а требование: два
+// разных ответа на вопрос «какой тип пути здесь» развели бы землю и путь.
+//
+//   - ребро покрыто run'ами, и покрытие ПОЛНОЕ без перекрытий — это проверяет
+//     валидатор (construction.go), поэтому здесь можно не разбирать пропуски;
+//   - проход стрелки run'ами не покрывается по правилу, и тип берётся с самого
+//     устройства (редакция 6 §6).
+//
+// Карта без блока construction даёт пустую раскладку и нулевую поправку. Это
+// честно, а не умолчание: рельсошпальной решётки в такой карте нет вовсе, и
+// вычитать нечего.
+func formationDrops(m *mapfmt.Map) map[string][]dropSpan {
+	c := m.Construction
+	if c == nil {
+		return nil
+	}
+	byID := make(map[string]mapfmt.TrackType, len(c.Types))
+	for _, t := range c.Types {
+		byID[t.ID] = t
+	}
+	resolve := func(id string) float64 {
+		if id == "" {
+			id = c.DefaultType
+		}
+		return byID[id].FormationToRailTop()
+	}
+
+	out := map[string][]dropSpan{}
+	add := func(element string, from, to units.Distance, drop float64) {
+		out[element] = append(out[element], dropSpan{from: from, to: to, drop: drop})
+	}
+	for _, r := range c.Runs {
+		drop := resolve(r.Type)
+		for _, iv := range r.Spans {
+			from, err := units.MetersToDistance(iv.From)
+			if err != nil {
+				continue
+			}
+			to, err := units.MetersToDistance(iv.To)
+			if err != nil {
+				continue
+			}
+			// Спан run'а может идти reverse — направление есть смысл укладки, а
+			// не порядок концов. Рельефу направление безразлично, поэтому концы
+			// нормализуются здесь и только здесь.
+			if from > to {
+				from, to = to, from
+			}
+			add(iv.Element, from, to, drop)
+		}
+	}
+	for _, t := range m.Topology.Turnouts {
+		drop := resolve(t.Type)
+		for _, ps := range t.Passages() {
+			// Проход целиком: устройство — единая конструкция, делить её по u
+			// нечем и незачем. units.Distance максимума хватает: домен прохода
+			// заведомо короче.
+			add(ps.ID, 0, units.Distance(1<<62), drop)
+		}
+	}
+	return out
+}
+
+// formationDrop возвращает высоту конструкции в точке u.
+//
+// Ноль при непопадании — тот же честный ноль, что и у карты без construction:
+// участок, не покрытый ни run'ом, ни устройством, конструкции не несёт.
+func formationDrop(spans []dropSpan, u units.Distance) float64 {
+	for _, s := range spans {
+		if u >= s.from && u <= s.to {
+			return s.drop
+		}
+	}
+	return 0
+}
+
+func sampleAxis(e track.Element, carried netloc.LinearU, drops []dropSpan) ([]axisPoint, error) {
 	lengthU := e.Prof.LengthU()
 	if lengthU <= 0 {
 		return nil, fmt.Errorf("нулевая длина")
@@ -271,7 +367,13 @@ func sampleAxis(e track.Element, carried netloc.LinearU) ([]axisPoint, error) {
 			return nil, fmt.Errorf("профиль на %s: %w", u, err)
 		}
 		if !insideAny(carried, u) {
-			out = append(out, axisPoint{X: plan.X, Y: plan.Y, Z: e.Start.Z + rise})
+			// Отметка ЗЕМЛИ, а не пути: z — поверхность катания, и высота
+			// конструкции вычитается здесь, в единственном месте, где ось
+			// превращается в точку рельефа.
+			out = append(out, axisPoint{
+				X: plan.X, Y: plan.Y,
+				Z: e.Start.Z + rise - formationDrop(drops, u),
+			})
 		}
 		if last {
 			break

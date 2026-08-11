@@ -52,8 +52,9 @@ func testBaseMap() *mapfmt.Map {
 			Types: []mapfmt.TrackType{{
 				ID:      "TRACK_MAIN_1435",
 				Gauge:   1.435,
-				Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28},
-				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75},
+				Rail:    mapfmt.TrackRail{Height: 0.18},
+				Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
+				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
 			}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
@@ -308,7 +309,7 @@ func TestSequenceOfEditsValidates(t *testing.T) {
 
 	// 3. Положить платформу на E2.
 	pl, err := st.Apply(Intent{Op: OpPlace, Place: PlaceIntent{
-		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.75, Width: 3.0,
+		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.745, Width: 3.0, Height: 0.2, SlabThickness: 0.35,
 	}})
 	if err != nil {
 		t.Fatalf("place: %v", err)
@@ -349,9 +350,9 @@ func TestFailedApplyLeavesMapByteIdentical(t *testing.T) {
 
 	bad := []Intent{
 		// Платформа шириной 0.5 м — валидатор отвергнет.
-		{Op: OpPlace, Place: PlaceIntent{Element: "E2", From: 10, To: 20, Side: "right", Offset: 1.75, Width: 0.5}},
+		{Op: OpPlace, Place: PlaceIntent{Element: "E2", From: 10, To: 20, Side: "right", Offset: 1.745, Width: 0.5, Height: 0.2, SlabThickness: 0.35}},
 		// Платформа за концом элемента.
-		{Op: OpPlace, Place: PlaceIntent{Element: "E2", From: 90, To: 150, Side: "right", Offset: 1.75, Width: 3}},
+		{Op: OpPlace, Place: PlaceIntent{Element: "E2", From: 90, To: 150, Side: "right", Offset: 1.745, Width: 3, Height: 0.2, SlabThickness: 0.35}},
 		// Ветвление ровно на конце ребра.
 		{Op: OpBranch, Branch: BranchIntent{Edge: "E1", AtU: 100, Hand: "right"}},
 		// Продление от стыка (не лист).
@@ -448,7 +449,7 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	m.Topology.Structures = []mapfmt.Structure{{
 		ID: "PLAT_EA", Kind: "platform",
 		Span: []netloc.IntervalU{{Element: "EA", From: 10, To: 30}},
-		Side: "right", Offset: 1.75, Width: 3.0,
+		Side: "right", Offset: 1.745, Width: 3.0, Height: 0.2, SlabThickness: 0.35,
 	}}
 	// Отдельная неякорная компонента со стрелкой — её стирка не трогает якорь.
 	m.Topology.Nodes = append(m.Topology.Nodes,
@@ -592,7 +593,7 @@ func TestRevisionsGrowForward(t *testing.T) {
 
 	applyPlace := func(from, to float64) Result {
 		res, err := st.Apply(Intent{Op: OpPlace, Place: PlaceIntent{
-			Element: "E2", From: from, To: to, Side: "right", Offset: 1.75, Width: 3.0,
+			Element: "E2", From: from, To: to, Side: "right", Offset: 1.745, Width: 3.0, Height: 0.2, SlabThickness: 0.35,
 		}})
 		if err != nil {
 			t.Fatalf("Apply: %v", err)
@@ -618,7 +619,7 @@ func TestRevisionsGrowForward(t *testing.T) {
 func TestRunsReproducedOnUnchangedTopology(t *testing.T) {
 	st := newStore(t, testBaseMap())
 	res, err := st.Preview(Intent{Op: OpPlace, Place: PlaceIntent{
-		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.75, Width: 3.0,
+		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.745, Width: 3.0, Height: 0.2, SlabThickness: 0.35,
 	}})
 	if err != nil {
 		t.Fatalf("Preview: %v", err)
@@ -699,7 +700,7 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 		},
 		Construction: &mapfmt.Construction{
 			DefaultType: "TRACK_MAIN_1435",
-			Types:       []mapfmt.TrackType{{ID: "TRACK_MAIN_1435", Gauge: 1.435, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75}}},
+			Types:       []mapfmt.TrackType{{ID: "TRACK_MAIN_1435", Gauge: 1.435, Rail: mapfmt.TrackRail{Height: 0.18}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: "E5", From: 0, To: 100, Direction: "forward"},
@@ -738,7 +739,7 @@ func TestRunsPreservePhaseAcrossEdit(t *testing.T) {
 	st := newStore(t, m)
 
 	res, err := st.Apply(Intent{Op: OpPlace, Place: PlaceIntent{
-		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.75, Width: 3.0,
+		Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.745, Width: 3.0, Height: 0.2, SlabThickness: 0.35,
 	}})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
