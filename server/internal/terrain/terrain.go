@@ -67,14 +67,94 @@ type Field struct {
 	// достают. Считается из максимального перепада и заложения откоса: дальше
 	// него можно не искать ближайшую точку оси вовсе.
 	reach float64
-	// grid — равномерный индекс точек оси со стороной ячейки reach.
+	// grid — мелкий индекс для земляных работ, сторона ячейки reach.
 	//
 	// Перебор всех точек оси был бы O(отсчёты × точки), и обе величины растут
 	// вместе с размером региона. Замер на станции: 6.9 мс на чанк при 1263
 	// точках оси. На коридоре края точек оси около 400 тыс., чанков около 61
 	// тыс. — это порядка 29 часов в один поток на регион. Индекс здесь не
 	// оптимизация, а условие заявленного масштаба.
-	grid map[cellKey][]axisPoint
+	grid pointGrid
+	// lodGrid — грубый индекс для выбора уровня подробности. Он отдельный,
+	// потому что вопросы разные: земляные работы спрашивают «есть ли ось
+	// ближе тридцати метров», выбор уровня — «как далеко ось» на дистанции до
+	// восьми километров. На мелкой сетке второй запрос обошёл бы сотни тысяч
+	// пустых ячеек.
+	lodGrid pointGrid
+}
+
+// pointGrid — равномерный индекс точек с расширяющимся поиском по кольцам.
+type pointGrid struct {
+	cell  float64
+	cells map[cellKey][]axisPoint
+}
+
+func newPointGrid(cell float64, pts []axisPoint) pointGrid {
+	g := pointGrid{cell: cell, cells: make(map[cellKey][]axisPoint, len(pts))}
+	if cell <= 0 {
+		return g
+	}
+	for _, p := range pts {
+		k := g.keyOf(p.X, p.Y)
+		g.cells[k] = append(g.cells[k], p)
+	}
+	return g
+}
+
+func (g pointGrid) keyOf(x, y float64) cellKey {
+	return cellKey{int(math.Floor(x / g.cell)), int(math.Floor(y / g.cell))}
+}
+
+// nearest ищет ближайшую точку, расширяя кольца вокруг запроса.
+//
+// Поиск останавливается, когда найденное расстояние не превышает радиуса уже
+// просмотренной области: всё, что осталось снаружи, заведомо дальше. Без этого
+// условия ответ был бы приблизительным — ближайшая точка не обязана лежать в
+// том же кольце, что первая найденная.
+func (g pointGrid) nearest(x, y, maxDist float64) (dist, z float64, ok bool) {
+	if g.cell <= 0 || len(g.cells) == 0 {
+		return 0, 0, false
+	}
+	c := g.keyOf(x, y)
+	best := math.Inf(1)
+	var bestZ float64
+	maxRing := int(math.Ceil(maxDist/g.cell)) + 1
+
+	for r := 0; r <= maxRing; r++ {
+		for dx := -r; dx <= r; dx++ {
+			for dy := -r; dy <= r; dy++ {
+				// Только внешняя рамка кольца: внутренность просмотрена ранее.
+				if r > 0 && abs(dx) != r && abs(dy) != r {
+					continue
+				}
+				for _, p := range g.cells[cellKey{c.ix + dx, c.iy + dy}] {
+					ddx, ddy := x-p.X, y-p.Y
+					if d2 := ddx*ddx + ddy*ddy; d2 < best {
+						best, bestZ = d2, p.Z
+					}
+				}
+			}
+		}
+		// Просмотрены все ячейки в радиусе r: любая точка вне их дальше, чем
+		// r*cell от запроса.
+		if d := math.Sqrt(best); d <= float64(r)*g.cell {
+			if d > maxDist {
+				return 0, 0, false
+			}
+			return d, bestZ, true
+		}
+	}
+	if d := math.Sqrt(best); d <= maxDist {
+		return d, bestZ, true
+	}
+	return 0, 0, false
+}
+
+func abs(v int) int {
+	if v < 0 {
+		return -v
+	}
+	return v
 }
 
 // cellKey — координаты ячейки индекса.
@@ -116,25 +196,15 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 	return f, nil
 }
 
-// buildGrid раскладывает точки оси по ячейкам со стороной reach.
+// buildGrid строит оба индекса.
 //
-// Сторона выбрана равной reach не из удобства: при ней любая точка, способная
-// повлиять на запрос, лежит в одной из девяти соседних ячеек, и поиск
-// становится постоянным по времени независимо от размера сети.
+// Мелкий — со стороной reach: при ней любая точка, способная повлиять на
+// земляные работы, лежит рядом, и поиск не зависит от размера сети. Грубый —
+// со стороной радиуса уровня 0: на нём спрашивают удалённость до восьми
+// километров, и мелкая сетка заставила бы обойти сотни тысяч пустых ячеек.
 func (f *Field) buildGrid() {
-	f.grid = make(map[cellKey][]axisPoint, len(f.axis))
-	if f.reach <= 0 {
-		// Земляных работ нет вовсе: индекс пуст, поиск сразу вернёт «далеко».
-		return
-	}
-	for _, p := range f.axis {
-		k := f.cellOf(p.X, p.Y)
-		f.grid[k] = append(f.grid[k], p)
-	}
-}
-
-func (f *Field) cellOf(x, y float64) cellKey {
-	return cellKey{int(math.Floor(x / f.reach)), int(math.Floor(y / f.reach))}
+	f.grid = newPointGrid(f.reach, f.axis)
+	f.lodGrid = newPointGrid(chunk.Level0RadiusM, f.axis)
 }
 
 // carriedSpans собирает интервалы, на которых путь НЕСОМ сооружением — мостом
@@ -275,27 +345,28 @@ func (f *Field) HeightCm(x, y float64) (int16, error) {
 // сторона ячейки равна reach, поэтому любая точка ближе reach лежит внутри
 // этой девятки, а всё, что вне её, заведомо дальше и не влияет на результат.
 func (f *Field) nearestAxis(x, y float64) (dist, z float64, ok bool) {
-	if f.reach <= 0 {
-		return 0, 0, false
+	return f.grid.nearest(x, y, f.reach)
+}
+
+// DistanceToAxis — расстояние до ближайшей точки оси, без обрезания радиусом
+// земляных работ. Нужно для выбора уровня подробности чанка.
+func (f *Field) DistanceToAxis(x, y float64) (float64, bool) {
+	limit := chunk.Level0RadiusM * math.Pow(2, chunk.MaxLevel)
+	d, _, ok := f.lodGrid.nearest(x, y, limit)
+	return d, ok
+}
+
+// Bounds — габарит оси пути в плане. Считается по тем же точкам, по которым
+// примиряется рельеф, поэтому вершины кривых не теряются.
+func (f *Field) Bounds() (minX, minY, maxX, maxY float64, ok bool) {
+	minX, minY = math.Inf(1), math.Inf(1)
+	maxX, maxY = math.Inf(-1), math.Inf(-1)
+	for _, p := range f.axis {
+		minX, maxX = math.Min(minX, p.X), math.Max(maxX, p.X)
+		minY, maxY = math.Min(minY, p.Y), math.Max(maxY, p.Y)
+		ok = true
 	}
-	c := f.cellOf(x, y)
-	best := math.Inf(1)
-	var bestZ float64
-	for dx := -1; dx <= 1; dx++ {
-		for dy := -1; dy <= 1; dy++ {
-			for _, p := range f.grid[cellKey{c.ix + dx, c.iy + dy}] {
-				ddx, ddy := x-p.X, y-p.Y
-				if d2 := ddx*ddx + ddy*ddy; d2 < best {
-					best, bestZ = d2, p.Z
-				}
-			}
-		}
-	}
-	d := math.Sqrt(best)
-	if d > f.reach {
-		return 0, 0, false
-	}
-	return d, bestZ, true
+	return
 }
 
 // valueNoise — значение шума в точке, из [-1, 1].
