@@ -9,7 +9,7 @@ import (
 // и E2 (50 м), один тип, по одному run на ребро. Все остальные тесты модуля
 // строятся мутацией этого документа.
 const constructionMap = `{
-  "format_version": 3,
+  "format_version": 4,
   "map_id": "T",
   "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
@@ -248,7 +248,7 @@ func TestConstructionCoverageEndShort(t *testing.T) {
 // constructionTurnoutMap — карта со стрелкой: проходы устройства run'ами не
 // покрываются, а сами устройства несут собственный type (спека §4).
 const constructionTurnoutMap = `{
-  "format_version": 3,
+  "format_version": 4,
   "map_id": "T2",
   "map_revision": 1,
   "anchors": { "NW.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },

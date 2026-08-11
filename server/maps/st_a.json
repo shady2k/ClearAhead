@@ -1,5 +1,5 @@
 {
-  "format_version": 3,
+  "format_version": 4,
   "map_id": "ST_A",
   "map_revision": 3,
   "georeference": {
@@ -776,5 +776,27 @@
         ]
       }
     ]
+  },
+  "terrain": {
+    "seed": 20260811,
+    "base_z": 140.0,
+    "octaves": [
+      {
+        "wavelength": 900.0,
+        "amplitude": 14.0
+      },
+      {
+        "wavelength": 220.0,
+        "amplitude": 4.0
+      },
+      {
+        "wavelength": 60.0,
+        "amplitude": 1.2
+      }
+    ],
+    "earthworks": {
+      "formation_half_width": 5.5,
+      "side_slope": 1.5
+    }
   }
 }

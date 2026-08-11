@@ -34,7 +34,7 @@ func TestCompileFlatLengths(t *testing.T) {
 // разошлись бы.
 func TestCompileRoundingRule(t *testing.T) {
 	const doc = `{
-	  "format_version": 3, "map_id": "R", "map_revision": 1,
+	  "format_version": 4, "map_id": "R", "map_revision": 1,
 	  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
 	  "topology": {
 	    "nodes": [
@@ -198,7 +198,7 @@ func TestCompileFrogOptional(t *testing.T) {
 // constructionTrackMap — oneTurnout("to") плюс блок construction: один тип,
 // по run'у на каждое ребро. Проверяет перенос рецепта в провод.
 const constructionTrackMap = `{
-  "format_version": 3,
+  "format_version": 4,
   "map_id": "T2",
   "map_revision": 1,
   "anchors": { "NW.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },

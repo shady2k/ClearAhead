@@ -6,7 +6,7 @@ import (
 )
 
 const minimalMap = `{
-  "format_version": 3,
+  "format_version": 4,
   "map_id": "T",
   "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
@@ -41,8 +41,8 @@ func TestDecodeRejects(t *testing.T) {
 		// pending родителя обязан сброситься, иначе ключ принимается за значение.
 		{"дубликат ключа после вложенного объекта", `{"a":{"b":1},"a":2}`, "дублирующийся ключ"},
 		{"не объект", `"x"`, "объект"},
-		{"неизвестное поле", `{"format_version": 3,"nope":1}`, "неизвестн"},
-		{"не число", `{"format_version": 3,"map_revision":1,"map_id":"T",
+		{"неизвестное поле", `{"format_version": 4,"nope":1}`, "неизвестн"},
+		{"не число", `{"format_version": 4,"map_revision":1,"map_id":"T",
 			"anchors":{"N1.P1":{"x":1e400,"y":0,"z":0,"heading":0}},
 			"topology":{"nodes":[],"turnouts":[],"edges":[],"trackside":[]},
 			"geometry":{"turnouts":{},"edges":{}}}`, ""},

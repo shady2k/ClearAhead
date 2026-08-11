@@ -68,6 +68,9 @@ func Validate(m *Map) error {
 	if err := m.validateConstruction(); err != nil {
 		return err
 	}
+	if err := validateTerrain(m.Terrain); err != nil {
+		return err
+	}
 	return m.validateProfile(DefaultProfile())
 }
 
@@ -360,6 +363,12 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 		seen[ts.ID] = true
 		switch ts.Kind {
 		case "platform", "buffer_stop":
+		case "bridge", "tunnel":
+			// Искусственное сооружение. Для симуляции сегодня это аннотация;
+			// для рельефа — исключение: на протяжении моста и тоннеля земля НЕ
+			// примиряется с осью пути (см. пакет terrain). Без этого земляные
+			// работы сравняли бы долину под мостом и прокопали траншею над
+			// тоннелем.
 		default:
 			return fmt.Errorf("mapfmt: путевой объект %s: неизвестный kind %q", ts.ID, ts.Kind)
 		}

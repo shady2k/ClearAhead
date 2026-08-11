@@ -24,7 +24,7 @@ func oneTurnout(dir string) string {
 		// физическая станция одна и та же, записанная с разных концов.
 	}
 	return fmt.Sprintf(`{
-	  "format_version": 3, "map_id": "T1", "map_revision": 1,
+	  "format_version": 4, "map_id": "T1", "map_revision": 1,
 	  %s,
 	  "topology": {
 	    "nodes": [

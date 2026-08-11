@@ -12,7 +12,7 @@ import (
 // (50,-50), курс π/2, геометрия e2, если не заменён вызовом.
 func twoEdgeMap(e1, e2 string) string {
 	return `{
-  "format_version": 3, "map_id": "X", "map_revision": 1,
+  "format_version": 4, "map_id": "X", "map_revision": 1,
   "anchors": {
     "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 },
     "N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }
@@ -90,7 +90,7 @@ func TestValidateAxisRejectsTEnd(t *testing.T) {
 // угла 120° до 60° (по часовой); её вершина (0,200) касается середины E1.
 func TestValidateAxisRejectsTangent(t *testing.T) {
 	doc := `{
-  "format_version": 3, "map_id": "T", "map_revision": 1,
+  "format_version": 4, "map_id": "T", "map_revision": 1,
   "anchors": {
     "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 1.5707963267948966 },
     "N3.P1": { "x": -50, "y": 186.60254037844388, "z": 0, "heading": 0.5235987755982988 }
@@ -175,7 +175,7 @@ func validateErr(t *testing.T, doc string) string {
 // общем порту: общая точка объяснена топологией и разрешена.
 func TestValidateAxisJointAllowed(t *testing.T) {
 	doc := `{
-  "format_version": 3, "map_id": "J", "map_revision": 1,
+  "format_version": 4, "map_id": "J", "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
   "topology": {
     "nodes": [
@@ -201,7 +201,7 @@ func TestValidateAxisJointAllowed(t *testing.T) {
 // оси которых не совпадают: параллельный путь законен, это не наложение.
 func TestValidateAxisParallelTracksAllowed(t *testing.T) {
 	doc := `{
-  "format_version": 3, "map_id": "P", "map_revision": 1,
+  "format_version": 4, "map_id": "P", "map_revision": 1,
   "anchors": { "N1.P1": { "element": "E1", "x": 0, "y": 0, "z": 0, "heading": 0 } },
   "topology": {
     "nodes": [
