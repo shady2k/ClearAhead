@@ -11,7 +11,7 @@ import (
 // промоушеном от встроенного запроса, а экспортированный Parse переопределяется
 // заглушкой, которая ничего не проверяет.
 type hole struct {
-	protocol.GeometryRequest
+	protocol.NetworkRequest
 }
 
 func (h *hole) Parse(in protocol.Input) error { return nil }

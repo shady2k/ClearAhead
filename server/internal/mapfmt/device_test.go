@@ -5,6 +5,7 @@ import "testing"
 func swFixture() Turnout {
 	return Turnout{
 		ID:    "ST_A_SW_1",
+		Kind:  KindRail,
 		Hand:  "right",
 		Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	}
@@ -54,7 +55,7 @@ func TestПорядокПроходовУстойчив(t *testing.T) {
 func TestElementEndsПокрываетРёбраИПроходы(t *testing.T) {
 	m := &Map{
 		Topology: Topology{
-			Edges:    []Edge{{ID: "E1", From: "N1.P1", To: "ST_A_SW_1.C"}},
+			Edges:    []Edge{{ID: "E1", Kind: KindRail, From: "N1.P1", To: "ST_A_SW_1.C"}},
 			Turnouts: []Turnout{swFixture()},
 		},
 	}

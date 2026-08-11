@@ -56,8 +56,8 @@ func картаСДвумяСтрелками(ид1, ид2 string) *Map {
 	// Порты второй стрелки названы иначе даже при одинаковом ID: одинаковые
 	// имена дали бы повтор квалифицированного порта, и карта умерла бы раньше.
 	стрелки := []Turnout{
-		{ID: ид1, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-		{ID: ид2, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
+		{ID: ид1, Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+		{ID: ид2, Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
 	}
 
 	порты := []Port{}
@@ -73,7 +73,7 @@ func картаСДвумяСтрелками(ид1, ид2 string) *Map {
 			имя := string(rune('A' + i))
 			i++
 			порты = append(порты, Port{ID: "P" + имя, Purpose: "buffer_stop"})
-			рёбра = append(рёбра, Edge{ID: "E" + имя, From: "N1.P" + имя, To: конец})
+			рёбра = append(рёбра, Edge{ID: "E" + имя, Kind: KindRail, From: "N1.P" + имя, To: конец})
 			геомРёбер["E"+имя] = прямая(100)
 		}
 	}

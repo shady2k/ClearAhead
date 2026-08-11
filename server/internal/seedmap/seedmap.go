@@ -34,6 +34,13 @@ import (
 // Option правит карту после сборки.
 type Option func(*mapfmt.Map)
 
+// edge — ребро фабрики. Единственное место, где фикстуры называют вид пути:
+// фабрика порождает рельсовую сеть, и когда в перечень видов войдёт второй,
+// «а какого вида фикстура» будет спрошено здесь, а не в пяти литералах.
+func edge(id, from, to string) mapfmt.Edge {
+	return mapfmt.Edge{ID: id, Kind: mapfmt.KindRail, From: from, To: to}
+}
+
 // WithID задаёт идентификатор карты.
 func WithID(id string) Option { return func(m *mapfmt.Map) { m.MapID = id } }
 
@@ -110,7 +117,7 @@ func Line(opts ...Option) *mapfmt.Map {
 				{ID: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 			},
-			Edges: []mapfmt.Edge{{ID: LineEdgeID, From: "NA.P1", To: "NB.P1"}},
+			Edges: []mapfmt.Edge{edge(LineEdgeID, "NA.P1", "NB.P1")},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{},
@@ -147,7 +154,14 @@ func Station(opts ...Option) *mapfmt.Map {
 		FormatVersion: mapfmt.FormatVersion,
 		MapID:         "ST_A",
 		MapRevision:   2,
-		Anchors:       map[string]mapfmt.Anchor{"N_BOUNDARY.P1": {X: 0, Y: 0, Z: 0, Heading: 0}},
+		// Отметка 142 — не украшение: рецепт рельефа объявляет базу 140, и путь
+		// идёт по насыпи в два метра над ней. Ноль, стоявший здесь после
+		// миграции JSON -> код, был потерей числа из st_a.json, а не решением:
+		// земляные работы честно рыли вдоль всей оси траншею в 140 м с почти
+		// отвесной стеной на границе досягаемости откоса (ClearAhead-27n).
+		// Согласованность этой отметки с базой рельефа держится не соглашением,
+		// а тестом земляных работ в internal/terrain.
+		Anchors: map[string]mapfmt.Anchor{"N_BOUNDARY.P1": {X: 0, Y: 0, Z: 142, Heading: 0}},
 		Topology: mapfmt.Topology{
 			Nodes: []mapfmt.Node{
 				{ID: "N_BOUNDARY", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
@@ -159,11 +173,11 @@ func Station(opts ...Option) *mapfmt.Map {
 				turnout(StationSW1), turnout(StationSW2),
 			},
 			Edges: []mapfmt.Edge{
-				{ID: StationApproach, From: "N_BOUNDARY.P1", To: StationSW1 + ".C"},
-				{ID: StationMain, From: StationSW1 + ".S", To: "N_STOP_MAIN.P1"},
-				{ID: StationCross, From: StationSW1 + ".D", To: StationSW2 + ".C"},
-				{ID: StationSiding, From: StationSW2 + ".S", To: "N_STOP_SIDING.P1"},
-				{ID: StationStub, From: StationSW2 + ".D", To: "N_STOP_STUB.P1"},
+				edge(StationApproach, "N_BOUNDARY.P1", StationSW1+".C"),
+				edge(StationMain, StationSW1+".S", "N_STOP_MAIN.P1"),
+				edge(StationCross, StationSW1+".D", StationSW2+".C"),
+				edge(StationSiding, StationSW2+".S", "N_STOP_SIDING.P1"),
+				edge(StationStub, StationSW2+".D", "N_STOP_STUB.P1"),
 			},
 			Trackside: []mapfmt.Trackside{{
 				ID:     "PLAT_MAIN",
@@ -209,6 +223,7 @@ const TrackTypeID = "TRACK_MAIN_1435"
 func turnout(id string) mapfmt.Turnout {
 	return mapfmt.Turnout{
 		ID:    id,
+		Kind:  mapfmt.KindRail,
 		Hand:  "right",
 		Frog:  "1/9",
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
@@ -281,10 +296,10 @@ func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
 			Turnouts:  []mapfmt.Turnout{},
 			Trackside: []mapfmt.Trackside{},
 			Edges: []mapfmt.Edge{
-				{ID: "E1", From: "N1.P1", To: "N2.P1"},
-				{ID: "E2", From: "N2.P1", To: "N3.P1"},
-				{ID: "E3", From: "N3.P1", To: "N4.P1"},
-				{ID: "E4", From: "N4.P1", To: "N1.P1"},
+				edge("E1", "N1.P1", "N2.P1"),
+				edge("E2", "N2.P1", "N3.P1"),
+				edge("E3", "N3.P1", "N4.P1"),
+				edge("E4", "N4.P1", "N1.P1"),
 			},
 		},
 		Geometry: mapfmt.Geometry{
@@ -326,8 +341,8 @@ func Corridor(opts ...Option) *mapfmt.Map {
 				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 			},
 			Edges: []mapfmt.Edge{
-				{ID: CorridorFirst, From: "NA.P1", To: CorridorJoint},
-				{ID: CorridorSecond, From: CorridorJoint, To: "NB.P1"},
+				edge(CorridorFirst, "NA.P1", CorridorJoint),
+				edge(CorridorSecond, CorridorJoint, "NB.P1"),
 			},
 		},
 		Geometry: mapfmt.Geometry{
@@ -369,7 +384,7 @@ func Blank(opts ...Option) *mapfmt.Map {
 				{ID: BlankWest, Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 				{ID: BlankEast, Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
-			Edges: []mapfmt.Edge{{ID: BlankEdgeID, From: BlankWest + ".P1", To: BlankEast + ".P1"}},
+			Edges: []mapfmt.Edge{edge(BlankEdgeID, BlankWest+".P1", BlankEast+".P1")},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{},

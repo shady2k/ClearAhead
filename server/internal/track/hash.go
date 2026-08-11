@@ -14,10 +14,17 @@ import (
 // Manifest связывает ревизию карты с хешами её ресурсов. Пара (MapID, Revision)
 // определяет ровно один манифест — иначе immutable-URL лжёт.
 type Manifest struct {
-	MapID              string `json:"map_id"`
-	Revision           int    `json:"map_revision"`
-	TrackHash          string `json:"track_hash"`
-	RenderGeometryHash string `json:"render_geometry_hash"`
+	MapID     string `json:"map_id"`
+	Revision  int    `json:"map_revision"`
+	TrackHash string `json:"track_hash"`
+	// NetworkHash — хеш ресурса network. Звался render_geometry_hash, пока
+	// существовал ресурс geometry; ресурса больше нет, а хеш считается ровно от
+	// байтов тела network, и двух имён одной вещи проект не держит.
+	//
+	// Переименовано И ВНУТРИ, а не только на проводе: разведённые имена снаружи
+	// и внутри означают таблицу соответствия, которую придётся держать в голове
+	// каждому, кто ходит между hash.go и ручкой.
+	NetworkHash string `json:"network_hash"`
 }
 
 // BuildManifest считает хеши по нормализованной внутренней модели, а не по
@@ -27,7 +34,7 @@ func BuildManifest(m *mapfmt.Map, ct *CompiledTrack, rg *RenderGeometry) (Manife
 	th := sha256.New()
 	writeTrackModel(th, m, ct)
 
-	// RenderGeometryHash считается по ТЕМ САМЫМ БАЙТАМ, которые уедут клиенту,
+	// NetworkHash считается по ТЕМ САМЫМ БАЙТАМ, которые уедут клиенту,
 	// а не по рукописной модели рядом с ними.
 	//
 	// Первая редакция писала свою текстовую выжимку и не включала в неё Slope,
@@ -44,10 +51,10 @@ func BuildManifest(m *mapfmt.Map, ct *CompiledTrack, rg *RenderGeometry) (Manife
 	}
 	rh := sha256.Sum256(body)
 	return Manifest{
-		MapID:              m.MapID,
-		Revision:           m.MapRevision,
-		TrackHash:          hex.EncodeToString(th.Sum(nil)),
-		RenderGeometryHash: hex.EncodeToString(rh[:]),
+		MapID:       m.MapID,
+		Revision:    m.MapRevision,
+		TrackHash:   hex.EncodeToString(th.Sum(nil)),
+		NetworkHash: hex.EncodeToString(rh[:]),
 	}, nil
 }
 
@@ -69,7 +76,13 @@ func writeTrackModel(w io.Writer, m *mapfmt.Map, ct *CompiledTrack) {
 	sort.Strings(ids)
 	for _, id := range ids {
 		e := ct.Elements[id]
-		fmt.Fprintf(w, "el|%s|%s|%s|%d|%d\n", e.ID, e.From, e.To, int64(e.LengthU), int64(e.LengthS))
+		// Kind входит в выжимку: вид пути — факт О САМОЙ МОДЕЛИ, а не о её
+		// отрисовке, и физика с безопасностью первыми же и разойдутся, если
+		// рельсовый элемент подменить дорожным без смены track_hash. Это ровно
+		// то поле, которое предсказано абзацем «забудут» выше: в тело network
+		// оно попадает само (там хешируются байты), а сюда его надо вписать
+		// рукой. Тест TestTrackHashCoversElementKind падает, если его убрать.
+		fmt.Fprintf(w, "el|%s|%s|%s|%s|%d|%d\n", e.ID, e.Kind, e.From, e.To, int64(e.LengthU), int64(e.LengthS))
 		for _, seg := range e.Prof {
 			fmt.Fprintf(w, "  pr|%d|%.12g|%.12g\n", int64(seg.LengthU), seg.StartSlope, seg.EndSlope)
 		}

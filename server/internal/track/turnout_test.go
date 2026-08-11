@@ -19,7 +19,7 @@ func перевёрнутыйПодход() seedmap.Option {
 	return seedmap.Mutate(func(m *mapfmt.Map) {
 		for i, e := range m.Topology.Edges {
 			if e.ID == seedmap.StationApproach {
-				m.Topology.Edges[i] = mapfmt.Edge{ID: e.ID, From: e.To, To: e.From}
+				m.Topology.Edges[i] = mapfmt.Edge{ID: e.ID, Kind: e.Kind, From: e.To, To: e.From}
 			}
 		}
 	})

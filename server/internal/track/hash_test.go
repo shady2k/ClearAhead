@@ -41,6 +41,45 @@ func TestManifestChangesOnGeometry(t *testing.T) {
 	}
 }
 
+// TestTrackHashCoversElementKind — вид пути обязан входить в track_hash.
+//
+// # Зачем этот тест существует отдельно
+//
+// network_hash считается от САМИХ БАЙТОВ ответа: поле, попавшее в провод,
+// попадает в хеш само, забыть его нельзя. track_hash считается от РУКОПИСНОЙ
+// выжимки в writeTrackModel, и туда каждое новое поле модели надо вписать
+// рукой. Ровно так проекту однажды обошёлся Slope: тело менялось, хеш нет, и
+// клиент с immutable навсегда сохранял устаревшую геометрию — без единого
+// отказа. Вывод, записанный в hash.go, дословен: «забудут».
+//
+// Тест — замок на этот случай: убери e.Kind из строки el| в writeTrackModel, и
+// он упадёт.
+//
+// # Почему карта портится в обход валидатора
+//
+// Compile валидатором не пользуется, и это здесь нужно: сегодня валидатор
+// принимает единственный вид, поэтому ДВУХ законных карт, различающихся только
+// видом, не существует. Предмет теста — покрытие выжимки, а не перечень
+// значений; в день, когда "road" станет законным, тест продолжит проверять то же
+// самое, не изменившись.
+func TestTrackHashCoversElementKind(t *testing.T) {
+	случаи := map[string]func(*mapfmt.Map){
+		// Ребро: вид пишет автор.
+		"вид ребра": func(m *mapfmt.Map) { m.Topology.Edges[0].Kind = "road" },
+		// Стрелка: её проходы — тоже элементы, и вид они берут у неё. Без этой
+		// половины подмена вида устройства прошла бы мимо хеша.
+		"вид стрелки": func(m *mapfmt.Map) { m.Topology.Turnouts[0].Kind = "road" },
+	}
+	base := manifestOf(t, seedmap.Station()).TrackHash
+	for имя, порча := range случаи {
+		t.Run(имя, func(t *testing.T) {
+			if h := manifestOf(t, seedmap.Station(seedmap.Mutate(порча))).TrackHash; h == base {
+				t.Fatalf("смена вида (%s) не изменила track_hash — выжимка описывает не всю модель пути", имя)
+			}
+		})
+	}
+}
+
 // withGeoref добавляет карте валидную геопривязку: хеш должен зависеть от
 // привязки (она меняет смысл координат), но не от provenance — правка
 // комментария автора не должна сбрасывать кэш клиента.
@@ -83,9 +122,10 @@ func TestManifestChangesOnGeoreference(t *testing.T) {
 func TestRenderHashCoversEveryWireField(t *testing.T) {
 	base := func() *RenderGeometry {
 		return &RenderGeometry{
-			MapID: "X", Revision: 1,
+			Region: "X", Revision: 1,
 			Elements: []RenderElement{{
 				ID:    "E1",
+				Kind:  mapfmt.KindRail,
 				Start: PortPose{Plan: geom.Pose{X: 1, Y: 2, Heading: 0.3}, Z: 4, Slope: 0.005},
 				Prims: []RenderPrimitive{{Kind: "arc", LengthM: 10, Radius: 300, Angle: 0.11}},
 				Role:  &RenderRole{Turnout: "SW1", Branch: "diverging", Hand: "right", Frog: "1/9"},
@@ -117,9 +157,10 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 	h0 := renderHashOf(t, base())
 
 	mutations := map[string]func(*RenderGeometry){
-		"map_id":                func(g *RenderGeometry) { g.MapID = "Y" },
-		"map_revision":          func(g *RenderGeometry) { g.Revision = 2 },
+		"region":                func(g *RenderGeometry) { g.Region = "Y" },
+		"revision":              func(g *RenderGeometry) { g.Revision = 2 },
 		"element id":            func(g *RenderGeometry) { g.Elements[0].ID = "E2" },
+		"element kind":          func(g *RenderGeometry) { g.Elements[0].Kind = "road" },
 		"start.plan.x":          func(g *RenderGeometry) { g.Elements[0].Start.Plan.X = 9 },
 		"start.plan.y":          func(g *RenderGeometry) { g.Elements[0].Start.Plan.Y = 9 },
 		"start.plan.heading":    func(g *RenderGeometry) { g.Elements[0].Start.Plan.Heading = 0.9 },
@@ -174,7 +215,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 			g := base()
 			mutate(g)
 			if h := renderHashOf(t, g); h == h0 {
-				t.Fatalf("правка поля %q не изменила render_geometry_hash — ETag описывает не всё тело", name)
+				t.Fatalf("правка поля %q не изменила network_hash — ETag описывает не всё тело", name)
 			}
 		})
 	}
@@ -203,7 +244,7 @@ func TestManifestHashIsBodyHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("манифест: %v", err)
 	}
-	if man.RenderGeometryHash != renderHashOf(t, rg) {
-		t.Fatal("render_geometry_hash не является хешем отдаваемого тела")
+	if man.NetworkHash != renderHashOf(t, rg) {
+		t.Fatal("network_hash не является хешем отдаваемого тела")
 	}
 }

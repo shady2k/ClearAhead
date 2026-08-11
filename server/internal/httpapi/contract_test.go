@@ -14,15 +14,29 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
-// wireGeometry — контракт с клиентом, записанный отдельным типом.
+// wireNetwork — контракт с клиентом, записанный отдельным типом: тело
+// GET /regions/{region}/revisions/{n}/network.
 //
 // Это не копия track.RenderGeometry ради копии: доменный тип может меняться, а
 // провод — нет без осознанного решения. Декодирование идёт с
 // DisallowUnknownFields, поэтому лишнее поле в ответе сервера роняет тест, а не
 // доезжает до клиента незамеченным.
-type wireGeometry struct {
-	MapID              string          `json:"map_id"`
-	Revision           int             `json:"map_revision"`
+//
+// Переезд ресурса под корень региона (ClearAhead-8kx) тела не тронул: сменились
+// адрес и имя ресурса, байты остались те же. Следом (ClearAhead-z4u) сменились и
+// корневые поля тела: были map_id и map_revision, стали region и revision — тело
+// обязано описывать тот ресурс, который спросили, а манифест региона рядом уже
+// отдавал region и revision, и клиент видел две системы имён в соседних ответах.
+// Регион и карта — одно и то же по решению world-storage §3 («map_id обозначает
+// РЕГИОН, а не станцию»), поэтому переименование ничего не переадресовало.
+//
+// Тогда же у элемента появился обязательный `kind` со значением "rail": ресурс
+// network называет класс содержимого, автомобильные дороги приедут в этот же
+// ответ, и различитель заводится ЗАРАНЕЕ — поле в персистентных данных дешевле
+// всего добавить вслепую и дороже всего мигрировать (разбор в mapfmt.KindRail).
+type wireNetwork struct {
+	Region             string          `json:"region"`
+	Revision           int             `json:"revision"`
 	Elements           []wireElement   `json:"elements"`
 	Trackside          []wireTrackside `json:"trackside"`
 	TrackTypes         []wireTrackType `json:"track_types"`
@@ -83,6 +97,7 @@ type wireAddress struct {
 
 type wireElement struct {
 	ID    string          `json:"id"`
+	Kind  string          `json:"kind"`
 	Start wireStart       `json:"start"`
 	Prims []wirePrimitive `json:"primitives"`
 	Role  *wireRole       `json:"role"`
@@ -155,16 +170,21 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 	raw := renderStation(t)
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
-	var w wireGeometry
+	var w wireNetwork
 	if err := dec.Decode(&w); err != nil {
 		t.Fatalf("ответ сервера не укладывается в объявленный контракт: %v", err)
 	}
-	if w.MapID == "" || len(w.Elements) == 0 {
+	if w.Region == "" || len(w.Elements) == 0 {
 		t.Fatalf("контракт декодировался, но пуст: %+v", w)
 	}
 	for _, e := range w.Elements {
 		if e.ID == "" || len(e.Prims) == 0 {
 			t.Fatalf("элемент без ID или без примитивов: %+v", e)
+		}
+		// Вид обязателен У КАЖДОГО элемента, включая проходы стрелок: клиент
+		// разбирает его с первого дня, а не выводит из адреса ресурса.
+		if e.Kind != mapfmt.KindRail {
+			t.Fatalf("элемент %s: вид %q, ожидался %q", e.ID, e.Kind, mapfmt.KindRail)
 		}
 		for _, p := range e.Prims {
 			switch p.Kind {
@@ -305,8 +325,8 @@ func compileFixture(t *testing.T) (*mapfmt.Map, *track.CompiledTrack, *track.Ren
 	return m, ct, rg
 }
 
-// renderStation компилирует карту-фикстуру и сериализует геометрию так же, как
-// это делает ручка.
+// renderStation компилирует карту-фикстуру и сериализует сеть так же, как это
+// делает ручка /regions/{region}/revisions/{n}/network.
 func renderStation(t *testing.T) []byte {
 	t.Helper()
 	_, _, rg := compileFixture(t)

@@ -110,7 +110,7 @@ func TestСтыкВОбщемПортуРазрешён(t *testing.T) {
 		конец := m.Topology.Edges[0].To
 		m.Topology.Nodes = append(m.Topology.Nodes,
 			mapfmt.Node{ID: "NC", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}})
-		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: второеРебро, From: конец, To: "NC.P1"})
+		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: второеРебро, Kind: mapfmt.KindRail, From: конец, To: "NC.P1"})
 		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
 		m.Geometry.Edges[второеРебро] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
 	}))
@@ -123,7 +123,7 @@ func TestПараллельныеПутиРазрешены(t *testing.T) {
 	m := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
 		первое := m.Topology.Edges[0]
 		m.Topology.Edges = append(m.Topology.Edges,
-			mapfmt.Edge{ID: второеРебро, From: первое.From, To: первое.To})
+			mapfmt.Edge{ID: второеРебро, Kind: mapfmt.KindRail, From: первое.From, To: первое.To})
 		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
 		m.Geometry.Edges[второеРебро] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{дуга(200, 0.5)}}
 		// В порту сходятся два элемента: якорь обязан назвать тот, ВНУТРЬ

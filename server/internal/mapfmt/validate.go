@@ -253,6 +253,9 @@ func (m *Map) collectElements() (map[string]bool, error) {
 		if err := ValidID("ребро", e.ID); err != nil {
 			return nil, err
 		}
+		if err := validKind("ребро", e.ID, e.Kind); err != nil {
+			return nil, err
+		}
 		if els[e.ID] {
 			return nil, fmt.Errorf("mapfmt: ребро %q объявлено дважды", e.ID)
 		}
@@ -276,6 +279,11 @@ func (m *Map) collectElements() (map[string]bool, error) {
 	devs := map[string]bool{}
 	for _, t := range m.Topology.Turnouts {
 		if err := ValidID("стрелка", t.ID); err != nil {
+			return nil, err
+		}
+		// Вид устройства проверяется наравне с видом ребра: проходы стрелки —
+		// такие же адресуемые элементы сети, и берут они его отсюда.
+		if err := validKind("стрелка", t.ID, t.Kind); err != nil {
 			return nil, err
 		}
 		if devs[t.ID] {
@@ -302,6 +310,27 @@ func (m *Map) collectElements() (map[string]bool, error) {
 		}
 	}
 	return els, nil
+}
+
+// validKind — единственное место, где записано, какие виды пути бывают.
+//
+// Пустое значение отвергается ОТДЕЛЬНЫМ отказом, а не сваливается в общий
+// «неизвестный вид»: пустое поле означает не опечатку, а карту, написанную до
+// того, как вид стал обязательным, и автору надо сказать именно это. Молчаливое
+// умолчание «нет kind — значит рельсы» здесь запрещено: оно ставит на карту
+// утверждение, которого автор не делал (ClearAhead-z4u).
+//
+// Добавление второго вида — строка в этом switch и строка в тексте отказа.
+func validKind(what, id, kind string) error {
+	switch kind {
+	case KindRail:
+		return nil
+	case "":
+		return fmt.Errorf("mapfmt: %s %s: не указан kind — вид элемента сети обязателен, допустимо %q",
+			what, id, KindRail)
+	default:
+		return fmt.Errorf("mapfmt: %s %s: неизвестный вид %q, допустимо %q", what, id, kind, KindRail)
+	}
 }
 
 // validateEdgeEnds требует, чтобы каждый порт был либо занят ребром, либо нёс

@@ -12,7 +12,10 @@ import (
 
 // CompiledElement — линейный элемент после компиляции. Длины в s.
 type CompiledElement struct {
-	ID      string
+	ID string
+	// Kind — вид пути (mapfmt.KindRail). Входит в track_hash: это факт о самой
+	// модели пути, а не украшение провода.
+	Kind    string
 	From    string
 	To      string
 	LengthU units.Distance
@@ -85,7 +88,13 @@ type RenderRole struct {
 // RenderElement — элемент с абсолютной стартовой позой: клиент рисует цепочку
 // от неё и ничего не пересчитывает.
 type RenderElement struct {
-	ID    string            `json:"id"`
+	ID string `json:"id"`
+	// Kind — вид пути: "rail" (mapfmt.KindRail). Ресурс network называет КЛАСС
+	// содержимого, а не вид, и автомобильные дороги приедут в этот же ответ —
+	// различать их клиенту нужно по полю, а не по адресу. Поле обязательное и
+	// без omitempty: пустой вид в проводе означал бы, что клиент вправе
+	// додумать его сам.
+	Kind  string            `json:"kind"`
 	Start PortPose          `json:"start"`
 	Prims []RenderPrimitive `json:"primitives"`
 	Role  *RenderRole       `json:"role,omitempty"`
@@ -113,8 +122,29 @@ type RenderTrackside struct {
 // рецепту. Массивы непустые даже для карты без блока construction: форма
 // контракта — «[]», а не null.
 type RenderGeometry struct {
-	MapID              string            `json:"map_id"`
-	Revision           int               `json:"map_revision"`
+	// Region и Revision называют ТОТ РЕСУРС, КОТОРЫЙ СПРОСИЛИ:
+	// GET /regions/{region}/revisions/{n}/network. До ClearAhead-z4u корневые
+	// поля звались map_id и map_revision, а манифест региона рядом отдавал
+	// region и revision, — клиент видел две системы имён в соседних ответах.
+	//
+	// Регион и карта — ОДНО И ТО ЖЕ, и это принятое решение, а не совпадение:
+	// world-storage-and-zones-design §3 — «map_id обозначает РЕГИОН, а не
+	// станцию; станция — именованная область внутри региона». Строка
+	// `region := m.MapID` в worldgen.Bootstrap — реализация этого решения.
+	//
+	// Оговорка нужна потому, что в коде живут оба слова: «карта» (mapstore,
+	// MapID, /maps — авторская сторона) и «регион» (/regions — сторона мира), и
+	// ниоткуда не видно, что они называют одну сущность.
+	//
+	// Регион существует по ГЕОДЕЗИЧЕСКОЙ причине, а не по складской: у него свой
+	// frame (датум, origin, азимут оси X, ground_to_grid), и сторона до ~50 км
+	// выбрана так, чтобы плоское приближение оставалось честным — 50 км дают
+	// отклонение около 13 см, 100 км уже неприемлемо. Сеть Краснодарского края
+	// 400×400 км — это не одна карта на многих регионах, а МНОГО РЕГИОНОВ,
+	// сшитых явно: стык — отдельная сущность (пара frame'ов плюс преобразование),
+	// а пересекающий его путь — два элемента со связью, а не один длинный.
+	Region             string            `json:"region"`
+	Revision           int               `json:"revision"`
 	Elements           []RenderElement   `json:"elements"`
 	Trackside          []RenderTrackside `json:"trackside,omitempty"`
 	TrackTypes         []RenderTrackType `json:"track_types"`
@@ -218,7 +248,9 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		}
 	}
 	rg := &RenderGeometry{
-		MapID:              m.MapID,
+		// m.MapID кладётся в region без перевода: карта И ЕСТЬ регион
+		// (world-storage §3, см. поле Region).
+		Region:             m.MapID,
 		Revision:           m.MapRevision,
 		TrackTypes:         []RenderTrackType{},
 		ConstructionRuns:   []RenderRun{},
@@ -234,13 +266,14 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		}
 		ct.Elements[id] = CompiledElement{
 			ID:      id,
+			Kind:    e.Kind,
 			From:    e.From,
 			To:      e.To,
 			LengthU: e.Plan.Length(),
 			LengthS: lengthS,
 			Prof:    e.Prof,
 		}
-		re := RenderElement{ID: id, Start: e.Start, Prims: make([]RenderPrimitive, 0, len(e.Plan))}
+		re := RenderElement{ID: id, Kind: e.Kind, Start: e.Start, Prims: make([]RenderPrimitive, 0, len(e.Plan))}
 		if p, ok := passage[id]; ok {
 			re.Role = &RenderRole{
 				Turnout: p.turnout.ID,

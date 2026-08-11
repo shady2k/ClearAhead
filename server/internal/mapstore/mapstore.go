@@ -107,7 +107,7 @@ func buildState(m mapfmt.Map) (*State, error) {
 		return nil, err
 	}
 	// Байты берутся из track.RenderBody — того же места, по которому считается
-	// render_geometry_hash: своя сериализация здесь означала бы, что ETag
+	// network_hash: своя сериализация здесь означала бы, что ETag
 	// когда-нибудь опишет не то тело, которое ушло.
 	body, err := track.RenderBody(rg)
 	if err != nil {

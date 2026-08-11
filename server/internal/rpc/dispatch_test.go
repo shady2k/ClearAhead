@@ -11,14 +11,14 @@ import (
 func TestDispatchParsesBeforeHandler(t *testing.T) {
 	calls := 0
 	m := NewMux()
-	Register[protocol.GeometryRequest](m, "geometry",
-		func(ctx context.Context, r protocol.GeometryRequest) (string, error) {
+	Register[protocol.NetworkRequest](m, "network",
+		func(ctx context.Context, r protocol.NetworkRequest) (string, error) {
 			calls++
-			return r.MapID(), nil
+			return r.Region(), nil
 		})
 
-	got, err := m.Dispatch(context.Background(), "geometry", protocol.Input{
-		Path: map[string]string{"id": "ST_A", "rev": "1"},
+	got, err := m.Dispatch(context.Background(), "network", protocol.Input{
+		Path: map[string]string{"region": "ST_A", "rev": "1"},
 	})
 	if err != nil {
 		t.Fatalf("корректный вход: %v", err)
@@ -29,8 +29,8 @@ func TestDispatchParsesBeforeHandler(t *testing.T) {
 
 	// Невалидная ревизия: обработчик не должен быть вызван вовсе.
 	before := calls
-	if _, err := m.Dispatch(context.Background(), "geometry", protocol.Input{
-		Path: map[string]string{"id": "ST_A", "rev": "не число"},
+	if _, err := m.Dispatch(context.Background(), "network", protocol.Input{
+		Path: map[string]string{"region": "ST_A", "rev": "не число"},
 	}); err == nil {
 		t.Fatal("ожидался отказ на невалидной ревизии")
 	}
@@ -48,13 +48,13 @@ func TestDispatchUnknownMethod(t *testing.T) {
 
 func TestDispatchRejectsGarbageBody(t *testing.T) {
 	m := NewMux()
-	Register[protocol.GeometryRequest](m, "geometry",
-		func(ctx context.Context, r protocol.GeometryRequest) (string, error) { return "", nil })
-	_, err := m.Dispatch(context.Background(), "geometry", protocol.Input{
-		Path: map[string]string{"id": "", "rev": "1"},
+	Register[protocol.NetworkRequest](m, "network",
+		func(ctx context.Context, r protocol.NetworkRequest) (string, error) { return "", nil })
+	_, err := m.Dispatch(context.Background(), "network", protocol.Input{
+		Path: map[string]string{"region": "", "rev": "1"},
 		Body: json.RawMessage(`{`),
 	})
 	if err == nil {
-		t.Fatal("ожидался отказ на пустом map_id")
+		t.Fatal("ожидался отказ на пустом идентификаторе региона")
 	}
 }

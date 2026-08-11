@@ -66,9 +66,9 @@ func TestРеброПодИменемПроходаОтвергается(t *tes
 		Topology: Topology{
 			Nodes: []Node{{ID: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
 			Turnouts: []Turnout{
-				{ID: "SW", Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+				{ID: "SW", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
 			},
-			Edges: []Edge{{ID: "SW" + PassageStraight, From: "N1.P1", To: "N1.P1"}},
+			Edges: []Edge{{ID: "SW" + PassageStraight, Kind: KindRail, From: "N1.P1", To: "N1.P1"}},
 		},
 		Geometry: Geometry{
 			Turnouts: map[string]TurnoutGeometry{"SW": {

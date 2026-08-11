@@ -19,8 +19,8 @@ func main() {
 	addr := flag.String("addr", ":8080", "адрес прослушивания")
 	flag.Parse()
 
-	// Затравка одна и та же для карты в памяти и для мира в базе: иначе
-	// геометрия описывала бы одну станцию, а рельеф — другую.
+	// Затравка одна и та же для карты в памяти и для мира в базе: иначе сеть
+	// описывала бы одну станцию, а рельеф — другую.
 	seed := seedmap.Station(seedmap.WithTerrain())
 
 	store := mapstore.Open()
@@ -28,8 +28,8 @@ func main() {
 	if err != nil {
 		log.Fatalf("затравочная карта не проходит вход: %v", err)
 	}
-	log.Printf("карта %s ревизия %d: %d элементов, геометрия %s",
-		st.Manifest.MapID, st.Manifest.Revision, len(st.Track.Elements), st.Manifest.RenderGeometryHash[:12])
+	log.Printf("карта %s ревизия %d: %d элементов, сеть %s",
+		st.Manifest.MapID, st.Manifest.Revision, len(st.Track.Elements), st.Manifest.NetworkHash[:12])
 
 	world, err := worldstore.Open(*dbPath)
 	if err != nil {
@@ -53,13 +53,23 @@ func main() {
 
 	// КОМПОЗИЦИЯ ЖИВЁТ ЗДЕСЬ, а не внутри обработчиков.
 	//
-	// Каждая ручка знает ровно своё хранилище: карт — mapstore, чанков —
+	// Каждая ручка знает ровно своё хранилище: сети — mapstore, чанков —
 	// worldstore. Появление третьего хранилища добавит строку сюда и не тронет
 	// ни одного существующего обработчика. Обратный порядок — передать второе
 	// хранилище в обработчик карт и разветвлять путь внутри его ServeHTTP —
 	// сделал бы его корнем композиции для всего мира.
+	//
+	// У корня /regions/ ровно поэтому такая форма: сеть региона лежит в
+	// mapstore, рельеф — в worldstore, а собрать один корень из двух хранилищ
+	// вправе только тот, кто открыл оба, — то есть main. Роутер получает готовые
+	// подручки и не знает ни одного хранилища; манифест региона — единственный,
+	// кому нужны оба, и оба приходят ему аргументами, а не через соседа.
 	mux := http.NewServeMux()
-	mux.Handle("/regions/", httpapi.NewChunksHandler(world))
+	mux.Handle("/regions/", httpapi.NewRegionsHandler(
+		httpapi.NewRegionManifestHandler(world, store),
+		httpapi.NewNetworkHandler(store),
+		httpapi.NewChunksHandler(world),
+	))
 	mux.Handle("/", httpapi.NewHandler(store))
 
 	// http.ListenAndServe не ставит ни одного таймаута: соединение, которое

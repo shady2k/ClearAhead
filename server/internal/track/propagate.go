@@ -63,7 +63,10 @@ type Junctions map[Incidence][]PortRelation
 
 // Element — линейный элемент: ребро или проход стрелки.
 type Element struct {
-	ID    string
+	ID string
+	// Kind — вид пути (mapfmt.KindRail). У ребра свой, у прохода — вид
+	// устройства; правило записано один раз в mapfmt.ElementKinds.
+	Kind  string
 	From  string
 	To    string
 	Plan  geom.Chain
@@ -408,6 +411,9 @@ func settle(poses map[Incidence]PortPose, at Incidence, want PortPose) error {
 // buildElements переводит выравнивания карты в цепочки geom и профили.
 func buildElements(m *mapfmt.Map) (map[string]Element, error) {
 	ends := m.ElementEnds()
+	// Виды берутся той же таблицей, что и концы, и по тому же ключу: вид не
+	// выводится здесь заново — правило «откуда он у прохода» живёт в mapfmt.
+	kinds := m.ElementKinds()
 
 	out := map[string]Element{}
 	for id, a := range m.AllAlignments() {
@@ -441,7 +447,7 @@ func buildElements(m *mapfmt.Map) (map[string]Element, error) {
 		if !ok {
 			return nil, fmt.Errorf("track: у элемента %s нет концов", id)
 		}
-		out[id] = Element{ID: id, From: e[0], To: e[1], Plan: chain, Prof: prof}
+		out[id] = Element{ID: id, Kind: kinds[id], From: e[0], To: e[1], Plan: chain, Prof: prof}
 	}
 	return out, nil
 }

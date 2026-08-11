@@ -32,7 +32,7 @@ func frogConstruction() *mapfmt.Construction {
 }
 
 func sw1Right() mapfmt.Turnout {
-	return mapfmt.Turnout{ID: "SW1", Hand: "right"}
+	return mapfmt.Turnout{ID: "SW1", Kind: mapfmt.KindRail, Hand: "right"}
 }
 
 func mustChain(t *testing.T, prims ...geom.Primitive) geom.Chain {

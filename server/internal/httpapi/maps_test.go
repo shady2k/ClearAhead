@@ -60,13 +60,15 @@ func TestMapsNew(t *testing.T) {
 	if man.MapID != "NEW" || man.Revision != 1 {
 		t.Fatalf("манифест %+v, ожидался NEW ревизии 1", man)
 	}
-	// Геометрия новой карты доступна сразу по адресу из манифеста.
+	// Сеть новой карты доступна сразу — по адресу региона, собранному из
+	// манифеста. Ручка тут ДРУГАЯ (сеть уехала под корень региона), но
+	// хранилище то же самое: операция «новая» обязана быть видна ей немедленно.
 	gw := httptest.NewRecorder()
-	h.ServeHTTP(gw, httptest.NewRequest("GET", geometryURL(man), nil))
+	NewNetworkHandler(s).ServeHTTP(gw, httptest.NewRequest("GET", networkURL(man.MapID, man.Revision), nil))
 	if gw.Code != 200 {
-		t.Fatalf("геометрия после новой: код %d, ожидалось 200", gw.Code)
+		t.Fatalf("сеть после новой: код %d, ожидалось 200", gw.Code)
 	}
-	if got, want := gw.Header().Get("ETag"), `"`+man.RenderGeometryHash+`"`; got != want {
+	if got, want := gw.Header().Get("ETag"), `"`+man.NetworkHash+`"`; got != want {
 		t.Fatalf("ETag %q, ожидался %q", got, want)
 	}
 }
@@ -94,16 +96,5 @@ func TestManifestEmptyStart(t *testing.T) {
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/manifest", nil))
 	if w.Code != 404 {
 		t.Fatalf("манифест пустого старта: код %d, ожидался 404", w.Code)
-	}
-}
-
-// TestGeometryEmptyStart — пустой старт: геометрия отвечает 404, а не паникой.
-func TestGeometryEmptyStart(t *testing.T) {
-	s := mapstore.Open()
-	h := NewHandler(s)
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest("GET", "/maps/ST_A/revisions/1/geometry", nil))
-	if w.Code != 404 {
-		t.Fatalf("геометрия пустого старта: код %d, ожидался 404", w.Code)
 	}
 }

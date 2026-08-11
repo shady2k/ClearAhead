@@ -85,7 +85,7 @@ func двеКомпоненты(якорь1 mapfmt.Anchor, план1 []mapfmt.HP
 			mapfmt.Node{ID: "NC", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 			mapfmt.Node{ID: "ND", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 		)
-		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: второеРебро, From: "NC.P1", To: "ND.P1"})
+		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: второеРебро, Kind: mapfmt.KindRail, From: "NC.P1", To: "ND.P1"})
 		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: план1}
 		m.Geometry.Edges[второеРебро] = mapfmt.Alignments{Horizontal: план2}
 		m.Anchors = map[string]mapfmt.Anchor{первое.From: якорь1, "NC.P1": якорь2}

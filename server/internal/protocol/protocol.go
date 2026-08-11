@@ -33,7 +33,7 @@ type Input struct {
 // пакета может унаследовать sealed() промоушеном от встроенного protocol-запроса
 // и переопределить Parse заглушкой, и тогда Register примет его, а обработчик
 // получит неразобранный вход. native упоминает T в сигнатуре: унаследовать его
-// нельзя (у встроенного запроса сигнатура была бы native() GeometryRequest, а
+// нельзя (у встроенного запроса сигнатура была бы native() NetworkRequest, а
 // требуется native() T), а определить свой нельзя — имя неэкспортировано.
 // Реализовать Request может ровно тот тип, который объявлен внутри protocol.
 type Request[T any] interface {
@@ -43,26 +43,38 @@ type Request[T any] interface {
 	native() T
 }
 
-// GeometryRequest — запрос геометрии карты.
-type GeometryRequest struct {
-	mapID    string
+// NetworkRequest — запрос сети региона: /regions/{region}/revisions/{n}/network.
+//
+// Здесь была GeometryRequest с полем map_id. Переименование не косметическое:
+// у ресурса сменился корень. Сеть адресуется РЕГИОНОМ, а не картой, потому что
+// корень у клиента должен быть один — рельеф региона и сеть региона обязаны
+// называться одним именем, иначе клиенту приходится знать соглашение
+// «region == map_id», которое сегодня живёт одной строкой в worldgen.Bootstrap.
+// Про имя `network` — см. httpapi.NewNetworkHandler: оно называет КЛАСС, а не
+// вид, и потому переживёт появление автомобильных дорог.
+//
+// Ширина идентификатора региона проверяется тем же лимитом, что и у карты
+// (mapfmt.MaxIDLength): сегодня это одно и то же значение, и второй лимит
+// разошёлся бы с первым молча.
+type NetworkRequest struct {
+	region   string
 	revision int
 }
 
-func (*GeometryRequest) sealed() {}
+func (*NetworkRequest) sealed() {}
 
 // native — печать подлинности: возвращает сам запрос. См. комментарий к Request.
-func (r *GeometryRequest) native() GeometryRequest { return *r }
+func (r *NetworkRequest) native() NetworkRequest { return *r }
 
 // Parse разбирает и проверяет внешний вход. Единственный способ заполнить поля
-// GeometryRequest: они неэкспортируемые, а других сеттеров нет.
-func (r *GeometryRequest) Parse(in Input) error {
-	id := in.Path["id"]
-	if id == "" {
-		return fmt.Errorf("protocol: пустой map_id")
+// NetworkRequest: они неэкспортируемые, а других сеттеров нет.
+func (r *NetworkRequest) Parse(in Input) error {
+	region := in.Path["region"]
+	if region == "" {
+		return fmt.Errorf("protocol: пустой идентификатор региона")
 	}
-	if len(id) > mapfmt.MaxIDLength {
-		return fmt.Errorf("protocol: map_id длиннее %d символов", mapfmt.MaxIDLength)
+	if len(region) > mapfmt.MaxIDLength {
+		return fmt.Errorf("protocol: идентификатор региона длиннее %d символов", mapfmt.MaxIDLength)
 	}
 	rev, err := strconv.Atoi(in.Path["rev"])
 	if err != nil {
@@ -71,15 +83,15 @@ func (r *GeometryRequest) Parse(in Input) error {
 	if rev < 1 {
 		return fmt.Errorf("protocol: ревизия должна быть положительной, получено %d", rev)
 	}
-	r.mapID, r.revision = id, rev
+	r.region, r.revision = region, rev
 	return nil
 }
 
-// MapID возвращает проверенный идентификатор карты.
-func (r GeometryRequest) MapID() string { return r.mapID }
+// Region возвращает проверенный идентификатор региона.
+func (r NetworkRequest) Region() string { return r.region }
 
 // Revision возвращает проверенный номер ревизии.
-func (r GeometryRequest) Revision() int { return r.revision }
+func (r NetworkRequest) Revision() int { return r.revision }
 
 // ManifestRequest — запрос манифеста загруженной карты.
 //
