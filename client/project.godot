@@ -5,8 +5,8 @@ config_version=5
 [application]
 
 config/name="ClearAhead"
-run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.1", "GL Compatibility")
+run/main_scene="res://scenes/app.tscn"
+config/features=PackedStringArray("4.1", "Forward Plus")
 
 [display]
 
@@ -15,7 +15,13 @@ window/size/viewport_height=720
 
 [rendering]
 
-renderer/rendering_method="gl_compatibility"
+; Forward+, а не gl_compatibility. Метод рендера раньше передавался ФЛАГОМ
+; ЗАПУСКА у каждой 3D-цели порознь, потому что разработка шла на VM с llvmpipe
+; (Accelerated: no), где Forward+ не поднимается. Игра одна — настройка одна;
+; мир рассчитывает на тени, дымку и SSAO, которых в gl_compatibility нет.
+; На машине без ускорителя метод по-прежнему перебивается флагом:
+;   godot --rendering-method gl_compatibility --path client
+renderer/rendering_method="forward_plus"
 renderer/rendering_method.mobile="gl_compatibility"
 
 [client]
