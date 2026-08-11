@@ -73,22 +73,42 @@ ifneq ($(strip $(ELEV)),)
 SK_ARGS += --elev $(ELEV)
 endif
 
-.PHONY: help world world-shot terrain-probe tile-dump sketch3d sketch3d-shot dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
+# ОКНО НА ВРЕМЯ СЪЁМКИ И ЗОНДОВ. Godot рисует только в настоящее окно, поэтому
+# снимок и зонды его создают — и на маке оно всплывает поверх работы, отбирая
+# фокус. Увести его за пределы экрана дешевле, чем терпеть: снимок читается из
+# текстуры вьюпорта, а не с экрана, и от положения окна не зависит (проверено:
+# кадр байт в байт тот же).
+#
+# Пусто — окно там, где его поставит система: make fpv-shot WINDOW=
+# Живые цели (world, fpv, client) окно НЕ прячут: их смысл в том, чтобы смотреть.
+WINDOW ?= --position -6000,-6000
+
+.PHONY: help game game-shot schema shell-probe world world-shot fpv fpv-shot walk-probe terrain-probe camera-probe glb-probe perf-probe tile-dump sketch3d sketch3d-shot dev dev-bin dev-shot serve client shot shot-offline contract test test-go test-client vnc build fmt clean
 
 help:
 	@echo 'ClearAhead — цели разработки'
 	@echo
-	@echo '  make dev        СЕРВЕР И КЛИЕНТ разом — обычный способ запустить редактор'
+	@echo '  make game       ИГРА: меню, выбор роли, мир (эталон вместо сервера)'
+	@echo '  make game-shot  снимок оболочки в $(SHOT): ROLE=, STEP='
+	@echo '  make dev        СЕРВЕР И ИГРА разом — обычный способ запустить всё'
 	@echo '  make dev-shot   то же, но снимок вместо показа, и оба гасятся'
 	@echo '  make serve      только сервер на $(SERVER_ADDR) (передний план, Ctrl-C — стоп)'
-	@echo '  make client     только клиент на $(DISPLAY_ID); смотреть: $(VNC_URL)'
-	@echo '  make shot       снимок клиента в $(SHOT) — ЕДИНСТВЕННАЯ надёжная проверка'
+	@echo '  make client     только игра на $(DISPLAY_ID); смотреть: $(VNC_URL)'
+	@echo '  make schema     ТОЛЬКО 2D-схема (оснастка контракта, без оболочки)'
+	@echo '  make shot       снимок 2D-схемы в $(SHOT) — надёжная проверка контракта'
 	@echo '  make contract   контрактный тест клиента против эталона (без сервера)'
 	@echo '  make test       всё: go test ./... + контрактный тест клиента'
 	@echo '  make sketch3d   ЭСКИЗ: тот же путь мешами в 3D, орто-камера'
 	@echo '  make world      СПАЙК МИРА: рельеф, лес, река, посёлок (нужен Forward+)'
 	@echo '  make world-shot снимок спайка мира в $(SHOT)'
+	@echo '  make fpv        СПАЙК МАШИНИСТА: человек в мире, вид с высоты его глаз'
+	@echo '  make fpv-shot   снимок с высоты глаз в $(SHOT)'
+	@echo '  make shell-probe действуют ли переходы оболочки: Esc в паузу и обратно, Tab в схему'
+	@echo '  make walk-probe ходит ли человек: стоит, идёт, вертит головой, всходит на путь'
 	@echo '  make terrain-probe  статистика поля высот спайка мира (без окна)'
+	@echo '  make camera-probe   действует ли управление камерой (метры сдвига)'
+	@echo '  make glb-probe      что внутри чужой .glb: узлы и габариты в метрах'
+	@echo '  make perf-probe     почему тормозит: кадр и пересадка травы порознь'
 	@echo '  make tile-dump      процедурные тайлы спайка мира в PNG (без окна)'
 	@echo '  make vnc        напомнить, куда смотреть и где пароль'
 	@echo
@@ -98,7 +118,57 @@ help:
 	@echo '  make serve MAP=server/internal/mapfmt/testdata/fixture_station.json'
 	@echo '  make shot FOCUS=400,0 ZOOM=30      # горловина крупно'
 
-## dev — сервер И клиент одной командой. Обычный способ запустить редактор.
+## game — ИГРА ЦЕЛИКОМ: меню, выбор роли, мир. Главная сцена проекта, поэтому
+## запускается без указания сцены.
+##
+## Сервер не нужен: --offline берёт путь из эталона contract/. С сервером игра
+## запускается целью dev (она поднимает и его), либо руками через --server.
+##
+## РОЛЬ можно взять сразу, минуя меню — это отладочный вход, а не игровой:
+##   make game                    меню
+##   make game ROLE=driver        сразу машинистом: человек в мире
+##   make game ROLE=dsp           сразу ДСП: мир сверху, Tab — схема
+##   make game ROLE=builder       сразу строителем
+##
+## УПРАВЛЕНИЕ ПЕЧАТАЕТСЯ В HUD, а не здесь: искать его в Makefile игроку негде.
+ROLE ?=
+STEP ?=
+GAME_ARGS := --offline
+ifneq ($(strip $(ROLE)),)
+GAME_ARGS += --role $(ROLE)
+endif
+APP_ARGS := $(GAME_ARGS)
+ifneq ($(strip $(STEP)),)
+APP_ARGS += --step $(STEP)
+endif
+
+game:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client -- $(GAME_ARGS)
+
+## game-shot — снимок ОБОЛОЧКИ. Проверяет ровно то, чего не проверяет ни один
+## снимок мира: экраны, переходы между ними и что роль действительно строит свой
+## мир. Кнопка, которая не нарисовалась, ошибки в лог не пишет.
+##   make game-shot                        главное меню
+##   make game-shot STEP=map               экран выбора карты
+##   make game-shot STEP=role              экран выбора роли
+##   make game-shot ROLE=dsp STEP=chunks   отладочный слой чанков (F3)
+##   make game-shot ROLE=driver            вид с высоты глаз машиниста
+##   make game-shot ROLE=dsp STEP=schema   ДСП, переключённый в плоскую схему
+##   make game-shot ROLE=builder STEP=pause  пауза поверх мира
+game-shot:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client \
+		--script res://tools/app_shot.gd -- --shot $(SHOT) --frames $(FRAMES) $(APP_ARGS)
+	@echo "снимок: $(SHOT) — посмотрите на него, логу верить нельзя"
+
+## schema — ТОЛЬКО плоская схема, без оболочки и без ролей. Это оснастка, а не
+## игра: ею проверяется контракт отрисовки. В самой игре та же схема живёт
+## внутри роли ДСП (Tab), и код у них общий — scenes/main.tscn и app.tscn
+## ссылаются на одни и те же world.gd, camera.gd, debug.gd.
+schema:
+	@echo 'Схема на $(DISPLAY_ID). Смотреть: $(VNC_URL)'
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client res://scenes/main.tscn -- --server=$(SERVER_URL)
+
+## dev — сервер И игра одной командой. Обычный способ запустить всё.
 ##
 ## Сервер уходит в фон, цель ждёт, пока порт начнёт слушать, и только потом
 ## поднимает клиента: иначе клиент успевает спросить раньше, чем есть кого
@@ -121,6 +191,8 @@ dev: dev-bin
 
 ## dev-shot — то же, но вместо показа снимает снимок и гасит обоих.
 ## Годится для быстрой проверки «что там сейчас на экране».
+## СНИМАЕТ ПЛОСКУЮ СХЕМУ, а не оболочку: проверяется провод от сервера до
+## отрисовки, и лишние экраны здесь только мешают. Снимок игры — game-shot.
 dev-shot: dev-bin
 	@$(DEV_BIN) -map $(MAP) -addr $(SERVER_ADDR) & \
 	srv=$$!; \
@@ -130,7 +202,7 @@ dev-shot: dev-bin
 		kill -0 $$srv 2>/dev/null || { echo 'сервер не поднялся'; exit 1; }; \
 		sleep 0.1; \
 	done; \
-	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script tests/smoke_screenshot.gd -- \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client --script tests/smoke_screenshot.gd -- \
 		--server=$(SERVER_URL) $(SHOT_ARGS)
 	@echo "снимок: $(SHOT) — посмотрите на него, логу верить нельзя"
 
@@ -143,25 +215,27 @@ dev-bin:
 serve:
 	$(GO) run ./server/cmd/clearahead -map $(MAP) -addr $(SERVER_ADDR)
 
-## client — клиент на видимом дисплее. Сервер должен быть уже поднят.
-## Формат аргумента именно --server=URL: main.gd разбирает его через begins_with("--server=").
+## client — ИГРА против уже поднятого сервера. Открывается меню, путь приходит с
+## сервера, а не из эталона (этим и отличается от цели game).
+## Формат аргумента именно --server=URL: app.gd разбирает его через begins_with("--server=").
 client:
-	@echo 'Клиент на $(DISPLAY_ID). Смотреть: $(VNC_URL)'
+	@echo 'Игра на $(DISPLAY_ID). Смотреть: $(VNC_URL)'
 	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client -- --server=$(SERVER_URL)
 
-## shot — снимок. Сервер нужен; без него клиент штатно покажет отказ,
-## и это будет видно на снимке, а не в логе.
+## shot — снимок ПЛОСКОЙ СХЕМЫ (scenes/main.tscn), а не игры: снимок оболочки —
+## это game-shot. Сервер нужен; без него клиент штатно покажет отказ, и это
+## будет видно на снимке, а не в логе.
 ## Аргументы снимка разделены ПРОБЕЛОМ: smoke_screenshot.gd берёт их через
 ## _arg_value(name) = args[i+1], а не через "=".
 shot:
-	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script tests/smoke_screenshot.gd -- \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client --script tests/smoke_screenshot.gd -- \
 		--server=$(SERVER_URL) $(SHOT_ARGS)
 	@echo "снимок: $(SHOT) — посмотрите на него, логу верить нельзя"
 
 ## shot-offline — снимок из файла эталона, без сервера. Полезно, когда
 ## проверяется отрисовка, а не сеть.
 shot-offline:
-	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script tests/smoke_screenshot.gd -- \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client --script tests/smoke_screenshot.gd -- \
 		--geometry-file=../contract/render_geometry.golden.json $(SHOT_ARGS)
 	@echo "снимок: $(SHOT)"
 
@@ -180,7 +254,7 @@ sketch3d:
 
 ## sketch3d-shot — снимок эскиза в $(SHOT).
 sketch3d-shot:
-	DISPLAY=$(DISPLAY_ID) $(GODOT) --path client --script res://scripts/sketch3d_shot.gd -- \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client --script res://scripts/sketch3d_shot.gd -- \
 		--shot $(SHOT) $(SK_ARGS)
 	@echo "снимок: $(SHOT)"
 
@@ -190,9 +264,28 @@ sketch3d-shot:
 ## Нужен Forward+: спайк рассчитывает на тени, дымку и SSAO, которых в
 ## gl_compatibility нет. Метод передаётся флагом запуска, project.godot не
 ## трогается — на llvmpipe-машине Forward+ не поднимется, там RENDER=gl_compatibility.
-##   make world                                живой просмотр, мышь крутит камеру
+##   make world                                живой просмотр
 ##   make world-shot                           общий план в $(SHOT)
 ##   make world-shot SIZE=150 ELEV=26 FOCUS=170,0   станция крупно
+##
+## УПРАВЛЕНИЕ В `make world` (оно же печатается строкой VIEW3D при запуске):
+##   ЛКМ                      орбита вокруг точки взгляда
+##   WASD / стрелки           панорама — УВОДИТ САМУ ТОЧКУ ВЗГЛЯДА; Shift быстрее
+##   Shift+ЛКМ, СКМ, ПКМ      она же мышью
+##   колесо, +/-              зум
+##   F                        вернуть камеру на локомотив
+##   L / P                    убрать локомотив / орто-перспектива
+## Панорама только на средней и правой кнопке была нерабочей на трекпаде мака:
+## оставалась одна орбита, и вид выглядел привязанным к одной точке.
+##
+## ЛОКОМОТИВ. У платформы стоит двухсекционный ВЛ80 из client/assets/vl80.glb
+## (CC-BY-4.0, атрибуция там же). Файла нет — спайк рисует свой процедурный ЧМЭ3,
+## сцена поднимается в обоих случаях. На общем плане машину не видно и не должно
+## быть: 33 м с четырёхсот — это горстка пикселей. Кадры, где она читается
+## (в перспективе SIZE — это ДИСТАНЦИЯ ДО ФОКУСА, а не ширина кадра):
+##   make world-shot SIZE=45 ELEV=14 AZ=200 FOCUS=220,-0.2   обе секции у платформы
+##   make world-shot SIZE=14 ELEV=7  AZ=55  FOCUS=232,-1.2   тележки на рельсах
+##   make world-shot SIZE=26 ELEV=10 AZ=155 FOCUS=232,-0.5   крыша и токоприёмники
 RENDER ?= forward_plus
 WORLD_SCENE := res://scenes/spike_world.tscn
 # Умолчания камеры общего плана; SIZE/ELEV/AZ/FOCUS перекрывают их по одному.
@@ -220,10 +313,97 @@ world:
 	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) --path client $(WORLD_SCENE)
 
 world-shot:
-	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) --path client \
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) $(WINDOW) --path client \
 		--script res://scripts/spike_shot.gd -- --scene $(WORLD_SCENE) \
 		--shot $(SHOT) --persp 1 $(WORLD_ARGS)
 	@echo "снимок: $(SHOT)"
+
+## fpv / fpv-shot — СПАЙК МАШИНИСТА: тот же мир, но в нём стоит ЧЕЛОВЕК, и камера
+## сидит у него в голове (client/scripts/spike_fpv.gd). Наследует спайк мира
+## целиком и добавляет к нему твердь под ногами, фигуру и три вида.
+##
+## ЗАЧЕМ ОТДЕЛЬНАЯ ЦЕЛЬ, А НЕ ФЛАГ У world. Вид с высоты глаз требует того, чего
+## общему плану не нужно вовсе: коллизий на каждом меше (0.9 с на старте), тени
+## на 180 м вместо 900 и перспективы вместо ортографии. Мир этим платить не обязан.
+##
+## УПРАВЛЕНИЕ В `make fpv` (оно же печатается строкой FPV при запуске):
+##   V                        вид: обзор -> от первого лица -> от третьего
+##   мышь                     взгляд (курсор захватывается в видах от лица)
+##   WASD / стрелки           идти, Shift — бежать, пробел — прыжок
+##   F                        вернуться к локомотиву
+##   Esc                      отпустить курсор и выйти в обзор
+##
+## СНИМОК ЗАДАЁТСЯ ПОЛОЖЕНИЕМ ЧЕЛОВЕКА, А НЕ КАМЕРЫ: камеру ставит его голова.
+## Положение — в координатах пути (U вдоль E_MAIN, LAT от оси), поэтому оно
+## переживает правку фикстуры. LAT отрицательная — сторона платформы; YAW в
+## градусах от направления пути, плюс — влево; отметку под ногами ищет луч, так
+## что LAT можно ставить и на путь, и на платформу.
+##   make fpv-shot                                у платформы, лицом вдоль пути
+##   make fpv-shot MODE=2                         то же от третьего лица: видно самого
+##   make fpv-shot U=150 LAT=0 YAW=180            стоя на пути, вид вдоль перегона
+##   make fpv-shot U=64 LAT=-3.2 YAW=-40          с платформы на ВЛ80
+##   make fpv-shot U=72 LAT=-3.2 YAW=-80 PITCH=4  он же в упор, борт во весь кадр
+U     ?=
+LAT   ?=
+YAW   ?=
+PITCH ?=
+MODE  ?=
+FPV_SCENE := res://scenes/spike_fpv.tscn
+FPV_ARGS :=
+ifneq ($(strip $(U)),)
+FPV_ARGS += --u $(U)
+endif
+ifneq ($(strip $(LAT)),)
+FPV_ARGS += --lat $(LAT)
+endif
+ifneq ($(strip $(YAW)),)
+FPV_ARGS += --yaw $(YAW)
+endif
+ifneq ($(strip $(PITCH)),)
+FPV_ARGS += --pitch $(PITCH)
+endif
+ifneq ($(strip $(MODE)),)
+FPV_ARGS += --mode $(MODE)
+endif
+
+fpv:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) --path client $(FPV_SCENE)
+
+fpv-shot:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) $(WINDOW) --path client \
+		--script res://scripts/fpv_shot.gd -- --shot $(SHOT) $(FPV_ARGS)
+	@echo "снимок: $(SHOT)"
+
+## shell-probe — ДЕЙСТВУЮТ ЛИ ПЕРЕХОДЫ ОБОЛОЧКИ. Подаёт Esc и Tab тем же путём,
+## каким приходит настоящее нажатие, и печатает состояние после каждого.
+##
+## Снимок паузы доказывает, что меню НАРИСОВАНО, и молчит о том, можно ли из неё
+## выйти: кадр в обоих случаях правильный, ошибок в логе нет. Так найден дефект
+## 2026-08-10 — узел App без PROCESS_MODE_ALWAYS перестаёт слышать ввод вместе с
+## миром, и Esc, которым в паузу вошли, из неё не выводит. Тот же класс, что зум
+## только на колесе мыши и панорама только на средней кнопке (см. camera-probe).
+##
+## --headless НЕ ГОДИТСЯ: оболочка строит мир, а ему нужен вьюпорт.
+shell-probe:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) $(WINDOW) --path client \
+		--script res://tools/shell_probe.gd -- --offline --role dsp
+
+## walk-probe — ХОДИТ ЛИ ЧЕЛОВЕК. Печатает числа там, где снимок с высоты глаз
+## по своему устройству ничего не показывает: утоп он по колено или парит на
+## треть метра, из его же глаз не видно НИЧЕГО — кадр в обоих случаях правильный.
+## Меряет четыре вещи: стоит ли на тверди (зазор подошвы в метрах), идёт ли
+## (м/с против заявленных), вертит ли головой (градусы на движение мыши) и
+## всходит ли на путь через шпалу и рельс (пройдено и подъём в метрах).
+##   make walk-probe            коротко
+##   make walk-probe TRACE=1    со следом пути: где именно он встал
+TRACE ?=
+WALK_ARGS :=
+ifneq ($(strip $(TRACE)),)
+WALK_ARGS += --trace
+endif
+walk-probe:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) $(WINDOW) --path client \
+		--script res://tools/walk_probe.gd -- $(WALK_ARGS)
 
 ## contract — клиент разбирает эталон БОЕВЫМ парсером. Сцену не поднимает,
 ## поэтому здесь --headless законен.
@@ -238,6 +418,48 @@ contract:
 ## гасила деталь на 2 % вместо обещанных гребней и промоин.
 terrain-probe:
 	$(GODOT) --headless --path client --script res://tools/terrain_probe.gd
+
+## camera-probe — ДЕЙСТВУЕТ ЛИ УПРАВЛЕНИЕ КАМЕРОЙ. Подаёт клавиши тем же путём,
+## каким приходит настоящее нажатие, и печатает, НА СКОЛЬКО МЕТРОВ уехала точка
+## взгляда. Не косметика: класс бага «жест есть в коде, но на этом вводе его не
+## изобразить» случался дважды — зум жил только на колесе мыши (на трекпаде мака
+## его не было), панорама только на средней и правой кнопке (камера оставалась
+## привязана к одной точке). Ни снимок, ни лог этого не показывают: кадр
+## правильный, ошибок нет, просто руками так сделать нельзя.
+##   make camera-probe                             базовый спайк
+##   make camera-probe SCENE=res://scenes/spike_world.tscn
+## --headless НЕ ГОДИТСЯ: сцене нужен вьюпорт (см. шапку файла).
+SCENE ?= res://scenes/spike_relief.tscn
+camera-probe:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) $(WINDOW) --path client \
+		--script res://tools/camera_probe.gd -- --scene $(SCENE)
+
+## glb-probe — ЧТО ВНУТРИ ЧУЖОЙ МОДЕЛИ: дерево узлов и габарит каждой детали в
+## метрах. Про присланный .glb неизвестно ничего — ни где ноль, ни какая ось
+## вдоль машины, ни в метрах ли он. Ставить его по снимку значит подгонять
+## вслепую: ошибка масштаба там неотличима от ошибки высоты.
+##
+## Спрашивать надо ДВИЖОК, а не разбирать файл самому. У vl80.glb положение
+## узлов задано матрицей matrix, а не translation/rotation/scale, и наивный
+## разбор JSON показывает сцену, где все детали лежат в одной точке — вывод
+## получается прямо противоположный правде.
+##   make glb-probe                        res://assets/vl80.glb
+##   make glb-probe RES=res://assets/x.glb
+RES ?= res://assets/vl80.glb
+glb-probe:
+	$(GODOT) --headless --path client --script res://tools/glb_probe.gd -- --res $(RES)
+
+## perf-probe — ПОЧЕМУ ТОРМОЗИТ. Мерит порознь две вещи, которые на глаз
+## сливаются в одно: стоимость КАДРА (что рисуется) и стоимость ПЕРЕСАДКИ ТРАВЫ
+## (что считается в главном потоке, пока кадр стоит колом). Ровный низкий фпс и
+## рывок раз в несколько секунд лечатся разным, а выглядят похоже.
+##
+## Чем найдено 2026-08-10: зум упирался не в отрисовку и не в модель ВЛ80
+## (она стоит +0.3 мс из 19.5), а в пересадку травы — 1.8 с вблизи и 3.1 с на
+## отдалении, из них 98 % это обход сетки, а не загрузка в MultiMesh.
+perf-probe:
+	DISPLAY=$(DISPLAY_ID) $(GODOT) --rendering-method $(RENDER) $(WINDOW) --path client \
+		--script res://tools/perf_probe.gd
 
 ## tile-dump — ВЫГРУЗКА ПРОЦЕДУРНЫХ ТАЙЛОВ спайка мира в PNG, без окна и рендера.
 ## Тайл — чистая функция кода, и спорить о нём по снимку сцены бессмысленно: на
