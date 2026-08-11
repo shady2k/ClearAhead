@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/track"
@@ -298,3 +299,28 @@ func mix(z uint64) uint64 {
 	z = (z ^ (z >> 27)) * 0x94D049BB133111EB
 	return z ^ (z >> 31)
 }
+
+// ChunkHeights разворачивает рельеф в отсчёты одного чанка.
+//
+// Отсчёты считаются от АБСОЛЮТНЫХ координат в регионе, а не от угла чанка:
+// общий узел двух соседних чанков обязан получить бит в бит одно и то же
+// значение, и обеспечивается это только тем, что аргумент у него один
+// (контракт чанков §3).
+func (f *Field) ChunkHeights(a chunk.Address) ([]int16, error) {
+	out := make([]int16, chunk.Samples*chunk.Samples)
+	for j := range chunk.Samples {
+		for i := range chunk.Samples {
+			x, z := a.SampleM(i, j)
+			cm, err := f.HeightCm(x, z)
+			if err != nil {
+				return nil, fmt.Errorf("terrain: чанк %s/%d/%d/%d, отсчёт (%d, %d): %w",
+					a.Region, a.Level, a.CX, a.CZ, i, j, err)
+			}
+			out[chunk.Index(i, j)] = cm
+		}
+	}
+	return out, nil
+}
+
+// BaseZ — опорная высота рецепта в метрах. Отсчёты чанка отложены от неё.
+func (f *Field) BaseZ() float64 { return f.recipe.BaseZ }

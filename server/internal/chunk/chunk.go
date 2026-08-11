@@ -19,6 +19,11 @@
 // перестаёт читаться как форма. При 4 м их три.
 package chunk
 
+import (
+	"encoding/binary"
+	"fmt"
+)
+
 // Геометрия уровня 0. Уровень L вдвое шире и вдвое грубее при том же числе
 // отсчётов.
 const (
@@ -73,3 +78,48 @@ func (a Address) SampleM(i, j int) (x, z float64) {
 	step := StepM(a.Level)
 	return ox + float64(i)*step, oz + float64(j)*step
 }
+
+// Кодирование отсчётов высоты.
+//
+// Порядок байт — little-endian, явно и для всех многобайтовых полей: все
+// целевые платформы little-endian, а называется это затем, чтобы автору
+// адаптера не приходилось угадывать.
+//
+// Высота — int16 целых сантиметров ОТНОСИТЕЛЬНО base_z чанка. База своя у
+// каждого чанка, а не у региона: int16 покрывает ±327,67 м вокруг базы, чего
+// хватает на сторону 256 м в любых горах и заведомо не хватает на регион
+// 400 × 400 км.
+
+// HeightsBytes — размер блоба высот одного чанка.
+const HeightsBytes = Samples * Samples * 2
+
+// EncodeHeights укладывает отсчёты в блоб.
+//
+// Порядок обхода: строками по возрастанию j, внутри строки по возрастанию i.
+// Он часть контракта: клиент читает блоб одним проходом и не имеет иного
+// способа узнать раскладку.
+func EncodeHeights(h []int16) ([]byte, error) {
+	if len(h) != Samples*Samples {
+		return nil, fmt.Errorf("chunk: отсчётов %d, ожидалось %d", len(h), Samples*Samples)
+	}
+	out := make([]byte, HeightsBytes)
+	for k, v := range h {
+		binary.LittleEndian.PutUint16(out[k*2:], uint16(v))
+	}
+	return out, nil
+}
+
+// DecodeHeights разбирает блоб обратно.
+func DecodeHeights(b []byte) ([]int16, error) {
+	if len(b) != HeightsBytes {
+		return nil, fmt.Errorf("chunk: блоб %d байт, ожидалось %d", len(b), HeightsBytes)
+	}
+	out := make([]int16, Samples*Samples)
+	for k := range out {
+		out[k] = int16(binary.LittleEndian.Uint16(b[k*2:]))
+	}
+	return out, nil
+}
+
+// Index — порядковый номер отсчёта (i, j) в блобе.
+func Index(i, j int) int { return j*Samples + i }

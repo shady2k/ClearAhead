@@ -78,3 +78,45 @@ func TestЧанкПокрываетСвоюСторону(t *testing.T) {
 		t.Fatalf("чанк покрывает %v x %v, сторона уровня %v", fx-ox, fz-oz, SideM(2))
 	}
 }
+
+// Порядок байт назван в контракте явно — значит должен проверяться, а не
+// подразумеваться. Автор адаптера читает блоб по этому правилу.
+func TestПорядокБайтLittleEndian(t *testing.T) {
+	h := make([]int16, Samples*Samples)
+	h[0] = 0x0102
+	h[1] = -2 // 0xFFFE
+	b, err := EncodeHeights(h)
+	if err != nil {
+		t.Fatalf("кодирование: %v", err)
+	}
+	if b[0] != 0x02 || b[1] != 0x01 {
+		t.Fatalf("первый отсчёт лёг как %#x %#x, ожидалось 02 01 (младший байт первым)", b[0], b[1])
+	}
+	if b[2] != 0xFE || b[3] != 0xFF {
+		t.Fatalf("отрицательный отсчёт лёг как %#x %#x, ожидалось FE FF", b[2], b[3])
+	}
+	if len(b) != HeightsBytes {
+		t.Fatalf("блоб %d байт, объявлено %d", len(b), HeightsBytes)
+	}
+}
+
+// Порядок обхода — строками: индекс (i, j) обязан совпасть с j*Samples+i,
+// иначе клиент прочтёт поверхность транспонированной.
+func TestПорядокОбходаСтроками(t *testing.T) {
+	if Index(0, 1) != Samples {
+		t.Fatalf("Index(0,1) = %d, ожидалось %d — обход должен идти строками", Index(0, 1), Samples)
+	}
+	if Index(1, 0) != 1 {
+		t.Fatalf("Index(1,0) = %d, ожидалось 1", Index(1, 0))
+	}
+}
+
+// Блоб неверного размера — отказ, а не молчаливое усечение.
+func TestБлобНеверногоРазмераОтвергается(t *testing.T) {
+	if _, err := DecodeHeights(make([]byte, HeightsBytes-1)); err == nil {
+		t.Fatal("короткий блоб принят")
+	}
+	if _, err := EncodeHeights(make([]int16, 3)); err == nil {
+		t.Fatal("неполный набор отсчётов принят")
+	}
+}
