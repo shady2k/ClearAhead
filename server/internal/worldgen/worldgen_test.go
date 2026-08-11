@@ -1,27 +1,18 @@
 package worldgen
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
 func карта(t *testing.T) *mapfmt.Map {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-	m, err := mapfmt.Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
-	return m
+	return seedmap.Station(seedmap.WithTerrain())
 }
 
 func база(t *testing.T) *worldstore.Store {
@@ -120,5 +111,41 @@ func TestБезРегионаОтказ(t *testing.T) {
 	defer s.Close()
 	if _, err := Generate(s, карта(t), "ST_A", 1); err == nil {
 		t.Fatal("порождение прошло без заведённого региона")
+	}
+}
+
+// Бутстрап заполняет пустую базу и НЕ трогает заполненную: перезапись
+// существующего мира затравкой уничтожила бы правки редактора.
+func TestБутстрапИдемпотентен(t *testing.T) {
+	s, err := worldstore.Open(filepath.Join(t.TempDir(), "world.db"))
+	if err != nil {
+		t.Fatalf("база: %v", err)
+	}
+	defer s.Close()
+
+	m := seedmap.Station(seedmap.WithTerrain())
+
+	rep, сделан, err := Bootstrap(s, m, 1)
+	if err != nil {
+		t.Fatalf("первый бутстрап: %v", err)
+	}
+	if !сделан {
+		t.Fatal("первый бутстрап ничего не сделал на пустой базе")
+	}
+	if rep.TotalChunks == 0 {
+		t.Fatal("бутстрап не породил чанков")
+	}
+	было, _ := s.CountChunks(m.MapID, 0)
+
+	_, сделан2, err := Bootstrap(s, m, 2)
+	if err != nil {
+		t.Fatalf("второй бутстрап: %v", err)
+	}
+	if сделан2 {
+		t.Fatal("второй бутстрап перезаписал заполненную базу")
+	}
+	стало, _ := s.CountChunks(m.MapID, 0)
+	if было != стало {
+		t.Fatalf("число чанков изменилось: было %d, стало %d", было, стало)
 	}
 }

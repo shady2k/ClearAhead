@@ -2,28 +2,21 @@ package terrain
 
 import (
 	"math"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
+// Карта строится фабрикой, а не читается файлом: тест не должен зависеть от
+// боевых данных и ломаться от их правки.
 func загрузитьКарту(t *testing.T) *mapfmt.Map {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-	m, err := mapfmt.Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
+	m := seedmap.Station(seedmap.WithTerrain())
 	if err := mapfmt.Validate(m); err != nil {
-		t.Fatalf("валидация: %v", err)
+		t.Fatalf("фикстура невалидна: %v", err)
 	}
 	return m
 }
@@ -133,7 +126,7 @@ func TestПодМостомЗемляОстаётсяПриродной(t *testi
 			m := одноРебро(t, nil)
 			безСооружения, els := поле(t, m)
 
-			e := els["E1"]
+			e := els[seedmap.LineEdgeID]
 			pts, err := sampleAxis(e, nil)
 			if err != nil {
 				t.Fatalf("выборка оси: %v", err)
@@ -154,7 +147,7 @@ func TestПодМостомЗемляОстаётсяПриродной(t *testi
 			сСооружением, _ := поле(t, одноРебро(t, &mapfmt.Trackside{
 				ID:   "SOORUZHENIE",
 				Kind: kind,
-				Span: netloc.LinearU{{Element: "E1", From: 0, To: 200}},
+				Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: seedmap.LineLengthM}},
 			}))
 
 			got := сСооружением.WorkedM(p.X, p.Y)
@@ -166,40 +159,15 @@ func TestПодМостомЗемляОстаётсяПриродной(t *testi
 	}
 }
 
-// одноРебро — минимальная карта: один прямой перегон 200 м с рельефом.
+// одноРебро — минимальный перегон с рельефом, при необходимости несомый
+// сооружением.
 func одноРебро(t *testing.T, ts *mapfmt.Trackside) *mapfmt.Map {
 	t.Helper()
-	m := &mapfmt.Map{
-		FormatVersion: mapfmt.FormatVersion,
-		MapID:         "PEREGON",
-		MapRevision:   1,
-		Anchors:       map[string]mapfmt.Anchor{"NA.P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
-		Topology: mapfmt.Topology{
-			Nodes: []mapfmt.Node{
-				{ID: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-			},
-			Edges: []mapfmt.Edge{{ID: "E1", From: "NA.P1", To: "NB.P1"}},
-		},
-		Geometry: mapfmt.Geometry{
-			Turnouts: map[string]mapfmt.TurnoutGeometry{},
-			Edges: map[string]mapfmt.Alignments{
-				"E1": {Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 200}}},
-			},
-		},
-		Terrain: &mapfmt.Terrain{
-			Seed:  777,
-			BaseZ: 140,
-			Octaves: []mapfmt.TerrainOctave{
-				{WavelengthM: 400, AmplitudeM: 18},
-				{WavelengthM: 90, AmplitudeM: 3},
-			},
-			Earthworks: mapfmt.Earthworks{FormationHalfWidth: 5, SideSlope: 1.5},
-		},
-	}
+	opts := []seedmap.Option{seedmap.WithTerrain()}
 	if ts != nil {
-		m.Topology.Trackside = append(m.Topology.Trackside, *ts)
+		opts = append(opts, seedmap.WithTrackside(*ts))
 	}
+	m := seedmap.Line(opts...)
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("минимальная карта отвергнута: %v", err)
 	}

@@ -1,12 +1,12 @@
 package worldstore
 
 import (
-	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
@@ -30,17 +30,9 @@ func регион(t *testing.T, s *Store) {
 
 func рельеф(t *testing.T) *terrain.Field {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "..", "maps", "st_a.json"))
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-	m, err := mapfmt.Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
+	m := seedmap.Station(seedmap.WithTerrain())
 	if err := mapfmt.Validate(m); err != nil {
-		t.Fatalf("валидация: %v", err)
+		t.Fatalf("фикстура невалидна: %v", err)
 	}
 	_, els, err := track.Propagate(m)
 	if err != nil {

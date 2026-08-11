@@ -22,6 +22,7 @@
 package worldgen
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -125,4 +126,50 @@ func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision int64)
 		}
 	}
 	return rep, nil
+}
+
+// Bootstrap заполняет пустую базу затравочной картой.
+//
+// # Зачем это здесь
+//
+// Карта больше не лежит файлом: JSON удалён из проекта целиком. Значит должен
+// существовать путь, которым мир появляется на чистой машине, и это код, а не
+// файл. Затравка строится фабрикой seedmap — той же, что порождает фикстуры
+// тестов, поэтому она не может разойтись со схемой формата: карта, переставшая
+// быть валидной, перестаёт компилироваться.
+//
+// # Идемпотентность
+//
+// Если регион уже заведён, не делается НИЧЕГО. Бутстрап обязан быть безопасным
+// при каждом старте: перезапись существующего мира затравкой уничтожила бы
+// правки, сделанные редактором.
+func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64) (Report, bool, error) {
+	region := m.MapID
+	if _, ok, err := s.GetRegion(region); err != nil {
+		return Report{}, false, err
+	} else if ok {
+		return Report{Region: region}, false, nil
+	}
+
+	frame := "{}"
+	if m.Georeference != nil {
+		if b, err := json.Marshal(m.Georeference); err == nil {
+			frame = string(b)
+		}
+	}
+	err := s.PutRegion(worldstore.Region{
+		ID:    region,
+		Frame: frame,
+		// Затравка порождена нами и распространяема без оговорок: у неё нет
+		// внешнего источника, а значит нет и чужой лицензии.
+		Provenance:      `{"source":"seedmap","kind":"generated"}`,
+		Redistributable: true,
+		Epoch:           1,
+	})
+	if err != nil {
+		return Report{}, false, err
+	}
+
+	rep, err := Generate(s, m, region, revision)
+	return rep, true, err
 }

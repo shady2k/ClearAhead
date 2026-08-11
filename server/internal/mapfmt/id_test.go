@@ -89,35 +89,6 @@ func TestРеброПодИменемПроходаОтвергается(t *tes
 	}
 }
 
-// Две стрелки с одним ID молча схлопывались бы в одну запись скомпилированной
-// топологии — проверки повтора не было нигде.
-func TestДубликатСтрелкиОтвергается(t *testing.T) {
-	m := &Map{
-		FormatVersion: FormatVersion,
-		MapID:         "ST_A",
-		MapRevision:   1,
-		Anchors:       map[string]Anchor{"N1.P1": {}},
-		Topology: Topology{
-			Nodes: []Node{{ID: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
-			Turnouts: []Turnout{
-				{ID: "SW", Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-				{ID: "SW", Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
-			},
-		},
-		Geometry: Geometry{
-			Turnouts: map[string]TurnoutGeometry{"SW": {
-				Straight:  Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
-				Diverging: Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
-			}},
-			Edges: map[string]Alignments{},
-		},
-	}
-	err := Validate(m)
-	if err == nil {
-		t.Fatal("карта с двумя стрелками одного ID принята")
-	}
-	if !strings.Contains(err.Error(), "объявлена дважды") {
-		t.Logf("отказ пришёл по другой причине: %v", err)
-		t.Log("сам по себе отказ верен, но повтор ID должен ловиться прямо")
-	}
-}
+// Повтор Turnout.ID проверяется в duplicate_test.go: там же разобрано, чем
+// такая карта отвергалась ДО появления проверки повтора. Здесь ему не место —
+// это инвариант топологии, а не правило записи идентификатора.
