@@ -11,7 +11,7 @@ import (
 // twoEdges — N1 --E1-- N2 --E2-- N3, прямая 100 + прямая 50.
 // N2.P1 — стык: им пользуются оба ребра, и именно там проверяется замыкание.
 const twoEdges = `{
-  "format_version": 2, "map_id": "T", "map_revision": 1,
+  "format_version": 3, "map_id": "T", "map_revision": 1,
   "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } },
   "topology": {
     "nodes": [
@@ -86,7 +86,7 @@ func TestPropagateRejectsUnanchored(t *testing.T) {
 // ничего не смешивает. Ошибка замыкания при подмене ΔR равна ΔR·√2.
 func ringWith(lastRadius string) string {
 	return `{
-	  "format_version": 2, "map_id": "C", "map_revision": 1,
+	  "format_version": 3, "map_id": "C", "map_revision": 1,
 	  "anchors": { "N1.P1": { "element": "E1", "x": 0, "y": 0, "z": 0, "heading": 0 } },
 	  "topology": {
 	    "nodes": [

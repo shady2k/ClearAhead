@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 )
 
 // fillConstruction переносит блок construction карты в провод (спека §3–4):
@@ -69,16 +70,9 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 			Type:       typ,
 			Coordinate: r.Coordinate,
 			Phase:      r.Phase,
-			Spans:      make([]RenderRunSpan, 0, len(r.Spans)),
+			Spans:      make(netloc.LinearU, 0, len(r.Spans)),
 		}
-		for _, sp := range r.Spans {
-			rr.Spans = append(rr.Spans, RenderRunSpan{
-				Element:   sp.Element,
-				From:      sp.From,
-				To:        sp.To,
-				Direction: sp.Direction,
-			})
-		}
+		rr.Spans = append(rr.Spans, r.Spans...)
 		rg.ConstructionRuns = append(rg.ConstructionRuns, rr)
 	}
 	return nil

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"strings"
 	"testing"
 )
@@ -88,7 +89,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 			}},
 			Trackside: []RenderTrackside{{
 				ID: "TSP", Kind: "platform", Side: "right",
-				Spans: []RenderSpan{{Element: "E1", FromM: 10, ToM: 150}},
+				Spans: []netloc.IntervalU{{Element: "E1", From: 10, To: 150}},
 			}},
 			TrackTypes: []RenderTrackType{{
 				ID: "TRACK_MAIN", Gauge: 1.435,
@@ -97,7 +98,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 			}},
 			ConstructionRuns: []RenderRun{{
 				ID: "RUN_1", Type: "TRACK_MAIN", Coordinate: "u", Phase: 0.15,
-				Spans: []RenderRunSpan{{Element: "E1", From: 0, To: 100, Direction: "forward"}},
+				Spans: []netloc.IntervalU{{Element: "E1", From: 0, To: 100, Direction: "forward"}},
 			}},
 			Features: []RenderFeature{{
 				Owner: "SW1", Kind: "frog",
@@ -136,8 +137,8 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 		"trackside kind":        func(g *RenderGeometry) { g.Trackside[0].Kind = "buffer_stop" },
 		"trackside side":        func(g *RenderGeometry) { g.Trackside[0].Side = "left" },
 		"span element":          func(g *RenderGeometry) { g.Trackside[0].Spans[0].Element = "E2" },
-		"span from":             func(g *RenderGeometry) { g.Trackside[0].Spans[0].FromM = 11 },
-		"span to":               func(g *RenderGeometry) { g.Trackside[0].Spans[0].ToM = 151 },
+		"span from":             func(g *RenderGeometry) { g.Trackside[0].Spans[0].From = 11 },
+		"span to":               func(g *RenderGeometry) { g.Trackside[0].Spans[0].To = 151 },
 		"добавлен span":         func(g *RenderGeometry) { g.Trackside[0].Spans = append(g.Trackside[0].Spans, g.Trackside[0].Spans[0]) },
 		"тип id":                func(g *RenderGeometry) { g.TrackTypes[0].ID = "TRACK_SIDING" },
 		"тип gauge":             func(g *RenderGeometry) { g.TrackTypes[0].Gauge = 1.520 },

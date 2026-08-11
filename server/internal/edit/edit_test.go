@@ -11,6 +11,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -56,7 +57,7 @@ func testBaseMap() *mapfmt.Map {
 				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75},
 			}},
 			Runs: []mapfmt.ConstructionRun{
-				{ID: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{
+				{ID: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: "E0", From: 0, To: 100, Direction: "forward"},
 					{Element: "E1", From: 0, To: 100, Direction: "forward"},
 					{Element: "E2", From: 0, To: 100, Direction: "forward"},
@@ -235,7 +236,7 @@ func hasTurnout(t *testing.T, m *mapfmt.Map, id string) bool {
 
 // runsCoverAllEdges — каждое ребро покрыто ровно одним спаном целиком.
 func runsCoverAllEdges(m *mapfmt.Map) error {
-	byEdge := map[string][]mapfmt.RunSpan{}
+	byEdge := map[string][]netloc.IntervalU{}
 	for _, r := range m.Construction.Runs {
 		for _, sp := range r.Spans {
 			byEdge[sp.Element] = append(byEdge[sp.Element], sp)
@@ -447,8 +448,8 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	m := testBaseMap()
 	m.Topology.Trackside = []mapfmt.Trackside{{
 		ID: "PLAT_EA", Kind: "platform",
-		Span:   []mapfmt.SpanInterval{{Element: "EA", From: 10, To: 30}},
-		Side:   "right", Offset: 1.75, Width: 3.0,
+		Span: []netloc.IntervalU{{Element: "EA", From: 10, To: 30}},
+		Side: "right", Offset: 1.75, Width: 3.0,
 	}}
 	// Отдельная неякорная компонента со стрелкой — её стирка не трогает якорь.
 	m.Topology.Nodes = append(m.Topology.Nodes,
@@ -472,9 +473,9 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	m.Geometry.Edges["EC"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
 	// Новая компонента получает свои run'ы.
 	m.Construction.Runs = append(m.Construction.Runs,
-		mapfmt.ConstructionRun{ID: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{{Element: "EA", From: 0, To: 40, Direction: "forward"}}},
-		mapfmt.ConstructionRun{ID: "RUN_EB", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{{Element: "EB", From: 0, To: 40, Direction: "forward"}}},
-		mapfmt.ConstructionRun{ID: "RUN_EC", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{{Element: "EC", From: 0, To: 40, Direction: "forward"}}},
+		mapfmt.ConstructionRun{ID: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: "EA", From: 0, To: 40, Direction: "forward"}}},
+		mapfmt.ConstructionRun{ID: "RUN_EB", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: "EB", From: 0, To: 40, Direction: "forward"}}},
+		mapfmt.ConstructionRun{ID: "RUN_EC", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: "EC", From: 0, To: 40, Direction: "forward"}}},
 	)
 
 	st := newStore(t, m)
@@ -539,12 +540,12 @@ func TestEraseTurnoutCapsHangingEnd(t *testing.T) {
 	m.Geometry.Edges["EC"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
 	m.Geometry.Edges["ED"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
 	m.Construction.Runs = append(m.Construction.Runs,
-		mapfmt.ConstructionRun{ID: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{{Element: "EA", From: 0, To: 40, Direction: "forward"}}},
-		mapfmt.ConstructionRun{ID: "RUN_EB_EC", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{
+		mapfmt.ConstructionRun{ID: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: "EA", From: 0, To: 40, Direction: "forward"}}},
+		mapfmt.ConstructionRun{ID: "RUN_EB_EC", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 			{Element: "EB", From: 0, To: 40, Direction: "forward"},
 			{Element: "EC", From: 0, To: 40, Direction: "forward"},
 		}},
-		mapfmt.ConstructionRun{ID: "RUN_ED", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{{Element: "ED", From: 0, To: 40, Direction: "forward"}}},
+		mapfmt.ConstructionRun{ID: "RUN_ED", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: "ED", From: 0, To: 40, Direction: "forward"}}},
 	)
 
 	st := newStore(t, m)
@@ -728,7 +729,7 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 			DefaultType: "TRACK_MAIN_1435",
 			Types:       []mapfmt.TrackType{{ID: "TRACK_MAIN_1435", Gauge: 1.435, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75}}},
 			Runs: []mapfmt.ConstructionRun{
-				{ID: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []mapfmt.RunSpan{
+				{ID: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: "E5", From: 0, To: 100, Direction: "forward"},
 					{Element: "E6", From: 0, To: 100, Direction: "reverse"},
 				}},

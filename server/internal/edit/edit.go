@@ -114,7 +114,7 @@ const (
 
 // EraseIntent — стереть элемент (ребро или стрелку).
 type EraseIntent struct {
-	Target string    // ID ребра или стрелки
+	Target string // ID ребра или стрелки
 	Mode   EraseMode
 }
 

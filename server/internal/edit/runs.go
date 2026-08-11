@@ -5,6 +5,7 @@ import (
 	"math"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 )
 
 // Run'ы путевой решётки — авторитетный факт о физической решётке, независимый
@@ -102,7 +103,7 @@ func reverseRun(m *mapfmt.Map, r mapfmt.ConstructionRun) mapfmt.ConstructionRun 
 			r.Phase += pitch
 		}
 	}
-	spans := make([]mapfmt.RunSpan, len(r.Spans))
+	spans := make([]netloc.IntervalU, len(r.Spans))
 	copy(spans, r.Spans)
 	r.Spans = spans
 	for i, j := 0, len(r.Spans)-1; i < j; i, j = i+1, j-1 {
@@ -156,7 +157,7 @@ func splitRuns(m *mapfmt.Map, runs []mapfmt.ConstructionRun, edgeID, tailID stri
 		r := runs[i]
 		// Свежий срез: спаны пишем, пока читаем исходный — разделение на два
 		// спана обгоняло бы читающий индекс при переиспользовании буфера.
-		spans := make([]mapfmt.RunSpan, 0, len(r.Spans)+1)
+		spans := make([]netloc.IntervalU, 0, len(r.Spans)+1)
 		for _, sp := range r.Spans {
 			if sp.Element != edgeID {
 				spans = append(spans, sp)
@@ -166,8 +167,8 @@ func splitRuns(m *mapfmt.Map, runs []mapfmt.ConstructionRun, edgeID, tailID stri
 				return nil, fmt.Errorf("ребро %s в двух run'ах", edgeID)
 			}
 			done = true
-			head := mapfmt.RunSpan{Element: edgeID, From: 0, To: headLen.Meters(), Direction: sp.Direction}
-			tail := mapfmt.RunSpan{Element: tailID, From: 0, To: tailLen.Meters(), Direction: sp.Direction}
+			head := netloc.IntervalU{Element: edgeID, From: 0, To: headLen.Meters(), Direction: sp.Direction}
+			tail := netloc.IntervalU{Element: tailID, From: 0, To: tailLen.Meters(), Direction: sp.Direction}
 			// Порядок зависит от направления: forward проходится от головы к
 			// хвосту, reverse — от хвоста к голове (въезд с конца ребра).
 			// Неверный порядок разрывает физическую непрерывность run'а и
@@ -217,15 +218,15 @@ func newRunForEdge(m *mapfmt.Map, edgeID string) (mapfmt.ConstructionRun, error)
 		ID:         "RUN_" + edgeID,
 		Coordinate: "u",
 		Phase:      0,
-		Spans:      []mapfmt.RunSpan{sp},
+		Spans:      []netloc.IntervalU{sp},
 	}, nil
 }
 
 // newRunSpan — спад нового ребра на всю его длину.
-func newRunSpan(m *mapfmt.Map, edgeID, direction string) (mapfmt.RunSpan, error) {
+func newRunSpan(m *mapfmt.Map, edgeID string, direction netloc.Direction) (netloc.IntervalU, error) {
 	u, err := alignmentsLengthU(m.Geometry.Edges[edgeID])
 	if err != nil {
-		return mapfmt.RunSpan{}, fmt.Errorf("длина ребра %s: %w", edgeID, err)
+		return netloc.IntervalU{}, fmt.Errorf("длина ребра %s: %w", edgeID, err)
 	}
-	return mapfmt.RunSpan{Element: edgeID, From: 0, To: u.Meters(), Direction: direction}, nil
+	return netloc.IntervalU{Element: edgeID, From: 0, To: u.Meters(), Direction: direction}, nil
 }

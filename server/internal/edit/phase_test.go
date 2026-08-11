@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 )
 
 // ---- Требование 6: смена сегментации карты не переставляет шпалы ----
@@ -192,7 +193,7 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 	// которую разворачивает extendRuns при продлении от порта.
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
 		ID: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
-		Spans: []mapfmt.RunSpan{
+		Spans: []netloc.IntervalU{
 			{Element: "E2", From: 0, To: 100, Direction: "reverse"},
 			{Element: "E1", From: 0, To: 100, Direction: "reverse"},
 			{Element: "E0", From: 0, To: 100, Direction: "reverse"},
@@ -201,7 +202,7 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 	assertValid(t, m, "run, начинающийся у порта")
 
 	in := m.Construction.Runs[0]
-	inSpans := make([]mapfmt.RunSpan, len(in.Spans))
+	inSpans := make([]netloc.IntervalU, len(in.Spans))
 	copy(inSpans, in.Spans)
 
 	got := reverseRun(m, in)
@@ -210,7 +211,7 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 	assertJSONEqual(t, inSpans, in.Spans, "спаны входа после reverseRun")
 	// Структура: порядок наоборот, направления перевёрнуты, ID сохранён,
 	// фаза нормализована по шагу: (300 − 0.2) mod 0.6 = 0.4.
-	wantSpans := []mapfmt.RunSpan{
+	wantSpans := []netloc.IntervalU{
 		{Element: "E0", From: 0, To: 100, Direction: "forward"},
 		{Element: "E1", From: 0, To: 100, Direction: "forward"},
 		{Element: "E2", From: 0, To: 100, Direction: "forward"},
@@ -238,7 +239,7 @@ func TestExtendReversesRunStartingAtPort(t *testing.T) {
 	m := testBaseMap()
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
 		ID: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
-		Spans: []mapfmt.RunSpan{
+		Spans: []netloc.IntervalU{
 			{Element: "E2", From: 0, To: 100, Direction: "reverse"},
 			{Element: "E1", From: 0, To: 100, Direction: "reverse"},
 			{Element: "E0", From: 0, To: 100, Direction: "reverse"},
@@ -260,7 +261,7 @@ func TestExtendReversesRunStartingAtPort(t *testing.T) {
 		t.Fatalf("run'ов %d, ожидался 1: %s", len(runs), jsonString(t, runs))
 	}
 	r := runs[0]
-	wantSpans := []mapfmt.RunSpan{
+	wantSpans := []netloc.IntervalU{
 		{Element: "E0", From: 0, To: 100, Direction: "forward"},
 		{Element: "E1", From: 0, To: 100, Direction: "forward"},
 		{Element: "E2", From: 0, To: 100, Direction: "forward"},
@@ -282,7 +283,7 @@ func TestExtendReversesRunStartingAtPort(t *testing.T) {
 // ---- 3. splitRuns: рез не двигает решётку ----
 
 // splitTestMap — цепочка E0/E1/E2 с одним run'ом из spans, фаза 0.2.
-func splitTestMap(spans []mapfmt.RunSpan) *mapfmt.Map {
+func splitTestMap(spans []netloc.IntervalU) *mapfmt.Map {
 	m := testBaseMap()
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
 		ID: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0.2, Spans: spans,
@@ -293,19 +294,19 @@ func splitTestMap(spans []mapfmt.RunSpan) *mapfmt.Map {
 func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
-		spans []mapfmt.RunSpan
-		want  []mapfmt.RunSpan
+		spans []netloc.IntervalU
+		want  []netloc.IntervalU
 	}{
 		{
 			name: "forward",
-			spans: []mapfmt.RunSpan{
+			spans: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "forward"},
 				{Element: "E1", From: 0, To: 100, Direction: "forward"},
 				{Element: "E2", From: 0, To: 100, Direction: "forward"},
 			},
 			// Голова [0, 50] остаётся на E1, хвост [0, 50] переходит на E1@2;
 			// направление сохранено.
-			want: []mapfmt.RunSpan{
+			want: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "forward"},
 				{Element: "E1", From: 0, To: 50, Direction: "forward"},
 				{Element: "E1@2", From: 0, To: 50, Direction: "forward"},
@@ -314,14 +315,14 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 		},
 		{
 			name: "reverse",
-			spans: []mapfmt.RunSpan{
+			spans: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "reverse"},
 				{Element: "E1", From: 0, To: 100, Direction: "reverse"},
 				{Element: "E2", From: 0, To: 100, Direction: "reverse"},
 			},
 			// Reverse проходится от хвоста к голове: въезд с конца ребра,
 			// поэтому порядок после реза — E1@2 (хвост) перед E1 (голова).
-			want: []mapfmt.RunSpan{
+			want: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "reverse"},
 				{Element: "E1@2", From: 0, To: 50, Direction: "reverse"},
 				{Element: "E1", From: 0, To: 50, Direction: "reverse"},

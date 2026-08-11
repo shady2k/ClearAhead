@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
@@ -289,7 +290,7 @@ func TestSaveRejectsUncompilableMap(t *testing.T) {
 	}
 	bad.Construction.Runs = append(bad.Construction.Runs, mapfmt.ConstructionRun{
 		ID: "RUN_SIDE", Coordinate: "u", Phase: 0,
-		Spans: []mapfmt.RunSpan{{Element: "E_SIDE", From: 0, To: 100, Direction: "forward"}},
+		Spans: []netloc.IntervalU{{Element: "E_SIDE", From: 0, To: 100, Direction: "forward"}},
 	})
 	if err := mapfmt.Validate(&bad); err != nil {
 		t.Fatalf("предусловие: карта обязана проходить валидатор: %v", err)

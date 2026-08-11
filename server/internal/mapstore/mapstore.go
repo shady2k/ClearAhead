@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
@@ -357,7 +358,7 @@ func seedMap() mapfmt.Map {
 			}},
 			Runs: []mapfmt.ConstructionRun{{
 				ID: "RUN_MAIN", Coordinate: "u", Phase: 0,
-				Spans: []mapfmt.RunSpan{{Element: "E_MAIN", From: 0, To: 200, Direction: "forward"}},
+				Spans: []netloc.IntervalU{{Element: "E_MAIN", From: 0, To: 200, Direction: "forward"}},
 			}},
 		},
 	}

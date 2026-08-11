@@ -8,6 +8,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -453,7 +454,7 @@ func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
 	m.Topology.Trackside = append(m.Topology.Trackside, mapfmt.Trackside{
 		ID:     allocID(m, "PLAT"),
 		Kind:   "platform",
-		Span:   []mapfmt.SpanInterval{{Element: in.Element, From: in.From, To: in.To}},
+		Span:   []netloc.IntervalU{{Element: in.Element, From: in.From, To: in.To}},
 		Side:   in.Side,
 		Offset: in.Offset,
 		Width:  in.Width,

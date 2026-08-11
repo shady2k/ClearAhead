@@ -110,18 +110,21 @@ func (m *Map) validateConstruction() error {
 		if !(r.Phase >= 0 && r.Phase < pitch) {
 			return fmt.Errorf("%srun %q: phase %g вне [0, pitch=%g)", prefix, r.ID, r.Phase, pitch)
 		}
-		if len(r.Spans) == 0 {
-			return fmt.Errorf("%srun %q: нет ни одного спана", prefix, r.ID)
+		if err := r.Spans.Structural(); err != nil {
+			return fmt.Errorf("%srun %q: %w", prefix, r.ID, err)
 		}
 		if len(r.Spans) > MaxRunSpans {
 			return fmt.Errorf("%srun %q: спанов больше %d", prefix, r.ID, MaxRunSpans)
 		}
+		// У run'а решётки направление ОБЯЗАТЕЛЬНО у каждого спана: решётка
+		// укладывается по ходу, и спан без направления в ней недоописан — в
+		// отличие от платформы, у которой направления нет по существу.
+		if !r.Spans.Directed() {
+			return fmt.Errorf("%srun %q: у каждого спана обязано быть направление forward или reverse",
+				prefix, r.ID)
+		}
 		for j := range r.Spans {
 			sp := &r.Spans[j]
-			if sp.Direction != "forward" && sp.Direction != "reverse" {
-				return fmt.Errorf("%srun %q: спана %d: направление %q, ожидается forward или reverse",
-					prefix, r.ID, j, sp.Direction)
-			}
 			dom, ok := domains[sp.Element]
 			if !ok {
 				return fmt.Errorf("%srun %q: спана %d: элемент %q не существует", prefix, r.ID, j, sp.Element)

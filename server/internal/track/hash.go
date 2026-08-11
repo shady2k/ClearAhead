@@ -92,7 +92,7 @@ func writeTrackModel(w io.Writer, m *mapfmt.Map, ct *CompiledTrack) {
 	sort.Strings(oids)
 	for _, id := range oids {
 		for _, sp := range ct.Trackside[id] {
-			fmt.Fprintf(w, "ts|%s|%s|%d|%d\n", id, sp.Element, int64(sp.FromS), int64(sp.ToS))
+			fmt.Fprintf(w, "ts|%s|%s|%d|%d|%s\n", id, sp.Element, int64(sp.From), int64(sp.To), sp.Direction)
 		}
 	}
 }

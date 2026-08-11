@@ -338,8 +338,10 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 		default:
 			return fmt.Errorf("mapfmt: путевой объект %s: неизвестный kind %q", ts.ID, ts.Kind)
 		}
-		if len(ts.Span) == 0 {
-			return fmt.Errorf("mapfmt: путевой объект %s: пустой span", ts.ID)
+		// Форма протяжённости — непустота, порядок концов, допустимость
+		// направления — проверяется один раз на все слои (пакет netloc).
+		if err := ts.Span.Structural(); err != nil {
+			return fmt.Errorf("mapfmt: путевой объект %s: %w", ts.ID, err)
 		}
 		for _, iv := range ts.Span {
 			if !elements[iv.Element] {
@@ -357,7 +359,11 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 			if err != nil {
 				return fmt.Errorf("mapfmt: путевой объект %s: конец интервала: %w", ts.ID, err)
 			}
-			if from < 0 || to > u || from > to {
+			// Границы — в целых микрометрах, а не в метрах-float: округление к
+			// ближайшему микрометру есть правило формата (спека §3), и
+			// сравнение float'ов отвергало бы интервал, кончающийся ровно на
+			// конце элемента. Порядок концов уже проверен выше.
+			if from < 0 || to > u {
 				return fmt.Errorf("mapfmt: путевой объект %s: интервал [%v, %v] вне элемента %s длиной %s",
 					ts.ID, iv.From, iv.To, iv.Element, u)
 			}

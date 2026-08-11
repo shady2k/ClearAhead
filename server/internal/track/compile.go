@@ -6,6 +6,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -19,12 +20,8 @@ type CompiledElement struct {
 	Prof    Profile
 }
 
-// TrackSpanS — интервал путевого объекта в пространственной координате.
-type TrackSpanS struct {
-	Element string
-	FromS   units.Distance
-	ToS     units.Distance
-}
+// Протяжённость путевого объекта живёт в общем типе netloc: одна форма на файл,
+// компиляцию и провод, координата — параметр типа (бида ClearAhead-xm7).
 
 // CompiledTurnout — стрелка после компиляции. Оба прохода делят один ресурс:
 // положение остряка определяет разрешённый переход, занятость живёт на сегментах.
@@ -42,7 +39,7 @@ type CompiledTrack struct {
 	MapID     string
 	Revision  int
 	Elements  map[string]CompiledElement
-	Trackside map[string][]TrackSpanS
+	Trackside map[string]netloc.LinearS
 	Turnouts  map[string]CompiledTurnout
 }
 
@@ -75,15 +72,6 @@ type RenderElement struct {
 	Role  *RenderRole       `json:"role,omitempty"`
 }
 
-// RenderSpan — интервал путевого объекта в координате u на одном элементе.
-// Метры u берутся из карты как есть: клиент рисует план, а s — координата
-// симуляции, из неё в u конвертировать нельзя.
-type RenderSpan struct {
-	Element string  `json:"element"`
-	FromM   float64 `json:"from"`
-	ToM     float64 `json:"to"`
-}
-
 // RenderTrackside — путевой объект на плане (платформа и пр.).
 //
 // Размеры платформы — offset (от оси пути до ближней кромки) и width (поперёк)
@@ -91,12 +79,12 @@ type RenderSpan struct {
 // объект, тип решётки её размеры не определяет. Точечные объекты (buffer_stop)
 // размеров не несут.
 type RenderTrackside struct {
-	ID     string       `json:"id"`
-	Kind   string       `json:"kind"`
-	Side   string       `json:"side,omitempty"`
-	Offset float64      `json:"offset,omitempty"`
-	Width  float64      `json:"width,omitempty"`
-	Spans  []RenderSpan `json:"spans"`
+	ID     string         `json:"id"`
+	Kind   string         `json:"kind"`
+	Side   string         `json:"side,omitempty"`
+	Offset float64        `json:"offset,omitempty"`
+	Width  float64        `json:"width,omitempty"`
+	Spans  netloc.LinearU `json:"spans"`
 }
 
 // RenderGeometry — вход клиента и инструментов.
@@ -138,18 +126,11 @@ type RenderBallast struct {
 // умолчание разрешил компилятор, клиент скрытого умолчания не применяет
 // никогда. Спаны — в авторском порядке прохождения.
 type RenderRun struct {
-	ID         string          `json:"id"`
-	Type       string          `json:"type"`
-	Coordinate string          `json:"coordinate"`
-	Phase      float64         `json:"phase"`
-	Spans      []RenderRunSpan `json:"spans"`
-}
-
-type RenderRunSpan struct {
-	Element   string  `json:"element"`
-	From      float64 `json:"from"`
-	To        float64 `json:"to"`
-	Direction string  `json:"direction"`
+	ID         string         `json:"id"`
+	Type       string         `json:"type"`
+	Coordinate string         `json:"coordinate"`
+	Phase      float64        `json:"phase"`
+	Spans      netloc.LinearU `json:"spans"`
 }
 
 // RenderFeature — особенность уровня 2 (спека §5): один канонический ответ на
@@ -202,7 +183,7 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		MapID:     m.MapID,
 		Revision:  m.MapRevision,
 		Elements:  make(map[string]CompiledElement, len(els)),
-		Trackside: map[string][]TrackSpanS{},
+		Trackside: map[string]netloc.LinearS{},
 		Turnouts:  make(map[string]CompiledTurnout, len(m.Topology.Turnouts)),
 	}
 	// Проходы стрелок: элемент {ID}:straight или {ID}:diverging получает роль
@@ -289,16 +270,16 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 			Side:   ts.Side,
 			Offset: ts.Offset,
 			Width:  ts.Width,
-			Spans:  make([]RenderSpan, 0, len(ts.Span)),
+			Spans:  make(netloc.LinearU, 0, len(ts.Span)),
 		}
-		spans := make([]TrackSpanS, 0, len(ts.Span))
+		spans := make(netloc.LinearS, 0, len(ts.Span))
 		for _, iv := range ts.Span {
 			e, ok := els[iv.Element]
 			if !ok {
 				return nil, nil, fmt.Errorf("track: объект %s ссылается на элемент %s, которого нет", ts.ID, iv.Element)
 			}
 			// Спан в u уезжает клиенту как есть, из карты: план рисуется в u.
-			rt.Spans = append(rt.Spans, RenderSpan{Element: iv.Element, FromM: iv.From, ToM: iv.To})
+			rt.Spans = append(rt.Spans, iv)
 			fromU, err := units.MetersToDistance(iv.From)
 			if err != nil {
 				return nil, nil, fmt.Errorf("track: объект %s: %w", ts.ID, err)
@@ -315,7 +296,12 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 			if err != nil {
 				return nil, nil, fmt.Errorf("track: объект %s: конец: %w", ts.ID, err)
 			}
-			spans = append(spans, TrackSpanS{Element: iv.Element, FromS: fromS, ToS: toS})
+			spans = append(spans, netloc.IntervalS{
+				Element:   iv.Element,
+				From:      fromS,
+				To:        toS,
+				Direction: iv.Direction,
+			})
 		}
 		rg.Trackside = append(rg.Trackside, rt)
 		ct.Trackside[ts.ID] = spans

@@ -1,5 +1,7 @@
 package mapfmt
 
+import "github.com/shady2k/ClearAhead/server/internal/netloc"
+
 // Map — файл карты как он записан. Метры, радианы, промилле.
 type Map struct {
 	FormatVersion int               `json:"format_version"`
@@ -92,20 +94,16 @@ type Edge struct {
 }
 
 type Trackside struct {
-	ID     string         `json:"id"`
-	Kind   string         `json:"kind"`
-	Span   []SpanInterval `json:"span"`
+	ID   string `json:"id"`
+	Kind string `json:"kind"`
+	// Span — протяжённость объекта. Отдельные SpanInterval и RunSpan
+	// упразднены 2026-08-11: они различались ровно наличием направления, и
+	// различие было случайным (map-content-design §3, бида ClearAhead-xm7).
+	// У платформы направления нет, и поле у её интервалов пустое.
+	Span   netloc.LinearU `json:"span"`
 	Side   string         `json:"side,omitempty"`
 	Offset float64        `json:"offset,omitempty"`
 	Width  float64        `json:"width,omitempty"`
-}
-
-// SpanInterval — интервал в координате u на одном элементе. Список интервалов
-// позволяет объекту пересекать границы элементов и проходы стрелок.
-type SpanInterval struct {
-	Element string  `json:"element"`
-	From    float64 `json:"from"`
-	To      float64 `json:"to"`
 }
 
 type Geometry struct {
@@ -190,19 +188,14 @@ type TrackBallast struct {
 type ConstructionRun struct {
 	// Type необязателен в карте: опущен — применяется Construction.DefaultType.
 	// Компилятор обязан разрешить умолчание ДО провода.
-	ID         string    `json:"id"`
-	Type       string    `json:"type,omitempty"`
-	Coordinate string    `json:"coordinate"`
-	Phase      float64   `json:"phase"`
-	Spans      []RunSpan `json:"spans"`
-}
-
-// RunSpan — участок run'а на одном элементе. Координата размещения — только u:
-// клиент не имеет цепочки вертикального профиля и восстановить размещение по s
-// не способен (спека §4). Спаны внутри run — в авторском порядке прохождения.
-type RunSpan struct {
-	Element   string  `json:"element"`
-	From      float64 `json:"from"`
-	To        float64 `json:"to"`
-	Direction string  `json:"direction"` // "forward" | "reverse"
+	ID         string  `json:"id"`
+	Type       string  `json:"type,omitempty"`
+	Coordinate string  `json:"coordinate"`
+	Phase      float64 `json:"phase"`
+	// Spans — координата размещения только u: клиент не имеет цепочки
+	// вертикального профиля и восстановить размещение по s не способен
+	// (спека §4). Спаны — в авторском порядке прохождения, направление у
+	// каждого ОБЯЗАТЕЛЬНО: run укладывается по ходу, и спан без направления в
+	// нём недоописан, а не «без направления».
+	Spans netloc.LinearU `json:"spans"`
 }

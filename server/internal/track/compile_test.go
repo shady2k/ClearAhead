@@ -34,7 +34,7 @@ func TestCompileFlatLengths(t *testing.T) {
 // разошлись бы.
 func TestCompileRoundingRule(t *testing.T) {
 	const doc = `{
-	  "format_version": 2, "map_id": "R", "map_revision": 1,
+	  "format_version": 3, "map_id": "R", "map_revision": 1,
 	  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
 	  "topology": {
 	    "nodes": [
@@ -154,18 +154,18 @@ func TestCompileTracksideSpansInU(t *testing.T) {
 		t.Fatalf("у %s %d спанов, ожидался 1", ts.ID, len(ts.Spans))
 	}
 	sp := ts.Spans[0]
-	if sp.Element != "EA" || sp.FromM != 10.0 || sp.ToM != 90.0 {
+	if sp.Element != "EA" || sp.From != 10.0 || sp.To != 90.0 {
 		t.Fatalf("спан клиента (%s, %v, %v) — ожидались значения u из карты (EA, 10, 90)",
-			sp.Element, sp.FromM, sp.ToM)
+			sp.Element, sp.From, sp.To)
 	}
 	ss := ct.Trackside["TSP"]
 	if len(ss) != 1 {
 		t.Fatalf("у CompiledTrack %d спанов, ожидался 1", len(ss))
 	}
 	// Начало в плоском участке: s == u. Конец на уклоне: s > u.
-	if ss[0].FromS.Meters() != 10.0 || ss[0].ToS.Meters() <= 90.0 {
+	if ss[0].From.Meters() != 10.0 || ss[0].To.Meters() <= 90.0 {
 		t.Fatalf("симуляционный спан (%s, %v, %v) — начало в s==u, конец обязан превышать 90",
-			ss[0].Element, ss[0].FromS.Meters(), ss[0].ToS.Meters())
+			ss[0].Element, ss[0].From.Meters(), ss[0].To.Meters())
 	}
 }
 
@@ -198,7 +198,7 @@ func TestCompileFrogOptional(t *testing.T) {
 // constructionTrackMap — oneTurnout("to") плюс блок construction: один тип,
 // по run'у на каждое ребро. Проверяет перенос рецепта в провод.
 const constructionTrackMap = `{
-  "format_version": 2,
+  "format_version": 3,
   "map_id": "T2",
   "map_revision": 1,
   "anchors": { "NW.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
