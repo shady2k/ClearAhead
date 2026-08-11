@@ -23,15 +23,34 @@ type CompiledElement struct {
 // Протяжённость путевого объекта живёт в общем типе netloc: одна форма на файл,
 // компиляцию и провод, координата — параметр типа (бида ClearAhead-xm7).
 
-// CompiledTurnout — стрелка после компиляции. Оба прохода делят один ресурс:
-// положение остряка определяет разрешённый переход, занятость живёт на сегментах.
-type CompiledTurnout struct {
-	ID        string
-	Hand      string
-	Common    string
-	Straight  string
-	Diverging string
-	Resource  string
+// Traversal — направленный переход устройства: проход от порта к порту.
+type Traversal struct {
+	Passage string
+	From    string
+	To      string
+}
+
+// CompiledDevice — путевое устройство после компиляции.
+//
+// Число портов и набор переходов НЕ зашиты: глухое пересечение с четырьмя
+// портами и двумя непересекающимися проходами описывается той же формой, что
+// обыкновенная стрелка (map-content-design §4). В файле карты стрелка при этом
+// остаётся трёхпортовой записью — обобщена форма, которую видит код, а не та,
+// которую пишет автор.
+//
+// Все проходы делят ОДИН ресурс: положение остряка определяет разрешённый
+// переход, занятость живёт на сегментах.
+//
+// Состояний и конфликтов переходов здесь нет намеренно: их потребитель —
+// замыкание маршрута, а централизации в проекте ещё нет, и объявленная сейчас
+// форма оказалась бы неверной (map-format-design §8).
+type CompiledDevice struct {
+	ID string
+	// Hand — рукость. Свойство стрелки; у устройства без ветвления пусто.
+	Hand       string
+	Ports      []string
+	Traversals []Traversal
+	Resource   string
 }
 
 // CompiledTrack — вход физики и безопасности. Координат не содержит.
@@ -40,7 +59,7 @@ type CompiledTrack struct {
 	Revision  int
 	Elements  map[string]CompiledElement
 	Trackside map[string]netloc.LinearS
-	Turnouts  map[string]CompiledTurnout
+	Devices   map[string]CompiledDevice
 }
 
 // RenderPrimitive — примитив плана для клиента. Метры и радианы.
@@ -184,7 +203,7 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 		Revision:  m.MapRevision,
 		Elements:  make(map[string]CompiledElement, len(els)),
 		Trackside: map[string]netloc.LinearS{},
-		Turnouts:  make(map[string]CompiledTurnout, len(m.Topology.Turnouts)),
+		Devices:   make(map[string]CompiledDevice, len(m.Topology.Turnouts)),
 	}
 	// Проходы стрелок: элемент {ID}:straight или {ID}:diverging получает роль
 	// ветви. Обычные рёбра роли не несут.
@@ -194,8 +213,9 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 	}
 	passage := map[string]passageRole{}
 	for _, t := range m.Topology.Turnouts {
-		passage[t.ID+mapfmt.PassageStraight] = passageRole{t, "straight"}
-		passage[t.ID+mapfmt.PassageDiverging] = passageRole{t, "diverging"}
+		for _, ps := range t.Passages() {
+			passage[ps.ID] = passageRole{t, ps.Branch}
+		}
 	}
 	rg := &RenderGeometry{
 		MapID:              m.MapID,
@@ -243,13 +263,17 @@ func Compile(m *mapfmt.Map) (*CompiledTrack, *RenderGeometry, error) {
 	}
 
 	for _, t := range m.Topology.Turnouts {
-		ct.Turnouts[t.ID] = CompiledTurnout{
-			ID:        t.ID,
-			Hand:      t.Hand,
-			Common:    t.ID + "." + t.Ports.Common,
-			Straight:  t.ID + "." + t.Ports.Straight,
-			Diverging: t.ID + "." + t.Ports.Diverging,
-			Resource:  "RES_" + t.ID,
+		ps := t.Passages()
+		tr := make([]Traversal, 0, len(ps))
+		for _, p := range ps {
+			tr = append(tr, Traversal{Passage: p.ID, From: p.From, To: p.To})
+		}
+		ct.Devices[t.ID] = CompiledDevice{
+			ID:         t.ID,
+			Hand:       t.Hand,
+			Ports:      t.PortIDs(),
+			Traversals: tr,
+			Resource:   "RES_" + t.ID,
 		}
 	}
 

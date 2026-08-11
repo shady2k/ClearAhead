@@ -407,14 +407,7 @@ func settle(poses map[Incidence]PortPose, at Incidence, want PortPose) error {
 
 // buildElements переводит выравнивания карты в цепочки geom и профили.
 func buildElements(m *mapfmt.Map) (map[string]Element, error) {
-	ends := map[string][2]string{}
-	for _, e := range m.Topology.Edges {
-		ends[e.ID] = [2]string{e.From, e.To}
-	}
-	for _, t := range m.Topology.Turnouts {
-		ends[t.ID+mapfmt.PassageStraight] = [2]string{t.ID + "." + t.Ports.Common, t.ID + "." + t.Ports.Straight}
-		ends[t.ID+mapfmt.PassageDiverging] = [2]string{t.ID + "." + t.Ports.Common, t.ID + "." + t.Ports.Diverging}
-	}
+	ends := m.ElementEnds()
 
 	out := map[string]Element{}
 	for id, a := range m.AllAlignments() {

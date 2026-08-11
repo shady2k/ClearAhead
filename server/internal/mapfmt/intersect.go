@@ -88,14 +88,7 @@ type axisRelation struct {
 }
 
 func buildAxisElements(m *Map) (map[string]axisElement, error) {
-	ends := map[string][2]string{}
-	for _, e := range m.Topology.Edges {
-		ends[e.ID] = [2]string{e.From, e.To}
-	}
-	for _, t := range m.Topology.Turnouts {
-		ends[t.ID+PassageStraight] = [2]string{t.ID + "." + t.Ports.Common, t.ID + "." + t.Ports.Straight}
-		ends[t.ID+PassageDiverging] = [2]string{t.ID + "." + t.Ports.Common, t.ID + "." + t.Ports.Diverging}
-	}
+	ends := m.ElementEnds()
 
 	out := map[string]axisElement{}
 	for id, a := range m.AllAlignments() {

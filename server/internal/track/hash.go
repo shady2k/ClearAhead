@@ -75,14 +75,16 @@ func writeTrackModel(w io.Writer, m *mapfmt.Map, ct *CompiledTrack) {
 		}
 	}
 
-	tids := make([]string, 0, len(ct.Turnouts))
-	for id := range ct.Turnouts {
+	// Порты и переходы сериализуются поимённо и по порядку: их число не
+	// фиксировано, поэтому позиционная запись «общий, прямой, боковой» больше
+	// невозможна. Порядок задан Passages() и PortIDs() и потому детерминирован.
+	tids := make([]string, 0, len(ct.Devices))
+	for id := range ct.Devices {
 		tids = append(tids, id)
 	}
 	sort.Strings(tids)
 	for _, id := range tids {
-		t := ct.Turnouts[id]
-		fmt.Fprintf(w, "sw|%s|%s|%s|%s|%s|%s\n", t.ID, t.Hand, t.Common, t.Straight, t.Diverging, t.Resource)
+		writeDevice(w, ct.Devices[id])
 	}
 
 	oids := make([]string, 0, len(ct.Trackside))
@@ -109,4 +111,17 @@ func renderBody(rg *RenderGeometry) ([]byte, error) {
 		return nil, fmt.Errorf("track: сериализация геометрии: %w", err)
 	}
 	return b, nil
+}
+
+// writeDevice сериализует устройство для хеша: заголовок, порты, переходы.
+// Вынесено отдельно, потому что число портов и переходов не фиксировано и
+// правило записи должно быть в одном месте.
+func writeDevice(w io.Writer, d CompiledDevice) {
+	fmt.Fprintf(w, "dev|%s|%s|%s\n", d.ID, d.Hand, d.Resource)
+	for _, p := range d.Ports {
+		fmt.Fprintf(w, "dev.port|%s|%s\n", d.ID, p)
+	}
+	for _, tr := range d.Traversals {
+		fmt.Fprintf(w, "dev.tr|%s|%s|%s|%s\n", d.ID, tr.Passage, tr.From, tr.To)
+	}
 }

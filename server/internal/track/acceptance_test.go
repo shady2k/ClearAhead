@@ -45,6 +45,6 @@ func TestStationCompiles(t *testing.T) {
 			t.Fatalf("%s: s=%s u=%s, станция объявлена плоской", id, e.LengthS, e.LengthU)
 		}
 	}
-	t.Logf("станция скомпилирована: %d элементов, %d стрелок, %d путевых объектов",
-		len(ct.Elements), len(ct.Turnouts), len(ct.Trackside))
+	t.Logf("станция скомпилирована: %d элементов, %d устройств, %d путевых объектов",
+		len(ct.Elements), len(ct.Devices), len(ct.Trackside))
 }
