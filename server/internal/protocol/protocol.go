@@ -62,8 +62,8 @@ func (r *GeometryRequest) Parse(in Input) error {
 	if id == "" {
 		return fmt.Errorf("protocol: пустой map_id")
 	}
-	if len(id) > 128 {
-		return fmt.Errorf("protocol: map_id длиннее 128 символов")
+	if len(id) > mapfmt.MaxIDLength {
+		return fmt.Errorf("protocol: map_id длиннее %d символов", mapfmt.MaxIDLength)
 	}
 	rev, err := strconv.Atoi(in.Path["rev"])
 	if err != nil {

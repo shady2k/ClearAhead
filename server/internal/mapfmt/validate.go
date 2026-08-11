@@ -22,8 +22,8 @@ const (
 
 // Validate проверяет форму карты. Отказывает, не чинит.
 func Validate(m *Map) error {
-	if m.MapID == "" || len(m.MapID) > MaxIDLength {
-		return fmt.Errorf("mapfmt: map_id пуст или длиннее %d", MaxIDLength)
+	if err := ValidID("map_id", m.MapID); err != nil {
+		return err
 	}
 	if m.MapRevision < 1 {
 		return fmt.Errorf("mapfmt: map_revision должен быть положительным, получено %d", m.MapRevision)
@@ -197,8 +197,11 @@ func (m *Map) ElementIDs() []string {
 func (m *Map) collectPorts() (map[string]Port, error) {
 	ports := map[string]Port{}
 	add := func(full string, p Port) error {
-		if p.ID == "" || len(full) > MaxIDLength {
-			return fmt.Errorf("mapfmt: порт %q: пустой или слишком длинный ID", full)
+		if err := ValidID("порт", p.ID); err != nil {
+			return err
+		}
+		if len(full) > MaxIDLength {
+			return fmt.Errorf("mapfmt: порт %q: полное имя длиннее %d", full, MaxIDLength)
 		}
 		if _, dup := ports[full]; dup {
 			return fmt.Errorf("mapfmt: порт %q объявлен дважды", full)
@@ -207,8 +210,8 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 		return nil
 	}
 	for _, n := range m.Topology.Nodes {
-		if n.ID == "" {
-			return nil, fmt.Errorf("mapfmt: узел с пустым ID")
+		if err := ValidID("узел", n.ID); err != nil {
+			return nil, err
 		}
 		for _, p := range n.Ports {
 			switch p.Purpose {
@@ -244,8 +247,8 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 func (m *Map) collectElements() (map[string]bool, error) {
 	els := map[string]bool{}
 	for _, e := range m.Topology.Edges {
-		if e.ID == "" {
-			return nil, fmt.Errorf("mapfmt: ребро с пустым ID")
+		if err := ValidID("ребро", e.ID); err != nil {
+			return nil, err
 		}
 		if els[e.ID] {
 			return nil, fmt.Errorf("mapfmt: ребро %q объявлено дважды", e.ID)
@@ -255,12 +258,31 @@ func (m *Map) collectElements() (map[string]bool, error) {
 			return nil, fmt.Errorf("mapfmt: у ребра %s нет геометрии", e.ID)
 		}
 	}
+	// Устройства: идентификатор проверяется тем же правилом, что у ребра, и
+	// дополнительно на повтор. Без проверки повтора две стрелки с одним ID
+	// молча схлопывались бы в одну запись скомпилированной топологии.
+	devs := map[string]bool{}
 	for _, t := range m.Topology.Turnouts {
+		if err := ValidID("стрелка", t.ID); err != nil {
+			return nil, err
+		}
+		if devs[t.ID] {
+			return nil, fmt.Errorf("mapfmt: стрелка %q объявлена дважды", t.ID)
+		}
+		devs[t.ID] = true
 		if _, ok := m.Geometry.Turnouts[t.ID]; !ok {
 			return nil, fmt.Errorf("mapfmt: у стрелки %s нет геометрии", t.ID)
 		}
-		els[t.ID+PassageStraight] = true
-		els[t.ID+PassageDiverging] = true
+		// Проход не может столкнуться с ребром: разделитель в авторском
+		// идентификаторе запрещён, поэтому ребро с именем SW:straight до сюда
+		// не доходит. Проверка оставлена как страховка на случай, если правило
+		// ослабят.
+		for _, ps := range t.Passages() {
+			if els[ps.ID] {
+				return nil, fmt.Errorf("mapfmt: проход %q сталкивается с уже объявленным элементом", ps.ID)
+			}
+			els[ps.ID] = true
+		}
 	}
 	for id := range m.Geometry.Edges {
 		if !els[id] {
@@ -329,8 +351,11 @@ func (m *Map) validateTrackside(elements map[string]bool) error {
 	all := m.AllAlignments()
 	seen := map[string]bool{}
 	for _, ts := range m.Topology.Trackside {
-		if ts.ID == "" || seen[ts.ID] {
-			return fmt.Errorf("mapfmt: путевой объект с пустым или повторным ID %q", ts.ID)
+		if err := ValidID("путевой объект", ts.ID); err != nil {
+			return err
+		}
+		if seen[ts.ID] {
+			return fmt.Errorf("mapfmt: путевой объект %q объявлен дважды", ts.ID)
 		}
 		seen[ts.ID] = true
 		switch ts.Kind {

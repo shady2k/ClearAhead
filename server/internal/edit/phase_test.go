@@ -304,12 +304,12 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 				{Element: "E1", From: 0, To: 100, Direction: "forward"},
 				{Element: "E2", From: 0, To: 100, Direction: "forward"},
 			},
-			// Голова [0, 50] остаётся на E1, хвост [0, 50] переходит на E1@2;
+			// Голова [0, 50] остаётся на E1, хвост [0, 50] переходит на E1_CONT;
 			// направление сохранено.
 			want: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "forward"},
 				{Element: "E1", From: 0, To: 50, Direction: "forward"},
-				{Element: "E1@2", From: 0, To: 50, Direction: "forward"},
+				{Element: "E1_CONT", From: 0, To: 50, Direction: "forward"},
 				{Element: "E2", From: 0, To: 100, Direction: "forward"},
 			},
 		},
@@ -321,10 +321,10 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 				{Element: "E2", From: 0, To: 100, Direction: "reverse"},
 			},
 			// Reverse проходится от хвоста к голове: въезд с конца ребра,
-			// поэтому порядок после реза — E1@2 (хвост) перед E1 (голова).
+			// поэтому порядок после реза — E1_CONT (хвост) перед E1 (голова).
 			want: []netloc.IntervalU{
 				{Element: "E0", From: 0, To: 100, Direction: "reverse"},
-				{Element: "E1@2", From: 0, To: 50, Direction: "reverse"},
+				{Element: "E1_CONT", From: 0, To: 50, Direction: "reverse"},
 				{Element: "E1", From: 0, To: 50, Direction: "reverse"},
 				{Element: "E2", From: 0, To: 100, Direction: "reverse"},
 			},
@@ -333,21 +333,21 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pre := splitTestMap(tc.spans)
 
-			// Состояние после реза: E1 — голова [0, 50], E1@2 — хвост [0, 50];
+			// Состояние после реза: E1 — голова [0, 50], E1_CONT — хвост [0, 50];
 			// оба обычные рёбра цепочки со стыком в N_X, физически ничего не
 			// сдвинулось — тест изолирует splitRuns от устройства стрелки.
 			post := splitTestMap(tc.spans)
 			post.Topology.Edges = []mapfmt.Edge{
 				{ID: "E0", From: "N_B.P1", To: "N1.P1"},
 				{ID: "E1", From: "N1.P1", To: "N_X.P1"},
-				{ID: "E1@2", From: "N_X.P1", To: "N2.P1"},
+				{ID: "E1_CONT", From: "N_X.P1", To: "N2.P1"},
 				{ID: "E2", From: "N2.P1", To: "N_END.P1"},
 			}
 			post.Topology.Nodes = append(post.Topology.Nodes, mapfmt.Node{ID: "N_X", Ports: []mapfmt.Port{{ID: "P1"}}})
 			post.Geometry.Edges["E1"] = straightAlign(50)
-			post.Geometry.Edges["E1@2"] = straightAlign(50)
+			post.Geometry.Edges["E1_CONT"] = straightAlign(50)
 
-			got, err := splitRuns(post, post.Construction.Runs, "E1", "E1@2")
+			got, err := splitRuns(post, post.Construction.Runs, "E1", "E1_CONT")
 			if err != nil {
 				t.Fatalf("splitRuns: %v", err)
 			}

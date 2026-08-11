@@ -92,6 +92,16 @@ func allocID(m *mapfmt.Map, prefix string) string {
 	for _, ts := range m.Topology.Trackside {
 		used[ts.ID] = true
 	}
+	// Run'ы и типы решётки — тоже занятые имена. Без них allocID мог выдать
+	// идентификатор, уже занятый в блоке construction.
+	if m.Construction != nil {
+		for _, r := range m.Construction.Runs {
+			used[r.ID] = true
+		}
+		for _, tt := range m.Construction.Types {
+			used[tt.ID] = true
+		}
+	}
 	if !used[prefix] {
 		return prefix
 	}
@@ -288,7 +298,15 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	}
 
 	swID := allocID(m, "SW")
-	contID := allocID(m, edge.ID+"@2")
+	// Продолжение реза: суффикс описательный, а не порядковый. Прежний "@2"
+	// кодировал номер части внутри реза — идентификатор нёс след операции над
+	// логическим объектом, — и вдобавок содержал символ, запрещённый в
+	// идентификаторе (mapfmt.ValidID). Столкновения разрешает allocID.
+	//
+	// Глубже это не чинит: один логический путь после реза представлен двумя
+	// ID без таблицы соответствия. Устойчивое тождество приезжает вместе с
+	// нарезкой мира (ClearAhead-mks).
+	contID := allocID(m, edge.ID+"_CONT")
 	branchID := allocID(m, swID+"_BR")
 	endNode := allocID(m, "N_"+swID+"_BR")
 

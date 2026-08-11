@@ -299,8 +299,8 @@ func TestSequenceOfEditsValidates(t *testing.T) {
 	assertValid(t, &br.Map, "после branch")
 
 	// Ветвление разрезало E1 и добавило стрелку с ветвью.
-	if !hasEdge(t, &br.Map, "E1") || !hasEdge(t, &br.Map, "E1@2") || !hasTurnout(t, &br.Map, "SW") {
-		t.Fatalf("branch: ожидались E1, E1@2 и SW: %s", jsonString(t, br.Map.Topology))
+	if !hasEdge(t, &br.Map, "E1") || !hasEdge(t, &br.Map, "E1_CONT") || !hasTurnout(t, &br.Map, "SW") {
+		t.Fatalf("branch: ожидались E1, E1_CONT и SW: %s", jsonString(t, br.Map.Topology))
 	}
 	// Каждое ребро покрыто run'ом.
 	if err := runsCoverAllEdges(&br.Map); err != nil {

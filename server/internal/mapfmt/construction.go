@@ -87,8 +87,8 @@ func (m *Map) validateConstruction() error {
 	seenRuns := make(map[string]bool, len(c.Runs))
 	for i := range c.Runs {
 		r := &c.Runs[i]
-		if r.ID == "" || len(r.ID) > MaxIDLength {
-			return fmt.Errorf("%srun без id или id длиннее %d", prefix, MaxIDLength)
+		if err := ValidID("run решётки", r.ID); err != nil {
+			return fmt.Errorf("%s%w", prefix, err)
 		}
 		if seenRuns[r.ID] {
 			return fmt.Errorf("%srun %q объявлен дважды", prefix, r.ID)
@@ -201,8 +201,8 @@ type runSpanU struct {
 // диапазонах. Проверка !(v >= min && v <= max) отвергает и NaN, и бесконечность
 // наравне с выходом за границы — валидатор не обязан полагаться на checkFinite.
 func checkTrackType(prefix string, t *TrackType) error {
-	if t.ID == "" || len(t.ID) > MaxIDLength {
-		return fmt.Errorf("%sтип без id или id длиннее %d", prefix, MaxIDLength)
+	if err := ValidID("тип решётки", t.ID); err != nil {
+		return fmt.Errorf("%s%w", prefix, err)
 	}
 	bad := func(what string, v, min, max float64) error {
 		return fmt.Errorf("%sтип %q: %s %g вне [%g, %g]", prefix, t.ID, what, v, min, max)
