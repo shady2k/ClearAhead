@@ -271,8 +271,28 @@ ENU-плоскость») и коду (`geom.Pose{X, Y, Heading}` — план �
 **Манифест ревизии** связывает точные хеши:
 
 ```
-(map_id, map_revision) → { track_hash, render_geometry_hash, terrain_hash?, visual_hash? }
+(map_id, map_revision) → { network_model_hash, network_hash, terrain_hash?, visual_hash? }
 ```
+
+> **Переименовано 2026-08-11**, оба ключа сразу; значения не менялись.
+> ~~`render_geometry_hash`~~ → **`network_hash`**: ресурса `geometry` больше нет,
+> путь отдаётся как `/regions/{r}/revisions/{n}/network` (`ClearAhead-8kx`), а
+> хеш считается ровно от байтов его тела.
+> ~~`track_hash`~~ → **`network_model_hash`**: прежнее имя называло **вид**
+> (рельсы) — ровно то, за что забраковано имя `track` у ресурса, ведь туда
+> приедут автомобильные дороги. Считается от нормализованной модели
+> (`track.CompiledNetwork`), а не от байтов провода.
+>
+> Слово `model` в имени не косметика: **хеши расходятся в обе стороны уже
+> сегодня**. Геопривязка меняет модель, но в тело не входит вовсе; полуширина
+> балласта меняет тело, но в выжимку модели не входит. Имя, где эта разница
+> названа, путает меньше.
+>
+> Отвергнуто и почему: `topology_hash` — в хеш входят длины, профили и
+> геопривязка, то есть та же ложь, за которую ниже отброшено `geometry_hash`;
+> `infrastructure_hash` — второе слово для класса, у которого уже есть слово
+> `network`; `model_hash` — рядом встанут `terrain_hash` и `visual_hash`, у
+> которых модель тоже своя. Биды `ClearAhead-ku5`, `ClearAhead-z4u`.
 
 Пара `(map_id, revision)` определяет **ровно один** манифест — иначе immutable-URL
 лжёт.
@@ -575,7 +595,7 @@ Cache-Control: immutable
       { "id": "ST_A_E_T2",       "from": "ST_A_SW_1.D", "to": "ST_A_T2_W.P1" }
     ],
 
-    "trackside": [
+    "structures": [
       {
         "id": "ST_A_PLAT_1",
         "kind": "platform",
