@@ -1468,7 +1468,7 @@ func _add_bushes() -> void:
 ## Поэтому посадка идёт ВОКРУГ ТОЧКИ ВЗГЛЯДА и редеет с расстоянием кольцами
 ## (GRASS_RINGS), а дальше фактуру держит зерно в шейдере покрова — оно и
 ## рассчитано ровно на эту дистанцию (detail_far = 90 м). Круг пересобирается,
-## когда камера уезжает от его центра дальше половины GRASS_HOME.
+## когда камера уходит с чанка (см. GRASS_CHUNK и _grass_plan).
 ##
 ## Цвет травы держится БЛИЗКО к цвету покрова под ней. Первый заход был тёмным
 ## (0.30, 0.42, 0.17) и при редкой посадке читался не травой, а насыпанным
@@ -1506,8 +1506,28 @@ const GRASS_BASE := 0.22         # м — базовая ячейка посад
 const GRASS_RINGS := [
 	[45.0, 1, 1.00], [90.0, 2, 0.90], [160.0, 3, 0.80], [280.0, 5, 0.70], [420.0, 8, 0.60],
 ]
-const GRASS_HOME := 45.0         # м — ближнее кольцо: по нему решается пересадка
-const GRASS_REBUILD := 0.55      # доля GRASS_HOME, после которой круг пересобирается
+
+## РАДИУС ПОСАДКИ — КОНСТАНТА, А НЕ ФУНКЦИЯ КАМЕРЫ. Здесь стояло
+## clampf(охват * 1.3, 150, 420): радиус рос вместе с охватом кадра, то есть чем
+## дальше отъезжали, тем больше сажалось. Зависимость обратная нужной, и стоила
+## она всего интерактива.
+##
+## Измерено make perf-probe: пересадка идёт СИНХРОННО в главном потоке и занимает
+## 1.77 с при радиусе 150 м и 3.11 с при 420 м, из них 98 % — обход сетки в
+## GDScript (загрузка в MultiMesh всего 33-62 мс, оптимизировать её бессмысленно).
+## Зум от 30 до 1500 м пересекал порог пересадки около десяти раз, то есть давал
+## десяток замираний по две-три секунды подряд. Это и было «тормоза при зуме».
+##
+## Платили мы за то, чего не видно: на отдалении пучок мельче пикселя, а фактуру
+## там и так держит зерно в шейдере покрова (detail_far = 90 м).
+##
+## ПОЧЕМУ КОНСТАНТА, А НЕ ПОТОЛОК. С потолком (150 в упор, 200 вдали) зум всё
+## равно пересаживал ОДИН раз — на переходе от ближнего радиуса к дальнему;
+## замер это и показал. Константа убирает и его: любая зависимость радиуса от
+## камеры означает, что движение камеры рано или поздно запускает пересадку.
+## Плата — посадка всегда стоит как дальняя (2.15 с вместо 1.77 с), и платится
+## она только там, где пересадка и так неизбежна: на старте и на панораме.
+const GRASS_FAR := 200.0         # м — радиус круга посадки, всегда один
 const GRASS_CLEAR := 2.9         # м — ближе к оси травы нет: там балласт с откосом
 const GRASS_CELL := 0.5          # м — сетка маски «здесь балласт, травы нет»
 const GRASS_MESH_H := 1.0        # м — высота эталонного пучка
@@ -1563,8 +1583,10 @@ const C_GRASS_DRY := Color(0.64, 0.56, 0.30)
 
 var _grass_root: Node3D
 var _grass_center := Vector3.INF
-var _grass_extent := 0.0
-var _grass_wait := 0.0
+## Счётчик посадок. Сама дорогая работа не видна ни в снимке, ни в фпс поодиночке
+## — видно только «иногда дёргается». Счётчик делает её проверяемой: зум обязан
+## не увеличивать его вовсе (tools/perf_probe.gd это и спрашивает).
+var _grass_builds := 0
 var _grass_meshes: Array[ArrayMesh] = []
 var _grass_mats: Array[Material] = []
 
@@ -1581,7 +1603,61 @@ func _hash01(i: int, j: int, salt: int) -> float:
 	h ^= h >> 16
 	return float(h & 0xFFFFFF) / 16777216.0
 
-func _add_grass() -> void:
+## ПОСАДКА ЧАНКАМИ. Прежде трава жила одним кругом вокруг камеры, и любой сдвиг
+## камеры обесценивал его целиком: при сдвиге на 25 м реально новыми были 21 %
+## кандидатов, остальные 79 % пересаживались впустую — 1.9 с в главном потоке.
+##
+## Теперь единица посадки — ЧАНК мировой сетки, а не круг вокруг камеры. Это
+## работает потому, что место пучка уже прибито к мировой ячейке: тот же индекс
+## всегда даёт тот же пучок. Значит, построенный чанк верен вечно, и панорама
+## платит только за вновь вошедшие чанки.
+##
+## Три следствия, каждое проверено замером (make perf-probe):
+##   * дельта вместо круга — платим за 21 %, а не за 100 %;
+##   * свой MultiMesh на чанк — у одного большого поэкземплярного отсечения по
+##     пирамиде НЕТ, и трава уходила в отрисовку целиком даже вблизи;
+##   * задание ПРОДОЛЖАЕМОЕ внутри чанка. Это не мелочь: при 9 мкс на пучок
+##     бюджет 4 мс это 440 пучков за кадр, а плотный чанк 32 м — одиннадцать
+##     тысяч. Очередь из непрерываемых заданий дала бы те же рывки, только по
+##     200 мс.
+const GRASS_CHUNK := 32.0        # м — сторона чанка посадки
+const GRASS_BUDGET_US := 4000    # мкс на кадр на постройку
+const GRASS_WARM := 1.30         # во сколько раз дальше круга держим готовое
+const GRASS_CHECK := 192         # ячеек между проверками бюджета
+const GRASS_REPLAN := 6.0        # м — насколько уедет камера до пересчёта плана
+
+var _grass_ban := {}             # маска путей: не зависит от камеры, считается ОДИН раз
+var _grass_chunks := {}          # Vector3i(cx,cz,уровень) -> Node3D
+var _grass_want := {}            # Vector2i(cx,cz) -> желаемый уровень
+var _grass_queue := []           # очередь ключей на постройку
+var _grass_queued := {}          # то же множеством, против дублей в очереди
+var _grass_job := {}             # текущее продолжаемое задание
+
+## Уровень подробности чанка — ПО ЕГО ЦЕНТРУ.
+##
+## Подробность у чанка одна на все его 1024 м², и выбор точки замера решает, куда
+## сместится ошибка. По БЛИЖНЕМУ УГЛУ (первый заход) чанк, едва задевший круг
+## 45 м, получал плотность ближнего уровня целиком: густая область раздувалась на
+## диагональ чанка, и пучков стало 343 811 вместо 206 219 — в 1.67 раза больше
+## работы и отрисовки за то, чего не видно. По ДАЛЬНЕМУ углу была бы обратная
+## ошибка: под ногами реже, чем нужно, а это как раз то, что видно.
+##
+## Центр даёт несмещённую ошибку: густая область совпадает с прежним кругом, а
+## расходятся только края отдельных чанков — на полдиагонали в обе стороны.
+func _chunk_level(cx: int, cz: int) -> int:
+	var dx: float = (float(cx) + 0.5) * GRASS_CHUNK - _cam_focus.x
+	var dz: float = (float(cz) + 0.5) * GRASS_CHUNK - _cam_focus.z
+	var d := sqrt(dx * dx + dz * dz)
+	if d > GRASS_FAR:
+		return -1
+	for k in GRASS_RINGS.size():
+		if d <= float(GRASS_RINGS[k][0]):
+			return k
+	return GRASS_RINGS.size() - 1
+
+## План: какие чанки и с какой подробностью нужны сейчас. Очередь строится
+## ПО БЛИЗОСТИ — под ногами трава нужна раньше, чем на горизонте.
+func _grass_plan() -> void:
 	if _grass_root == null:
 		_grass_root = Node3D.new()
 		_grass_root.name = "Grass"
@@ -1590,125 +1666,278 @@ func _add_grass() -> void:
 		for k in GRASS_KINDS.size():
 			_grass_meshes.append(_grass_mesh(GRASS_KINDS[k]))
 			_grass_mats.append(_mat_grass(GRASS_KINDS[k], k))
-	for ch in _grass_root.get_children():
-		_grass_root.remove_child(ch)
-		ch.queue_free()
+	# Маска балласта считается ОДИН раз за сцену: она функция осевых пути, а путь
+	# не движется. Раньше её пересчитывали при каждой посадке — 4 мс на пустом месте.
+	if _grass_ban.is_empty():
+		_grass_ban = _track_ban(GRASS_CLEAR, GRASS_CELL)
 	_grass_center = _cam_focus
-	_grass_extent = _view_extent()
-	# Маска балласта: ячейки ближе GRASS_CLEAR к ЛЮБОЙ осевой. Считается один раз
-	# — проверять каждый пучок против всех осевых это миллиарды сравнений.
-	var ban := _track_ban(GRASS_CLEAR, GRASS_CELL)
-	# Дальний край подстраивается под охват камеры: сажать на 400 м вокруг, когда
-	# в кадре тридцать, — это сотни тысяч пучков за краем экрана.
-	var far: float = clampf(_grass_extent * 1.3, 150.0, 420.0)
-	var cx := _grass_center.x
-	var cz := _grass_center.z
-	var xf := [[], [], []]
-	var cl := [[], [], []]
-	var r_in := 0.0
-	for ring in GRASS_RINGS:
-		var r_out: float = minf(float(ring[0]), far)
-		if r_out <= r_in:
-			break
-		var step := int(ring[1])
-		var fill := float(ring[2])
-		var cell := GRASS_BASE * step
-		var i0 := int(floor((cx - r_out) / cell))
-		var i1 := int(floor((cx + r_out) / cell))
-		var j0 := int(floor((cz - r_out) / cell))
-		var j1 := int(floor((cz + r_out) / cell))
-		for ii in range(i0, i1 + 1):
-			var bi := ii * step                        # индекс в БАЗОВОЙ сетке
-			for jj in range(j0, j1 + 1):
-				var bj := jj * step
-				# Место пучка — от хеша базовой ячейки, а не от жребия и не от
-				# номера кольца: кольца делят одну сетку и дают одни точки.
-				var x := bi * GRASS_BASE + _hash01(bi, bj, 1) * GRASS_BASE
-				var z := bj * GRASS_BASE + _hash01(bi, bj, 2) * GRASS_BASE
-				var d := Vector2(x - cx, z - cz).length()
-				if d < r_in or d > r_out:
-					continue
-				var lot := _hash01(bi, bj, 3)
-				if lot > fill:
-					continue
-				# Внешняя кромка не режется линией: посадка редеет к краю.
-				if d > far * 0.78 and _hash01(bi, bj, 4) < smoothstep(0.78, 1.0, d / far):
-					continue
-				if ban.has(_cell_key(x, z, GRASS_CELL)):
-					continue
-				var veg := _veg_density(x, z)
-				if veg <= 0.001:
-					continue
-				# КУРТИНЫ: внутри одной дернины трава редеет и густеет пятнами по
-				# 10 м. Крупная маска решает, есть ли покров вообще; эта — густоту.
-				var tuft: float = 0.5 + 0.5 * _n_tuft.get_noise_2d(x, z)
-				if _hash01(bi, bj, 5) > veg * (0.45 + 0.75 * tuft):
-					continue
-				var y := _height_at(x, z)
-				if y < WATER_Y + 0.8:
-					continue
-				# ПОРОДА ОТ МЕСТА И ЖРЕБИЯ РАЗОМ: метёлки идут только в куртинах,
-				# кочки — вперемешку, и оба редко, иначе они перестают быть
-				# исключением и силуэт снова становится одним на всех.
-				var kk := _hash01(bi, bj, 6)
-				var kind := 0
-				if tuft > 0.60 and kk < 0.30:
-					kind = 2
-				elif kk > 0.66:
-					kind = 1
-				var spec: Array = GRASS_KINDS[kind]
-				# ВЫСОТА ИДЁТ ПЯТНАМИ, А НЕ ЖРЕБИЕМ. Жребий по всему полю даёт
-				# ровный ворс средней высоты — глаз читает его ковром.
-				var lush: float = clampf(veg * (0.30 + 0.90 * tuft), 0.0, 1.0)
-				var h: float = lerpf(float(spec[3]), float(spec[4]), lush) \
-					* lerpf(0.62, 1.45, _hash01(bi, bj, 7))
-				var wide: float = float(spec[5]) * lerpf(0.75, 1.35, _hash01(bi, bj, 8))
-				var basis := Basis(Vector3.UP, _hash01(bi, bj, 9) * TAU)
-				# Наклон: ни один пучок не стоит по отвесу, и разнобой наклонов —
-				# половина того, что отличает луг от щётки.
-				var ta := _hash01(bi, bj, 10) * TAU
-				# Наклон до 30 градусов: отвесный квад сверху не виден вовсе, у него
-				# нет площади в плане, и с высоты пучок пропадает.
-				basis = Basis(Vector3(cos(ta), 0.0, sin(ta)), _hash01(bi, bj, 11) * 0.52) * basis
-				var t := Transform3D(basis, Vector3(x, y, z))
-				var s := h / GRASS_MESH_H
-				t.basis = t.basis.scaled(Vector3(s * wide, s, s * wide))
-				# ОТТЕНОК: место задаёт середину, жребий разводит соседей. Одного
-				# места мало — пучки рядом выходят одной краской.
-				var forest := _forest_mask(x, z)
-				var dry: float = clampf(0.70 - 0.75 * veg + 0.30 * _n_tone.get_noise_2d(x, z), 0.0, 1.0)
-				var col := C_GRASS_LUSH.lerp(C_GRASS_PALE, clampf(0.28 + 0.50 * (lot - 0.5), 0.0, 1.0))
-				col = col.lerp(C_GRASS_DARK, _hash01(bi, bj, 12) * 0.34)
-				col = col.lerp(C_GRASS_DRY, dry * lerpf(0.20, 0.70, _hash01(bi, bj, 13)))
-				col = col.lerp(C_UNDER, forest * 0.45)
-				col *= lerpf(0.92, 1.18, _hash01(bi, bj, 14))
-				xf[kind].append(t)
-				cl[kind].append(_lin(col))
-		r_in = r_out
-	for k in GRASS_KINDS.size():
-		_add_instances(xf[k], cl[k], _grass_meshes[k], 0.95, true, _grass_root, _grass_mats[k])
-	print("WORLD: травы %d/%d/%d (круг до %.0f м у %.0f,%.0f)"
-		% [xf[0].size(), xf[1].size(), xf[2].size(), far, _grass_center.x, _grass_center.z])
+	_grass_want.clear()
+	# ОЧЕРЕДЬ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ, А НЕ ДОПОЛНЯЕТСЯ. Сперва она только росла, и
+	# на непрерывной панораме бюджет уходил на чанки, которые камера давно
+	# проехала: замер показал 112 неготовых чанков из 124, причём и через четыре
+	# секунды после остановки оставалось 104. Устаревшее задание не «немного
+	# лишней работы» — оно вытесняет нужное.
+	_grass_queue.clear()
+	_grass_queued.clear()
+	var r := int(ceil(GRASS_FAR / GRASS_CHUNK)) + 1
+	var c0 := int(floor(_cam_focus.x / GRASS_CHUNK))
+	var c1 := int(floor(_cam_focus.z / GRASS_CHUNK))
+	var coarse := _grass_coarse_level()
+	var rough := []      # чанки без единого готового уровня — им сперва грубый
+	var fine := []       # и только потом желаемая подробность
+	for cx in range(c0 - r, c0 + r + 1):
+		for cz in range(c1 - r, c1 + r + 1):
+			var level := _chunk_level(cx, cz)
+			if level < 0:
+				continue
+			var flat := Vector2i(cx, cz)
+			_grass_want[flat] = level
+			var dx := (float(cx) + 0.5) * GRASS_CHUNK - _cam_focus.x
+			var dz := (float(cz) + 0.5) * GRASS_CHUNK - _cam_focus.z
+			var d2 := dx * dx + dz * dz
+			# ГРУБЫЙ УРОВЕНЬ ВПЕРЁД. Плотный чанк — это около 11 тысяч пучков, то
+			# есть ~100 мс, двадцать пять кадров бюджета на один чанк. Пока он
+			# строится, под ногами была бы голая земля. Грубый — 300 пучков и
+			# 3 мс: покров появляется сразу, подробность приезжает следом.
+			# Условие тут ровно одно: ЧАНК ГОЛЫЙ. Сперва стояло ещё «и уровень не
+			# грубый», и от этого дальнее кольцо — 44 чанка из 124, которым грубый
+			# уровень и положен, — выпадало из срочной очереди и уезжало в конец
+			# общей, за все плотные чанки. Замер показал 28 голых чанков, висевших
+			# так по шесть секунд, хотя стоят они по три миллисекунды.
+			if not _grass_has_any(flat):
+				rough.append([d2, Vector3i(cx, cz, coarse)])
+			var key := Vector3i(cx, cz, level)
+			if not _grass_chunks.has(key):
+				fine.append([d2, key])
+	# Под ногами трава нужна раньше, чем на горизонте.
+	rough.sort_custom(func(a, b): return a[0] < b[0])
+	fine.sort_custom(func(a, b): return a[0] < b[0])
+	for w in rough + fine:
+		if _grass_queued.has(w[1]):
+			continue
+		_grass_queue.append(w[1])
+		_grass_queued[w[1]] = true
+	# Начатое задание, которое больше не нужно, бросаем: доделывать его — значит
+	# занимать бюджет тем, чего никто не увидит.
+	if not _grass_job.is_empty():
+		var jk: Vector3i = _grass_job.key
+		if _grass_want.get(Vector2i(jk.x, jk.y), -1) < 0:
+			_grass_job = {}
+	_grass_evict()
+	_grass_show()
 
-## Пересадка круга травы при уходе камеры. Круг привязан к точке взгляда, и без
-## этого панорама уезжает с голой земли — это было бы хуже прежней ленты.
+## Есть ли у чанка хоть какой-то готовый уровень.
+func _grass_has_any(flat: Vector2i) -> bool:
+	for k in GRASS_RINGS.size():
+		if _grass_chunks.has(Vector3i(flat.x, flat.y, k)):
+			return true
+	return false
+
+## Самый грубый уровень, который вообще применяется при радиусе GRASS_FAR.
+func _grass_coarse_level() -> int:
+	for k in GRASS_RINGS.size():
+		if float(GRASS_RINGS[k][0]) >= GRASS_FAR:
+			return k
+	return GRASS_RINGS.size() - 1
+
+## Выброс чанков за тёплой полосой. Полоса нужна, чтобы шаг назад не заставлял
+## строить только что выброшенное.
+func _grass_evict() -> void:
+	var keep := GRASS_FAR * GRASS_WARM
+	for key in _grass_chunks.keys():
+		var dx := (float(key.x) + 0.5) * GRASS_CHUNK - _cam_focus.x
+		var dz := (float(key.y) + 0.5) * GRASS_CHUNK - _cam_focus.z
+		if sqrt(dx * dx + dz * dz) <= keep:
+			continue
+		var node: Node3D = _grass_chunks[key]
+		_grass_root.remove_child(node)
+		node.queue_free()
+		_grass_chunks.erase(key)
+
+## Показываем ТОТ УРОВЕНЬ, КОТОРЫЙ УЖЕ ЕСТЬ, ближайший к желаемому. Иначе вновь
+## вошедший чанк стоял бы голой землёй, пока строится: у него нет ни одного
+## готового уровня, и «покажем предыдущий» там не работает.
+func _grass_show() -> void:
+	var best := {}
+	for key in _grass_chunks.keys():
+		var flat := Vector2i(key.x, key.y)
+		var want: int = _grass_want.get(flat, -1)
+		if want < 0:
+			continue
+		var d: int = absi(key.z - want)
+		if not best.has(flat) or d < int(best[flat][0]):
+			best[flat] = [d, key]
+	for key in _grass_chunks.keys():
+		var flat := Vector2i(key.x, key.y)
+		var node: Node3D = _grass_chunks[key]
+		node.visible = best.has(flat) and best[flat][1] == key
+
+## Постройка в пределах бюджета. Задание переживает границу кадра: курсор по
+## ячейкам лежит в самом задании.
+func _grass_work(budget_us: int) -> void:
+	var t0 := Time.get_ticks_usec()
+	while true:
+		if _grass_job.is_empty():
+			if _grass_queue.is_empty():
+				return
+			_grass_job = _grass_job_make(_grass_queue.pop_front())
+			continue
+		if _grass_job_step(_grass_job, t0, budget_us):
+			_grass_commit(_grass_job)
+			_grass_job = {}
+			_grass_show()
+		if Time.get_ticks_usec() - t0 >= budget_us:
+			return
+
+func _grass_job_make(key: Vector3i) -> Dictionary:
+	_grass_queued.erase(key)
+	var ring: Array = GRASS_RINGS[key.z]
+	var step := int(ring[1])
+	var cell := GRASS_BASE * step
+	var x0 := float(key.x) * GRASS_CHUNK
+	var z0 := float(key.y) * GRASS_CHUNK
+	# Ячейка принадлежит чанку, если в него попадает её ОПОРНАЯ точка bi*GRASS_BASE.
+	# Владение однозначное, поэтому на швах чанков нет ни дублей, ни щелей.
+	var i0 := int(ceil(x0 / cell))
+	var j0 := int(ceil(z0 / cell))
+	return {
+		"key": key, "step": step, "fill": float(ring[2]),
+		"i0": i0, "i1": int(ceil((x0 + GRASS_CHUNK) / cell)) - 1,
+		"j0": j0, "j1": int(ceil((z0 + GRASS_CHUNK) / cell)) - 1,
+		"ii": i0, "jj": j0,
+		"xf": [[], [], []], "cl": [[], [], []], "seen": 0,
+	}
+
+## true — задание закончено. Бюджет проверяется раз в GRASS_CHECK ячеек: чаще —
+## и сам Time.get_ticks_usec станет заметной статьёй расхода.
+func _grass_job_step(job: Dictionary, t0: int, budget_us: int) -> bool:
+	var step: int = job.step
+	var fill: float = job.fill
+	var xf: Array = job.xf
+	var cl: Array = job.cl
+	var n := 0
+	while job.ii <= job.i1:
+		var bi: int = int(job.ii) * step
+		while job.jj <= job.j1:
+			var bj: int = int(job.jj) * step
+			job.jj = int(job.jj) + 1
+			job.seen = int(job.seen) + 1
+			n += 1
+			if n >= GRASS_CHECK:
+				n = 0
+				if Time.get_ticks_usec() - t0 >= budget_us:
+					return false
+			_grass_cell(bi, bj, fill, xf, cl)
+		job.jj = job.j0
+		job.ii = int(job.ii) + 1
+	return true
+
+## ОДНА ЯЧЕЙКА. Вынесена отдельно нарочно: это и есть тот детерминированный
+## кирпич, на котором держится всё остальное. Ответ зависит ТОЛЬКО от индексов
+## мировой ячейки — ни камера, ни чанк, ни порядок постройки на него не влияют.
+## Пока это так, чанк можно строить когда угодно и кэшировать сколько угодно.
+func _grass_cell(bi: int, bj: int, fill: float, xf: Array, cl: Array) -> void:
+	var lot := _hash01(bi, bj, 3)
+	if lot > fill:
+		return
+	var x := bi * GRASS_BASE + _hash01(bi, bj, 1) * GRASS_BASE
+	var z := bj * GRASS_BASE + _hash01(bi, bj, 2) * GRASS_BASE
+	if _grass_ban.has(_cell_key(x, z, GRASS_CELL)):
+		return
+	var veg := _veg_density(x, z)
+	if veg <= 0.001:
+		return
+	# КУРТИНЫ: внутри одной дернины трава редеет и густеет пятнами по 10 м.
+	# Крупная маска решает, есть ли покров вообще; эта — густоту.
+	var tuft: float = 0.5 + 0.5 * _n_tuft.get_noise_2d(x, z)
+	if _hash01(bi, bj, 5) > veg * (0.45 + 0.75 * tuft):
+		return
+	var y := _height_at(x, z)
+	if y < WATER_Y + 0.8:
+		return
+	# ПОРОДА ОТ МЕСТА И ЖРЕБИЯ РАЗОМ: метёлки идут только в куртинах, кочки —
+	# вперемешку, и оба редко, иначе они перестают быть исключением.
+	var kk := _hash01(bi, bj, 6)
+	var kind := 0
+	if tuft > 0.60 and kk < 0.30:
+		kind = 2
+	elif kk > 0.66:
+		kind = 1
+	var spec: Array = GRASS_KINDS[kind]
+	# ВЫСОТА ИДЁТ ПЯТНАМИ, А НЕ ЖРЕБИЕМ. Жребий по всему полю даёт ровный ворс
+	# средней высоты — глаз читает его ковром.
+	var lush: float = clampf(veg * (0.30 + 0.90 * tuft), 0.0, 1.0)
+	var h: float = lerpf(float(spec[3]), float(spec[4]), lush) \
+		* lerpf(0.62, 1.45, _hash01(bi, bj, 7))
+	var wide: float = float(spec[5]) * lerpf(0.75, 1.35, _hash01(bi, bj, 8))
+	var basis := Basis(Vector3.UP, _hash01(bi, bj, 9) * TAU)
+	# Наклон: ни один пучок не стоит по отвесу, и разнобой наклонов — половина
+	# того, что отличает луг от щётки. До 30 градусов: отвесный квад сверху не
+	# виден вовсе, у него нет площади в плане.
+	var ta := _hash01(bi, bj, 10) * TAU
+	basis = Basis(Vector3(cos(ta), 0.0, sin(ta)), _hash01(bi, bj, 11) * 0.52) * basis
+	var t := Transform3D(basis, Vector3(x, y, z))
+	var s := h / GRASS_MESH_H
+	t.basis = t.basis.scaled(Vector3(s * wide, s, s * wide))
+	# ОТТЕНОК: место задаёт середину, жребий разводит соседей.
+	var forest := _forest_mask(x, z)
+	var dry: float = clampf(0.70 - 0.75 * veg + 0.30 * _n_tone.get_noise_2d(x, z), 0.0, 1.0)
+	var col := C_GRASS_LUSH.lerp(C_GRASS_PALE, clampf(0.28 + 0.50 * (lot - 0.5), 0.0, 1.0))
+	col = col.lerp(C_GRASS_DARK, _hash01(bi, bj, 12) * 0.34)
+	col = col.lerp(C_GRASS_DRY, dry * lerpf(0.20, 0.70, _hash01(bi, bj, 13)))
+	col = col.lerp(C_UNDER, forest * 0.45)
+	col *= lerpf(0.92, 1.18, _hash01(bi, bj, 14))
+	xf[kind].append(t)
+	cl[kind].append(_lin(col))
+
+func _grass_commit(job: Dictionary) -> void:
+	var key: Vector3i = job.key
+	var node := Node3D.new()
+	node.name = "C%d_%d_L%d" % [key.x, key.y, key.z]
+	_grass_root.add_child(node)
+	for k in GRASS_KINDS.size():
+		_add_instances(job.xf[k], job.cl[k], _grass_meshes[k], 0.95, true, node, _grass_mats[k])
+	_grass_chunks[key] = node
+	_grass_builds += 1
+
+## Полная постройка без бюджета — для старта сцены и для зондов: снимок нельзя
+## снимать, пока мир достраивается.
+func _add_grass() -> void:
+	_grass_plan()
+	while not (_grass_queue.is_empty() and _grass_job.is_empty()):
+		_grass_work(1 << 30)
+	_grass_show()
+	var tufts := 0
+	for key in _grass_chunks.keys():
+		for mm in _grass_chunks[key].get_children():
+			tufts += (mm as MultiMeshInstance3D).multimesh.instance_count
+	print("WORLD: травы %d пучков в %d чанках, круг %.0f м у %.0f,%.0f"
+		% [tufts, _grass_chunks.size(), GRASS_FAR, _grass_center.x, _grass_center.z])
+
+## КАЖДЫЙ КАДР: подправить план и построить сколько влезет в бюджет.
 ##
-## ПЕРЕСАДКА ТОЛЬКО НА ОТЪЕЗД И ОТДАЛЕНИЕ. При приближении круг уже покрывает всё,
-## что видно, и пересобирать его незачем — а прежнее условие срабатывало и на
-## приближение тоже, то есть трава дёргалась на каждом щипке колёсиком.
-## И ждём, пока камера ОСТАНОВИТСЯ: пересборка — это десятки тысяч пучков.
+## Здесь стояло «камера ушла на 25 м — пересадить всё», с ожиданием остановки в
+## 0.35 с. Ожидание было не лечением, а отсрочкой: работа никуда не девалась и
+## всё равно падала одним куском — в том числе посреди зума, если панорама и зум
+## шли подряд. Именно на это жаловался владелец.
+##
+## Теперь ждать нечего. План пересчитывается, когда камера отъехала на
+## GRASS_REPLAN, а постройка идёт понемногу КАЖДЫЙ кадр, включая кадры движения:
+## задание продолжаемое, и прерывание в середине чанка ничего не портит.
 func _process(delta: float) -> void:
+	super(delta)   # панорама клавишами живёт в родителе, и без этого её тут нет
+	_grass_tick()
+
+## Подсадка вынесена из _process ОТДЕЛЬНЫМ методом: наследник (spike_fpv.gd) ведёт
+## точку взгляда сам — там те же WASD ведут человека, а не камеру, — и звать
+## родительский _process ему нельзя. Трава при этом нужна ему ровно та же.
+func _grass_tick() -> void:
 	if _grass_center == Vector3.INF:
 		return
 	var moved := Vector2(_cam_focus.x - _grass_center.x, _cam_focus.z - _grass_center.z).length()
-	var out: bool = _view_extent() > _grass_extent * 1.5
-	if (moved < GRASS_HOME * GRASS_REBUILD and not out) or Input.get_mouse_button_mask() != 0:
-		_grass_wait = 0.0
-		return
-	_grass_wait += delta
-	if _grass_wait > 0.35:
-		_grass_wait = 0.0
-		_add_grass()
+	if moved >= GRASS_REPLAN:
+		_grass_plan()
+	_grass_work(GRASS_BUDGET_US)
 
 ## Что камера видит поперёк кадра, в метрах — по нему считается радиус посадки.
 func _view_extent() -> float:

@@ -70,12 +70,59 @@ const PLATFORM_EDGE_W := 0.15    # м — ширина жёлтой кромки
 const BUFFER_W := 0.30           # м — глубина упора вдоль пути
 const BUFFER_H := 1.10           # м — высота упора (над низом балласта)
 const BUFFER_SINK := 0.10        # м — заглубление низа упора в балласт
-const LOCO_L := 16.0             # м — длина эталонной коробки (локомотив)
-const LOCO_W := 3.0              # м — ширина
-const LOCO_H := 3.6              # м — высота кузова
-const LOCO_ROOF := 0.35          # м — толщина крыши
-const LOCO_LAT := 5.0            # м — боковое смещение от оси пути (левая сторона)
-const LOCO_U := 172.0            # м — координата u на E_MAIN (прямая после дуги)
+## --- ЛОКОМОТИВ: РАЗМЕРЫ ПО НАТУРЕ -------------------------------------------
+## Здесь стояла «эталонная коробка» 16×3×3.6 м, и стояла она СБОКУ от пути, на
+## LOCO_LAT = 5 м. Как мерная линейка она работала, но ровно одного не давала:
+## подтверждения, что путь — это путь. Коробка рядом с рельсами не проверяет ни
+## колею, ни отметку головки, ни то, что тележки вписываются в кривую.
+##
+## Теперь это маневровый капотный тепловоз в духе ЧМЭ3, и он стоит НА РЕЛЬСАХ.
+## Размеры — натурные (ЧМЭ3): длина по осям автосцепок 17.22 м, ширина кузова
+## 3.12 м, высота по крыше 4.63 м, расстояние между шкворнями 8.66 м, тележки
+## трёхосные с шагом осей 1.85 м, колесо Ø1.05 м, ось автосцепки 1.06 м над УГР.
+##
+## ЭТО ПО-ПРЕЖНЕМУ СПАЙК. В контракте подвижного состава нет и не заявлено:
+## веха «локомотив едет» (ClearAhead-fcy) отдаёт положение как TrackPos с
+## сервера. Здесь машина СТОИТ, координата зашита константой, и единственное,
+## что этот код доказывает, — что геометрия пути годится, чтобы на неё что-то
+## поставить. Когда положение придёт с сервера, меняется только LOCO_U.
+const LOCO_ELEMENT := "E_MAIN"   # на каком элементе стоит
+## Координата ГОЛОВНОЙ секции. 78 выбрано так, чтобы двухсекционный ВЛ80 (33 м)
+## встал серединой против середины платформы (её span 40..100); одиночный ЧМЭ3
+## оказывается там же, у дальнего края платформы.
+const LOCO_U := 78.0             # м — координата u на LOCO_ELEMENT
+const LOCO_PIVOT := 8.66         # м — расстояние между шкворнями тележек
+const LOCO_COUPLED_LEN := 17.22  # м — длина по осям автосцепок
+const LOCO_FRAME_LEN := 15.60    # м — главная рама по концевым балкам
+const LOCO_FRAME_HALF_W := 1.50  # м — полуширина главной рамы
+const LOCO_FRAME_BOT := 0.96     # м над УГР — низ главной рамы
+const LOCO_FLOOR := 1.28         # м над УГР — верх рамы, он же пол капотов
+const LOCO_HOOD_HALF_W := 1.31   # м — полуширина капота: по бокам проходы
+const LOCO_HOOD_LONG := 9.20     # м — длинный (дизельный) капот
+const LOCO_HOOD_LONG_TOP := 3.42 # м над УГР
+const LOCO_HOOD_SHORT := 3.50    # м — короткий капот
+const LOCO_HOOD_SHORT_TOP := 3.16# м над УГР
+const LOCO_CAB_LEN := 2.90       # м — кабина между капотами
+const LOCO_CAB_HALF_W := 1.56    # м — полуширина кузова (габарит 3.12)
+const LOCO_CAB_TOP := 4.34       # м над УГР — верх борта кабины
+const LOCO_ROOF_T := 0.22        # м — толщина крыши (верх 4.56)
+const LOCO_WIN_BOT := 2.95       # м над УГР — низ окон
+const LOCO_WIN_TOP := 3.95       # м над УГР — верх окон
+const LOCO_WHEEL_R := 0.525      # м — радиус колеса
+const LOCO_WHEEL_HALF_T := 0.075 # м — полутолщина бандажа
+## Круг катания шире колеи: колея 1.435 меряется по внутренним граням, а колесо
+## лежит НА головке рельса. 0.7175 + полутолщина даёт середину бандажа над
+## головкой, чей центр в spike_world стоит на 0.753 (_rail_axis_offset).
+const LOCO_WHEEL_LAT := 0.78     # м — от оси пути до середины бандажа
+const LOCO_AXLE_PITCH := 1.85    # м — шаг осей в трёхосной тележке
+const LOCO_TRUCK_LAT := 1.02     # м — боковина рамы тележки от оси пути
+const LOCO_COUPLER_Y := 1.06     # м над УГР — ось автосцепки
+const LOCO_HANDRAIL_H := 1.00    # м над полом площадки — верх поручня
+const LOCO_HANDRAIL_STEP := 2.20 # м — шаг стоек поручня
+const LOCO_LOUVRE_LEN := 0.92    # м — секция жалюзи по борту капота
+const LOCO_LOUVRE_GAP := 0.34    # м — простенок между секциями
+const LOCO_TANK_HALF := 2.55     # м — полудлина топливного бака под рамой
+const LOCO_TANGENT_H := 0.5      # м — плечо конечной разности для касательной
 
 ## ПАЛИТРА ПО НАТУРЕ (спайк). Прежние числа были завышены в 2-3 раза против
 ## реальных коэффициентов отражения, и дневной свет схлопывал балласт, рельсы и
@@ -89,8 +136,25 @@ const COL_EARTH := Color(0.33, 0.27, 0.19)    # земляные работы: �
 const COL_PLATFORM := Color(0.38, 0.37, 0.35) # бетон 0.30-0.40
 const COL_PLATFORM_EDGE := Color(0.85, 0.72, 0.15)
 const COL_BUFFER := Color(0.78, 0.16, 0.10) # упорный красный
-const COL_LOCO := Color(0.16, 0.20, 0.30)
-const COL_LOCO_ROOF := Color(0.62, 0.64, 0.68)
+## ОКРАСКА ЧМЭ3, та же дисциплина альбедо, что и у пути. Прежняя коробка была
+## (0.16,0.20,0.30) с крышей 0.62: крыша ярче бетона платформы, то есть ровно та
+## ошибка, из-за которой всё схлопывалось в белый.
+##
+## Заводская схема: зелёный кузов и капоты, тёмно-серые крыши, бордовая юбка
+## главной рамы, ЖЁЛТЫЕ ПОРУЧНИ по служебным площадкам. Поручни здесь не
+## украшение: жёлтая нитка по всей длине на высоте пояса — единственная деталь
+## ЧМЭ3, которая читается силуэтом со ста метров, дальше неё различимы только
+## уступ капота и кабина. Эмаль отражает 0.10-0.20, поэтому зелёный тёмный.
+const COL_LOCO_BODY := Color(0.08, 0.19, 0.16)    # зелёная эмаль кузова и капотов
+const COL_LOCO_ROOF := Color(0.17, 0.18, 0.19)    # крыши кабины и капотов
+const COL_LOCO_SKIRT := Color(0.21, 0.07, 0.07)   # бордовая юбка главной рамы
+const COL_LOCO_TRUCK := Color(0.08, 0.08, 0.09)   # тележки, автосцепки, концевые балки
+const COL_LOCO_WHEEL := Color(0.14, 0.13, 0.13)   # колёсные пары
+const COL_LOCO_GLASS := Color(0.05, 0.08, 0.10)   # остекление кабины
+const COL_LOCO_YELLOW := Color(0.52, 0.40, 0.05)  # поручни, ступени, поле «стрелы»
+const COL_LOCO_RED := Color(0.40, 0.07, 0.05)     # красная полоса «стрелы»
+const COL_LOCO_LOUVRE := Color(0.05, 0.11, 0.10)  # жалюзи капота: темнее борта, но того же тона
+const COL_LOCO_LAMP := Color(0.72, 0.70, 0.60)    # буферные фонари
 
 ## --- СПАЙК: рельеф и профиль. ВСЁ НИЖЕ ВЫДУМАНО ---
 ## Ни одно из этих чисел не приходит из контракта. Контракт даёт z=0 везде.
@@ -215,6 +279,13 @@ func _ground_worked(x: float, z: float) -> float:
 
 ## Путь к эталону; снимок-скрипт может переопределить аргументом --geometry.
 static var geometry_path := ""
+## Уже разобранный контракт от ОБОЛОЧКИ (app.gd). Пусто — спайк читает эталон
+## файлом сам, как при запуске отдельной целью make.
+##
+## Впрыск, а не чтение файла, нужен ради одной вещи: в игре путь приходит с
+## СЕРВЕРА, и разбирать его дважды (оболочкой для схемы ДСП и спайком для мира)
+## значит держать два источника правды об одной станции.
+static var geometry_override := {}
 static var shot_focus := Vector2(140.0, -1.0)
 static var shot_size := 60.0
 static var shot_azimuth := 205.0
@@ -243,19 +314,28 @@ var _cam_dist := 200.0
 var _cam_ortho := true
 
 var _loco_node: Node3D
+var _loco_focus := Vector3.INF   # куда возвращает камеру клавиша F
 
 func _ready() -> void:
 	_camera = get_node("Camera3D")
-	var parsed := Parser.parse(_load_golden())
-	if not parsed.ok:
-		push_error("W3D: %s" % parsed.error)
-		return
-	_geometry = parsed.geometry
+	if geometry_override.is_empty():
+		var parsed := Parser.parse(_load_golden())
+		if not parsed.ok:
+			push_error("W3D: %s" % parsed.error)
+			return
+		_geometry = parsed.geometry
+	else:
+		_geometry = geometry_override
 	for el in _geometry.elements:
 		_elements[el.id] = el
 	_rebuild()
 	_add_environment()
 	configure_camera(shot_focus, shot_size, shot_azimuth, shot_elev)
+	# Управление печатается, а не лежит в комментарии: панораму на клавишах
+	# невозможно найти наугад, а без неё вид выглядит намертво привязанным к
+	# одной точке. Снимку это не мешает — spike_shot.gd пишет свою строку.
+	print("VIEW3D: ЛКМ — орбита · WASD/стрелки (Shift — быстрее) и Shift+ЛКМ — "
+		+ "панорама · колесо и +/- — зум · F — на локомотив · L — убрать его · P — проекция")
 
 func _load_golden() -> String:
 	var path := geometry_path
@@ -306,7 +386,7 @@ func _rebuild() -> void:
 			_add_frog(frog, f)
 	_add_platforms(platform, platform_edge)
 	_add_buffer_stops(buffers)
-	_add_loco_scale()
+	_add_locomotive()
 	_commit(ballast, _mat_ballast())
 	_commit(sleepers, _mat_sleeper())
 	_commit(rails, _mat_rail())
@@ -1012,30 +1092,384 @@ func _element_connected_at_end(el: Dictionary) -> bool:
 			return true
 	return false
 
-## --- эталонная коробка локомотива (16×3 м), отключаемая клавишей L ---
-func _add_loco_scale() -> void:
+## --- локомотив на рельсах, отключаемый клавишей L ---------------------------
+## МАШИНА СТАВИТСЯ ПО ДВУМ ШКВОРНЯМ, А НЕ ПО ОДНОЙ ТОЧКЕ. Это не педантизм: у
+## коробки, положенной по касательной в середине, на кривой разъезжаются концы —
+## в плане они уходят наружу от рельса, потому что дуга и хорда расходятся. У
+## настоящей машины кузов лежит ХОРДОЙ между шкворнями, а каждая тележка стоит по
+## своей касательной. Здесь так и сделано, и это единственное место, где картинка
+## что-то проверяет: если колея, отметка головки или кривая посчитаны неверно,
+## колесо съедет с рельса и это будет видно.
+##
+## Отметка берётся из _rail_top() + _track_y(): по головке рельса, а не по земле.
+## Поэтому машина сама встаёт на уклон 8 промилле вместе с путём — наклон кузова
+## приходит из разности высот шкворней, его никто не задаёт отдельно.
+func _add_locomotive() -> void:
 	var root_node := Node3D.new()
-	root_node.name = "LocoScale"
+	root_node.name = "Locomotive"
 	_loco_node = root_node
-	var body := SurfaceTool.new()
-	var roof := SurfaceTool.new()
-	body.begin(Mesh.PRIMITIVE_TRIANGLES)
-	roof.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var el: Dictionary = _elements.get("E_MAIN", {})
-	if not el.is_empty():
-		var pose := GM.pose_at(el.start, el.primitives, LOCO_U)
-		if pose.ok:
-			var dir := Vector3(cos(pose.heading), 0.0, sin(pose.heading))
-			var lat := Vector3(-dir.z, 0.0, dir.x)
-			var base := Vector3(pose.x, _track_y(pose.x) + _rail_top(), pose.y) + lat * LOCO_LAT
-			_add_obox(body, base + Vector3(0.0, LOCO_H * 0.5, 0.0), dir, lat, Vector3.UP,
-				LOCO_L * 0.5, LOCO_W * 0.5, LOCO_H * 0.5)
-			_add_obox(roof, base + Vector3(0.0, LOCO_H + LOCO_ROOF * 0.5, 0.0), dir, lat, Vector3.UP,
-				LOCO_L * 0.5, LOCO_W * 0.5, LOCO_ROOF * 0.5)
-	_commit(body, _mat(COL_LOCO, 0.50, 0.2), root_node)
-	_commit(roof, _mat(COL_LOCO_ROOF, 0.40, 0.3), root_node)
 	root_node.visible = not hide_loco
 	add_child(root_node)
+
+	var el: Dictionary = _elements.get(LOCO_ELEMENT, {})
+	if el.is_empty():
+		printerr("VIEW3D: локомотив: нет элемента «%s»" % LOCO_ELEMENT)
+		return
+	# Есть готовая модель — ставим её; нет файла или он не той сборки — остаётся
+	# процедурный ЧМЭ3 ниже. Спайк обязан подниматься на голом репозитории.
+	if _add_model_locomotive(root_node, el):
+		return
+	var t0 := _rail_frame(el, LOCO_U - LOCO_PIVOT * 0.5)
+	var t1 := _rail_frame(el, LOCO_U + LOCO_PIVOT * 0.5)
+	if t0.is_empty() or t1.is_empty():
+		printerr("VIEW3D: локомотив: u = %.1f не лежит на «%s»" % [LOCO_U, LOCO_ELEMENT])
+		return
+	# Кузов — хорда между шкворнями: начало посередине, ось из разности точек
+	# (значит, и наклон по уклону тоже из неё).
+	var car := _frame_between(t0.o, t1.o)
+	_loco_focus = car.o
+
+	var skirt := SurfaceTool.new()
+	var body := SurfaceTool.new()
+	var roof := SurfaceTool.new()
+	var glass := SurfaceTool.new()
+	var truck := SurfaceTool.new()
+	var wheel := SurfaceTool.new()
+	var yellow := SurfaceTool.new()
+	var louvre := SurfaceTool.new()
+	var red := SurfaceTool.new()
+	var lamp := SurfaceTool.new()
+	for t in [skirt, body, roof, glass, truck, wheel, yellow, louvre, red, lamp]:
+		t.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# Раскладка вдоль машины: s = 0 посередине, + в сторону короткого капота.
+	var half := LOCO_FRAME_LEN * 0.5
+	var cab0 := half - LOCO_HOOD_SHORT - LOCO_CAB_LEN   # передняя стенка кабины
+	var cab1 := half - LOCO_HOOD_SHORT                  # задняя стенка кабины
+
+	# Главная рама во всю длину: у ЧМЭ3 её юбка бордовая, а не в цвет кузова.
+	_loco_box(skirt, car, -half, half, 0.0, LOCO_FRAME_HALF_W, LOCO_FRAME_BOT, LOCO_FLOOR)
+
+	# Капоты уже кузова — по бокам от них идут служебные проходы. Именно этот
+	# уступ и читается «тепловозом» сверху, у коробки его не было.
+	_loco_box(body, car, -half, cab0, 0.0, LOCO_HOOD_HALF_W, LOCO_FLOOR, LOCO_HOOD_LONG_TOP)
+	_loco_box(body, car, cab1, half, 0.0, LOCO_HOOD_HALF_W, LOCO_FLOOR, LOCO_HOOD_SHORT_TOP)
+	# Кабина — во всю ширину кузова и выше капотов.
+	_loco_box(body, car, cab0, cab1, 0.0, LOCO_CAB_HALF_W, LOCO_FLOOR, LOCO_CAB_TOP)
+	# Крыши: у кабины с напуском на борт, у капотов — тонкой шапкой. Тёмная
+	# крыша над зелёным бортом — второй по силе признак после поручней.
+	_loco_box(roof, car, cab0 - 0.12, cab1 + 0.12, 0.0, LOCO_CAB_HALF_W + 0.04,
+		LOCO_CAB_TOP, LOCO_CAB_TOP + LOCO_ROOF_T)
+	_loco_box(roof, car, -half, cab0, 0.0, LOCO_HOOD_HALF_W + 0.02,
+		LOCO_HOOD_LONG_TOP - 0.05, LOCO_HOOD_LONG_TOP + 0.05)
+	_loco_box(roof, car, cab1, half, 0.0, LOCO_HOOD_HALF_W + 0.02,
+		LOCO_HOOD_SHORT_TOP - 0.05, LOCO_HOOD_SHORT_TOP + 0.05)
+
+	# Остекление — накладки поверх стенок кабины, на 1 см наружу. Тёмный пояс на
+	# высоте глаз машиниста: без него кабина остаётся глухим ящиком.
+	for sign in [1.0, -1.0]:
+		_loco_box(glass, car, cab0 + 0.35, cab1 - 0.35, sign * (LOCO_CAB_HALF_W + 0.005), 0.010,
+			LOCO_WIN_BOT, LOCO_WIN_TOP)
+	_loco_box(glass, car, cab0 - 0.02, cab0 + 0.02, 0.0, 1.20, LOCO_WIN_BOT, LOCO_WIN_TOP)
+	_loco_box(glass, car, cab1 - 0.02, cab1 + 0.02, 0.0, 1.20, LOCO_WIN_BOT, LOCO_WIN_TOP)
+
+	# Жалюзи дизельного помещения — секциями по борту длинного капота. Ими
+	# длинный зелёный борт перестаёт быть одной плоскостью.
+	#
+	# ПАНЕЛИ УЗКИЕ И НЕ ЧЁРНЫЕ. Первый заход дал четыре секции по 1.5 м почти в
+	# чёрном: на снимке борт прочитался ПАССАЖИРСКИМИ ОКНАМИ, то есть ровно не
+	# тем типом машины. Жалюзи — это крашеный металл в мелкую щель, он темнее
+	# борта, но не чернее теней; отличает его от окна не тон, а частота члененья.
+	var lv := -half + LOCO_LOUVRE_GAP
+	while lv + LOCO_LOUVRE_LEN <= cab0 - LOCO_LOUVRE_GAP:
+		for sign in [1.0, -1.0]:
+			_loco_box(louvre, car, lv, lv + LOCO_LOUVRE_LEN,
+				sign * (LOCO_HOOD_HALF_W + 0.005), 0.012,
+				LOCO_FLOOR + 0.70, LOCO_HOOD_LONG_TOP - 0.42)
+		lv += LOCO_LOUVRE_LEN + LOCO_LOUVRE_GAP
+
+	# Топливный бак под рамой между тележками. Не украшение: без него в просвете
+	# между тележками видно сквозь машину, и она читается пустой коробкой на
+	# колёсах. У ЧМЭ3 бак занимает ровно этот промежуток.
+	_loco_box(truck, car, -LOCO_TANK_HALF, LOCO_TANK_HALF, 0.0, 0.86,
+		LOCO_FRAME_BOT - 0.44, LOCO_FRAME_BOT + 0.02)
+
+	# ПОРУЧНИ ПО ПЛОЩАДКАМ — жёлтая нитка вдоль всей машины на высоте пояса и
+	# стойки под ней. Деталь тонкая (60 мм), но именно она держит силуэт: без
+	# неё капотный тепловоз с любой дистанции читается просто ящиком.
+	var hr_lat := LOCO_FRAME_HALF_W - 0.06
+	var hr_y := LOCO_FLOOR + LOCO_HANDRAIL_H
+	for sign in [1.0, -1.0]:
+		_loco_box(yellow, car, -half + 0.15, half - 0.15, sign * hr_lat, 0.030,
+			hr_y - 0.030, hr_y + 0.030)
+		var st := -half + 0.15
+		while st <= half - 0.15:
+			_loco_box(yellow, car, st - 0.035, st + 0.035, sign * hr_lat, 0.035,
+				LOCO_FLOOR, hr_y)
+			st += LOCO_HANDRAIL_STEP
+		# Ступени под концевыми площадками, по две на угол.
+		#
+		# ТЕМНЫЕ И СО ЩЕКОЙ. Жёлтыми и без боковины они читались полками,
+		# висящими в воздухе рядом с машиной: подниматься по ним не с чего и
+		# держатся они ни на чём. У натуры ступень утоплена в раму, а сбоку её
+		# закрывает щека — она-то и объясняет глазу, откуда ступень растёт.
+		for send in [-1.0, 1.0]:
+			_loco_box(truck, car, send * (half - 0.86), send * (half - 0.22),
+				sign * 1.16, 0.05, 0.46, LOCO_FRAME_BOT)
+			for k in [0, 1]:
+				_loco_box(truck, car, send * (half - 0.82), send * (half - 0.26),
+					sign * 0.96, 0.22, 0.50 + 0.26 * k, 0.56 + 0.26 * k)
+
+	# «СТРЕЛА» НА ЛОБОВИНЕ длинного капота: жёлтое поле с красной полосой. У
+	# натуры это шеврон, здесь — двухцветный пояс: на дистанциях, с которых
+	# смотрит диспетчер, форма шеврона неразличима, а два цвета различимы.
+	_loco_box(yellow, car, -half - 0.030, -half + 0.010, 0.0, 1.18, 2.05, 2.80)
+	_loco_box(red, car, -half - 0.045, -half + 0.010, 0.0, 1.18, 2.30, 2.55)
+
+	# Крышевое оборудование длинного капота: вентилятор холодильника и выхлоп.
+	_loco_pipe(roof, car, -half + 1.2, 0.62, LOCO_HOOD_LONG_TOP, LOCO_HOOD_LONG_TOP + 0.12)
+	_loco_pipe(roof, car, -half + 2.8, 0.19, LOCO_HOOD_LONG_TOP, LOCO_HOOD_LONG_TOP + 0.45)
+
+	# Автосцепки: от концевой балки рамы до оси сцепления (половина LOCO_COUPLED_LEN),
+	# и буферный фонарь над каждой.
+	var cpl := LOCO_COUPLED_LEN * 0.5
+	for sign in [1.0, -1.0]:
+		var a: float = sign * half
+		var b: float = sign * cpl
+		_loco_box(truck, car, minf(a, b), maxf(a, b), 0.0, 0.16,
+			LOCO_COUPLER_Y - 0.16, LOCO_COUPLER_Y + 0.16)
+	_loco_box(lamp, car, -half - 0.06, -half + 0.02, 0.0, 0.17, 2.98, 3.28)
+	_loco_box(lamp, car, half - 0.02, half + 0.06, 0.0, 0.17, 2.35, 2.69)
+
+	# Тележки — каждая по СВОЕЙ касательной, а не по оси кузова.
+	for t in [t0, t1]:
+		_loco_truck(truck, wheel, t)
+
+	_commit(skirt, _mat(COL_LOCO_SKIRT, 0.75, 0.10), root_node)
+	_commit(body, _mat(COL_LOCO_BODY, 0.55, 0.05), root_node)
+	_commit(roof, _mat(COL_LOCO_ROOF, 0.70, 0.10), root_node)
+	_commit(glass, _mat(COL_LOCO_GLASS, 0.12, 0.00), root_node)
+	_commit(truck, _mat(COL_LOCO_TRUCK, 0.85, 0.10), root_node)
+	_commit(wheel, _mat(COL_LOCO_WHEEL, 0.55, 0.50), root_node)
+	_commit(yellow, _mat(COL_LOCO_YELLOW, 0.60, 0.00), root_node)
+	_commit(louvre, _mat(COL_LOCO_LOUVRE, 0.80, 0.20), root_node)
+	_commit(red, _mat(COL_LOCO_RED, 0.60, 0.00), root_node)
+	_commit(lamp, _mat(COL_LOCO_LAMP, 0.35, 0.00), root_node)
+
+## --- готовая модель из .glb -------------------------------------------------
+## ВЛ80 (Sketchfab, автор fabirbige, CC-BY-4.0 — см. client/assets/ATTRIBUTION.md).
+##
+## ФАЙЛ ПРИХОДИТСЯ СОБИРАТЬ, А НЕ ПРОСТО ПОСТАВИТЬ. В сцене .glb лежат ЧЕТЫРЕ
+## кузова: две секции настоящей машины (со своими тележками и токоприёмниками) и
+## ещё две, отставленные на 8.15 м вбок и ни на чём не стоящие — остаток
+## авторской компоновки. Поставленные как есть, они читаются вторым локомотивом,
+## висящим в воздухе рядом с путём. Поэтому берутся ИМЕНОВАННЫЕ детали, а не «всё,
+## что нашлось»: лишнее остаётся в выброшенной оболочке.
+##
+## ЧТО ИЗМЕРЕНО ЗОНДОМ (tools/glb_probe.gd), а не предположено:
+##   * модель в МЕТРАХ, длинная ось Z, ширина X, верх Y;
+##   * Y = 0 — РОВНО ГОЛОВКА РЕЛЬСА. Шкворень тележки на 0.63, колесо радиусом
+##     0.625, низ уходит на -0.07 — это гребень и песочные трубы ниже круга
+##     катания. Значит, никакой подгонки по высоте не нужно: наш _rail_point
+##     возвращает точку той же отметки;
+##   * секция 16.93 м, шкворни через 7.64 м, центры секций Z 0.04 и -16.35;
+##   * токоприёмники СЛОЖЕНЫ (верх меша 4.77 при крыше 4.3) — машина стоит
+##     обесточенной, и это кстати: контактной сети у нас нет.
+##
+## Разбирать .glb руками по JSON НЕЛЬЗЯ: узлы задают положение матрицей matrix, а
+## не translation/rotation/scale, и наивный разбор видит сцену, где все детали
+## лежат в одной точке. Спрашивать надо движок — он тот же импортёр, что в игре.
+const LOCO_MODEL := "res://assets/vl80.glb"
+## Секция = кузов, две тележки, токоприёмник. Центр секции берётся по её
+## шкворням, а не по габариту кузова: машина стоит на тележках.
+const LOCO_MODEL_SECTIONS := [
+	{"parts": ["vl80tk1_2", "pant80_5"], "bogies": ["bogey_3", "bogey_001_4"]},
+	{"parts": ["vl80tk1_001_9", "pant80_001_8"], "bogies": ["bogey_002_7", "bogey_003_6"]},
+]
+
+func _add_model_locomotive(root_node: Node3D, el: Dictionary) -> bool:
+	if not ResourceLoader.exists(LOCO_MODEL):
+		return false
+	var packed := ResourceLoader.load(LOCO_MODEL) as PackedScene
+	if packed == null:
+		printerr("VIEW3D: %s не грузится как сцена" % LOCO_MODEL)
+		return false
+	var shell := packed.instantiate()
+
+	# Модельные координаты секций: центр по шкворням, полубаза — по ним же.
+	var zc := []
+	var pivot_half := 0.0
+	for sec in LOCO_MODEL_SECTIONS:
+		var b0 := _model_part(shell, sec.bogies[0])
+		var b1 := _model_part(shell, sec.bogies[1])
+		if b0.is_empty() or b1.is_empty():
+			printerr("VIEW3D: в %s нет тележек %s — модель не той сборки" % [LOCO_MODEL, sec.bogies])
+			shell.queue_free()
+			return false
+		zc.append((b0.xf.origin.z + b1.xf.origin.z) * 0.5)
+		pivot_half = absf(b0.xf.origin.z - b1.xf.origin.z) * 0.5
+
+	var focus := Vector3.ZERO
+	var placed := 0
+	for k in LOCO_MODEL_SECTIONS.size():
+		var sec: Dictionary = LOCO_MODEL_SECTIONS[k]
+		# Секции сохраняют взаимные расстояния: сдвиг по u равен сдвигу по Z.
+		var u: float = LOCO_U + (zc[k] - zc[0])
+		var p0 := _rail_point(el, u - pivot_half)
+		var p1 := _rail_point(el, u + pivot_half)
+		if p0.is_empty() or p1.is_empty():
+			printerr("VIEW3D: секция %d (u = %.1f) не лежит на «%s»" % [k, u, LOCO_ELEMENT])
+			continue
+		var fr := _frame_between(p0.p, p1.p)
+		if fr.is_empty():
+			continue
+		# Оси модели -> оси пути. Первый столбец берётся МИНУС латералью: с плюсом
+		# базис получается левым, и вся машина выходит зеркальной — снаружи это
+		# видно только по тому, что надписи и оборудование не с той стороны.
+		var lat: Vector3 = fr.lat
+		var up: Vector3 = fr.up
+		var dir: Vector3 = fr.dir
+		var origin: Vector3 = fr.o
+		var basis := Basis(-lat, up, dir)
+		var to_track := Transform3D(basis, origin - basis * Vector3(0.0, 0.0, zc[k]))
+		focus += origin
+		placed += 1
+		for part_name in (sec.parts + sec.bogies):
+			var part := _model_part(shell, part_name)
+			if part.is_empty():
+				continue
+			var node: Node3D = part.node
+			# Снять owner ДО переноса и по всему поддереву. Импортированные узлы
+			# принадлежат корню сцены .glb, а он тут же выбрасывается: без этого
+			# движок ругается на несогласованного владельца, а мы оставляем
+			# ссылки на освобождённый узел.
+			_clear_owner(node)
+			node.get_parent().remove_child(node)
+			root_node.add_child(node)
+			node.transform = to_track * part.xf
+	shell.queue_free()
+	if placed == 0:
+		return false
+	_loco_focus = focus / float(placed)
+	print("VIEW3D: локомотив из %s — секций %d" % [LOCO_MODEL, placed])
+	return true
+
+func _clear_owner(n: Node) -> void:
+	n.owner = null
+	for c in n.get_children():
+		_clear_owner(c)
+
+## Узел модели и его трансформация ОТ КОРНЯ СЦЕНЫ МОДЕЛИ. Накапливать её надо
+## самому: Sketchfab заворачивает содержимое в несколько служебных узлов, и у
+## них бывает свой поворот — из-за него «в метрах и Y вверх» перестаёт быть
+## правдой на полпути.
+func _model_part(shell: Node, name: String) -> Dictionary:
+	var node := shell.find_child(name, true, false)
+	if node == null or not (node is Node3D):
+		return {}
+	var xf := Transform3D.IDENTITY
+	var cur: Node = node
+	while cur != null and cur != shell:
+		if cur is Node3D:
+			xf = (cur as Node3D).transform * xf
+		cur = cur.get_parent()
+	return {"node": node as Node3D, "xf": xf}
+
+## Тележка: две боковины, надрессорная балка и три колёсные пары с осями.
+func _loco_truck(truck: SurfaceTool, wheel: SurfaceTool, t: Dictionary) -> void:
+	var span := LOCO_AXLE_PITCH + 0.45      # боковина выходит за крайние оси
+	for sign in [1.0, -1.0]:
+		_loco_box(truck, t, -span, span, sign * LOCO_TRUCK_LAT, 0.06, 0.42, 0.95)
+	_loco_box(truck, t, -0.50, 0.50, 0.0, LOCO_TRUCK_LAT, 0.72, LOCO_FRAME_BOT + 0.02)
+	for k in [-1.0, 0.0, 1.0]:
+		var c: Vector3 = t.o + t.dir * (k * LOCO_AXLE_PITCH) + t.up * LOCO_WHEEL_R
+		# Ось — сплошной вал между колёсами: снизу и сбоку тележка иначе сквозная.
+		_loco_cylinder(wheel, c, t.lat, 0.085, LOCO_WHEEL_LAT)
+		for sign in [1.0, -1.0]:
+			_loco_cylinder(wheel, c + t.lat * (sign * LOCO_WHEEL_LAT), t.lat,
+				LOCO_WHEEL_R, LOCO_WHEEL_HALF_T)
+
+## Коробка в осях машины: s вдоль (от начала фрейма), lat_c поперёк, y от УГР.
+func _loco_box(tool: SurfaceTool, fr: Dictionary, s0: float, s1: float,
+		lat_c: float, half_w: float, y0: float, y1: float) -> void:
+	var c: Vector3 = fr.o + fr.dir * ((s0 + s1) * 0.5) + fr.lat * lat_c \
+		+ fr.up * ((y0 + y1) * 0.5)
+	_add_obox(tool, c, fr.dir, fr.lat, fr.up,
+		absf(s1 - s0) * 0.5, half_w, absf(y1 - y0) * 0.5)
+
+## Вертикальный цилиндр на крыше: труба, вентилятор.
+func _loco_pipe(tool: SurfaceTool, fr: Dictionary, s: float, radius: float,
+		y0: float, y1: float) -> void:
+	var c: Vector3 = fr.o + fr.dir * s + fr.up * ((y0 + y1) * 0.5)
+	_loco_cylinder(tool, c, fr.up, radius, absf(y1 - y0) * 0.5)
+
+## Цилиндр вокруг оси axis. Грани плоские: на рабочих дистанциях колесо в 1 м —
+## это десяток пикселей, и сглаживать там нечего.
+const LOCO_CYL_SEG := 16
+
+func _loco_cylinder(tool: SurfaceTool, c: Vector3, axis: Vector3, radius: float, half: float) -> void:
+	var n := axis.normalized()
+	# Любой вектор, не параллельный оси, даёт первую радиаль.
+	var seed_v := Vector3.UP if absf(n.dot(Vector3.UP)) < 0.9 else Vector3.RIGHT
+	var e0 := n.cross(seed_v).normalized()
+	var e1 := n.cross(e0)
+	var a := c - n * half
+	var b := c + n * half
+	for i in LOCO_CYL_SEG:
+		var t0 := TAU * float(i) / float(LOCO_CYL_SEG)
+		var t1 := TAU * float(i + 1) / float(LOCO_CYL_SEG)
+		var r0 := e0 * cos(t0) + e1 * sin(t0)
+		var r1 := e0 * cos(t1) + e1 * sin(t1)
+		_quad_facing(tool, a + r0 * radius, a + r1 * radius, b + r1 * radius, b + r0 * radius,
+			(r0 + r1) * 0.5)
+		_tri_facing(tool, a, a + r0 * radius, a + r1 * radius, -n)
+		_tri_facing(tool, b, b + r1 * radius, b + r0 * radius, n)
+
+## Треугольник с заданным наружным направлением — как _quad_facing, но на три
+## вершины: торцы цилиндра квадами не закрыть.
+func _tri_facing(tool: SurfaceTool, p0: Vector3, p1: Vector3, p2: Vector3, outward: Vector3) -> void:
+	var n := (p1 - p0).cross(p2 - p0)
+	if n.dot(outward) < 0.0:
+		n = -n
+		var swap := p1
+		p1 = p2
+		p2 = swap
+	tool.set_normal(n.normalized())
+	tool.add_vertex(p0)
+	tool.add_vertex(p2)
+	tool.add_vertex(p1)
+
+## Точка на уровне головки рельса в координате u элемента.
+func _rail_point(el: Dictionary, u: float) -> Dictionary:
+	var pose := GM.pose_at(el.start, el.primitives, u)
+	if not pose.ok:
+		return {}
+	return {"p": Vector3(pose.x, _track_y(pose.x) + _rail_top(), pose.y)}
+
+## Правый ортонормированный репер пути в точке u: начало на головке рельса, dir
+## по касательной (с уклоном — она берётся конечной разностью по ТРЁХМЕРНЫМ
+## точкам, а не из pose.heading, который знает только план).
+func _rail_frame(el: Dictionary, u: float) -> Dictionary:
+	var o := _rail_point(el, u)
+	var a := _rail_point(el, u - LOCO_TANGENT_H)
+	var b := _rail_point(el, u + LOCO_TANGENT_H)
+	if o.is_empty() or a.is_empty() or b.is_empty():
+		return {}
+	return _frame_between(a.p, b.p, o.p)
+
+## Репер по двум точкам: ось вдоль них, начало посередине (или заданное).
+func _frame_between(a: Vector3, b: Vector3, origin = null) -> Dictionary:
+	var dir := (b - a)
+	if dir.length() < 1e-9:
+		return {}
+	dir = dir.normalized()
+	var lat := dir.cross(Vector3.UP).normalized()
+	return {
+		"o": (a + b) * 0.5 if origin == null else origin,
+		"dir": dir,
+		"lat": lat,
+		"up": lat.cross(dir).normalized(),
+	}
 
 ## --- цепочки ---
 func _chain3d(el: Dictionary) -> PackedVector3Array:
@@ -1249,11 +1683,22 @@ func _fit_size() -> float:
 	var aspect := size.x / size.y
 	return maxf(maxy - miny, (maxx - minx) / aspect) * 1.12
 
-## --- интерактив: орбита (ЛКМ), панорама (СКМ/ПКМ), зум (колесо),
-## --- P — орто/перспектива, L — эталонная коробка ---
+## --- интерактив: орбита (ЛКМ), панорама (WASD/стрелки, Shift+ЛКМ, СКМ/ПКМ),
+## --- зум (колесо), P — орто/перспектива, L — локомотив, F — камера на него ---
+##
+## ПАНОРАМА ОБЯЗАНА БЫТЬ НА КЛАВИШАХ. Здесь она была только на средней и правой
+## кнопке мыши, а трекпад мака ни ту, ни другую перетаскиванием не изображает:
+## двупальцевый клик даёт ПКМ, но не даёт ПКМ+движение. Наружу это выходило так,
+## что камера «привязана к одной точке» — орбита работает, а увести взгляд с
+## этой точки нечем. Тот же разбор, что у зума в spike_world: колесо мыши на
+## маке тоже не приходит, и там лечится клавишами +/-.
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion and (event.button_mask & (MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_MIDDLE | MOUSE_BUTTON_MASK_RIGHT)) != 0:
-		if event.button_mask & MOUSE_BUTTON_MASK_LEFT and not (event.button_mask & (MOUSE_BUTTON_MASK_MIDDLE | MOUSE_BUTTON_MASK_RIGHT)):
+		var only_left: bool = (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0 \
+			and (event.button_mask & (MOUSE_BUTTON_MASK_MIDDLE | MOUSE_BUTTON_MASK_RIGHT)) == 0
+		# Shift+ЛКМ — панорама: единственный жест перетаскивания, доступный на
+		# трекпаде целиком.
+		if only_left and not Input.is_key_pressed(KEY_SHIFT):
 			_orbit(event.relative)
 		else:
 			_pan(event.relative)
@@ -1273,7 +1718,53 @@ func _unhandled_input(event: InputEvent) -> void:
 			_toggle_projection()
 		elif event.keycode == KEY_L:
 			_toggle_loco()
+		elif event.keycode == KEY_F:
+			_focus_loco()
 		get_viewport().set_input_as_handled()
+
+## Панорама клавишами. Шаг пропорционален тому, что видно в кадре, а не задан в
+## метрах: с постоянным шагом вблизи камера улетает за кадр, а на общем плане
+## ползёт. Наследник (spike_world) обязан звать super(delta) — у него свой
+## _process под пересадку травы.
+const PAN_RATE := 0.55           # доля видимого поперечника в секунду
+const PAN_FAST := 4.0            # множитель с Shift
+
+var _pan_keys := Vector2.ZERO
+
+func _process(_delta: float) -> void:
+	_pan_keys = Vector2.ZERO
+	if _camera == null:
+		return
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		_pan_keys.y += 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		_pan_keys.y -= 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		_pan_keys.x += 1.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		_pan_keys.x -= 1.0
+	if _pan_keys == Vector2.ZERO:
+		return
+	var span: float = _cam_size if _cam_ortho else _cam_dist
+	var step := PAN_RATE * span * _delta
+	if Input.is_key_pressed(KEY_SHIFT):
+		step *= PAN_FAST
+	var m := _pan_keys.normalized() * step
+	var basis := _camera.global_transform.basis
+	var right := Vector3(basis.x.x, 0.0, basis.x.z).normalized()
+	var fwd := Vector3(-basis.z.x, 0.0, -basis.z.z).normalized()
+	_cam_focus += right * m.x + fwd * m.y
+	_apply_camera()
+
+## Вернуть взгляд на локомотив. Панорама по клавишам уводит камеру куда угодно,
+## и на карте 2 на 1.5 км потеряться — дело одной секунды; без обратного билета
+## свобода перемещения превращается в ловушку.
+func _focus_loco() -> void:
+	if _loco_focus == Vector3.INF:
+		return
+	_cam_focus = Vector3(_loco_focus.x, 0.0, _loco_focus.z)
+	_apply_camera()
+	print("VIEW3D: камера наведена на локомотив")
 
 func _orbit(rel: Vector2) -> void:
 	_cam_az -= rel.x * 0.30
@@ -1312,4 +1803,4 @@ func _toggle_loco() -> void:
 	if _loco_node == null:
 		return
 	_loco_node.visible = not _loco_node.visible
-	print("VIEW3D: эталонная коробка %s" % ("показана" if _loco_node.visible else "скрыта"))
+	print("VIEW3D: локомотив %s" % ("показан" if _loco_node.visible else "скрыт"))
