@@ -10,27 +10,57 @@
 ## тем, что прислано.
 ##
 ## Система координат: плановые (x, y) и высота z — так, как их называет сервер.
-## Возвращаются Vector3(x_plan, y_plan, z_высота); перевод в оси Godot делает
-## тот, кто строит меш, одной функцией и в одном месте.
+## Наружу отдаются позы в этих же координатах; перевод в оси Godot делает тот,
+## кто строит меш, одной функцией и в одном месте.
 class_name TrackGeom
 extends RefCounted
 
 
 ## Точка оси с курсом. Курс нужен ленте: она откладывается по нормали к оси.
+##
+## Поле u — расстояние по оси от начала элемента. Оно не украшение: рецепты
+## сервера (construction_runs, spans платформы, адреса особенностей) адресуют
+## место ИМЕННО через u, и точка без u не сопоставима с ними.
 class AxisPoint:
 	var x: float
 	var y: float
 	var z: float
 	var heading: float
+	var u: float
 
-	func _init(px: float, py: float, pz: float, ph: float) -> void:
+	func _init(px: float, py: float, pz: float, ph: float, pu: float = 0.0) -> void:
 		x = px
 		y = py
 		z = pz
 		heading = ph
+		u = pu
 
-	func pos() -> Vector3:
-		return Vector3(x, y, z)
+	## Левая нормаль в плане — поворот курса на +90°.
+	##
+	## «Левая» здесь не вкус: спека размещения (render-contract §4) задаёт
+	## ориентацию шпалы через ЛЕВУЮ нормаль аналитической позы, и сторона
+	## платформы (`side`) считается от неё же. Знак задан в одном месте, чтобы
+	## расхождение с сервером искали здесь, а не в трёх рисующих функциях.
+	func left() -> Vector2:
+		return Vector2(-sin(heading), cos(heading))
+
+	## Единичный вектор вдоль оси по возрастанию u.
+	func forward() -> Vector2:
+		return Vector2(cos(heading), sin(heading))
+
+
+## Примитив рецепта, приведённый к одной форме: длина и кривизна.
+##
+## Прямая — это дуга нулевой кривизны, и разводить их двумя ветками в каждой
+## функции значило бы трижды повторить один и тот же match. Кривизна со знаком:
+## положительная — влево, как и угол дуги у сервера.
+class Prim:
+	var length: float
+	var curvature: float
+
+	func _init(plen: float, pcurv: float) -> void:
+		length = plen
+		curvature = pcurv
 
 
 ## Результат разбора одного элемента.
@@ -38,6 +68,15 @@ class Element:
 	var id: String = ""
 	var kind: String = ""
 	var points: Array[AxisPoint] = []
+	## Примитивы рецепта. Хранятся, а не выбрасываются после тесселяции: поза в
+	## произвольной точке u обязана считаться АНАЛИТИЧЕСКИ, а не по ломаной.
+	## Спека размещения (render-contract §4) требует этого дословно: иначе
+	## клиент с шагом 0.5 м и клиент, считающий формулой, разойдутся при
+	## одинаковых phase и pitch, то есть поставят шпалы в разные места.
+	var prims: Array[Prim] = []
+	var start_x: float = 0.0
+	var start_y: float = 0.0
+	var start_heading: float = 0.0
 	## Длина, посчитанная по примитивам. Совпадение с полем length сервера
 	## проверяется отдельно и попадает в отчёт: расхождение значило бы, что
 	## клиент понимает рецепт иначе, чем его писали.
@@ -50,6 +89,63 @@ class Element:
 	## нитью в один пиксель — видимым признаком того, что размера не прислали.
 	var ballast_half_width_m: float = -1.0
 	var type_id: String = ""
+	## role{turnout, branch, hand, frog} — если сервер его прислал. Пустой
+	## словарь значит «элемент не часть устройства», а не «устройство обычное».
+	var role: Dictionary = {}
+
+	## pose_at — поза на оси в точке u. Аналитически, без обращения к points.
+	##
+	## За концом элемента поза не выдумывается: u прижимается к [0, length_m].
+	## Экстраполяция прямой за концом дуги была бы новой геометрией, которой
+	## сервер не присылал.
+	func pose_at(pu: float) -> AxisPoint:
+		var uu := clampf(pu, 0.0, length_m)
+		var x := start_x
+		var y := start_y
+		var h := start_heading
+		var rest := uu
+		for p in prims:
+			if rest <= 0.0:
+				break
+			var s := minf(rest, p.length)
+			if absf(p.curvature) < 1e-12:
+				x += s * cos(h)
+				y += s * sin(h)
+			else:
+				var nh := h + p.curvature * s
+				x += (sin(nh) - sin(h)) / p.curvature
+				y -= (cos(nh) - cos(h)) / p.curvature
+				h = nh
+			rest -= s
+		return AxisPoint.new(x, y, start_z + slope * uu, h, uu)
+
+	## sample_range — точки оси на отрезке [u0, u1] с заданной подробностью.
+	##
+	## Подробность (максимальная хорда и максимальный поворот на шаг) — свойство
+	## РИСУНКА. Границы отрезка входят в результат ровно теми позами, что даёт
+	## pose_at: кусок рецепта не должен «начинаться приблизительно».
+	func sample_range(u0: float, u1: float, max_seg_m: float, max_ang_rad: float) -> Array[AxisPoint]:
+		var out: Array[AxisPoint] = []
+		if u1 <= u0:
+			return out
+		out.append(pose_at(u0))
+		var acc := 0.0
+		for p in prims:
+			var a := acc
+			var b := acc + p.length
+			acc = b
+			var lo := maxf(a, u0)
+			var hi := minf(b, u1)
+			if hi <= lo:
+				continue
+			var seg := hi - lo
+			var steps := int(ceil(seg / max_seg_m))
+			if absf(p.curvature) > 0.0:
+				steps = maxi(steps, int(ceil(absf(p.curvature * seg) / max_ang_rad)))
+			steps = maxi(steps, 1)
+			for i in range(1, steps + 1):
+				out.append(pose_at(lo + seg * float(i) / float(steps)))
+		return out
 
 
 ## tessellate_element — рецепт в точки.
@@ -63,17 +159,14 @@ static func tessellate_element(el: Dictionary, max_seg_m: float, max_ang_rad: fl
 
 	var start: Dictionary = el.get("start", {}) as Dictionary
 	var plan: Dictionary = start.get("plan", {}) as Dictionary
-	var x := float(plan.get("x", 0.0))
-	var y := float(plan.get("y", 0.0))
-	var heading := float(plan.get("heading", 0.0))
+	out.start_x = float(plan.get("x", 0.0))
+	out.start_y = float(plan.get("y", 0.0))
+	out.start_heading = float(plan.get("heading", 0.0))
 	out.start_z = float(start.get("z", 0.0))
 	out.slope = float(start.get("slope", 0.0))
+	out.role = (el.get("role", {}) as Dictionary) if el.has("role") else {}
 
-	var u := 0.0
-	out.points.append(AxisPoint.new(x, y, out.start_z, heading))
-
-	var prims: Array = el.get("primitives", []) as Array
-	for p_raw in prims:
+	for p_raw in (el.get("primitives", []) as Array):
 		var p: Dictionary = p_raw as Dictionary
 		var kind := String(p.get("kind", ""))
 		var seg_len := 0.0
@@ -100,34 +193,14 @@ static func tessellate_element(el: Dictionary, max_seg_m: float, max_ang_rad: fl
 		if seg_len <= 0.0:
 			continue
 
-		var steps := int(ceil(seg_len / max_seg_m))
-		if absf(curvature) > 0.0:
-			steps = maxi(steps, int(ceil(absf(curvature * seg_len) / max_ang_rad)))
-		steps = maxi(steps, 1)
+		out.prims.append(Prim.new(seg_len, curvature))
+		out.length_m += seg_len
 
-		var x0 := x
-		var y0 := y
-		var h0 := heading
-		for i in range(1, steps + 1):
-			var s := seg_len * float(i) / float(steps)
-			var nh := h0 + curvature * s
-			var nx: float
-			var ny: float
-			if absf(curvature) < 1e-12:
-				nx = x0 + s * cos(h0)
-				ny = y0 + s * sin(h0)
-				nh = h0
-			else:
-				nx = x0 + (sin(nh) - sin(h0)) / curvature
-				ny = y0 - (cos(nh) - cos(h0)) / curvature
-			x = nx
-			y = ny
-			heading = nh
-			out.points.append(AxisPoint.new(x, y, out.start_z + out.slope * (u + s), heading))
-
-		u += seg_len
-
-	out.length_m = u
+	out.points = out.sample_range(0.0, out.length_m, max_seg_m, max_ang_rad)
+	if out.points.is_empty():
+		# Элемент нулевой длины: одна поза лучше пустоты — она хотя бы называет
+		# место, где сервер объявил элемент.
+		out.points.append(out.pose_at(0.0))
 	return out
 
 
