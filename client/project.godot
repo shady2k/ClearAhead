@@ -1,0 +1,29 @@
+; ClearAhead — клиент, веха В1.
+;
+; ЗАКОН ЭТОГО КЛИЕНТА: чего сервер не прислал, того на экране нет.
+; Ни одной зашитой константы, описывающей мир. Числа правила подробности,
+; размеры сетки, высоты, примитивы пути — всё приезжает с сервера.
+; Клиент считает из них геометрию (меш, тесселяция, нормали) — это его работа,
+; граница записана в биде ClearAhead-sjq.
+
+config_version=5
+
+[application]
+
+config/name="ClearAhead"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.4", "Mobile")
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+
+[rendering]
+
+renderer/rendering_method="mobile"
+renderer/rendering_method.mobile="mobile"
+
+[importer_defaults]
+
+; client/assets/vl80.glb в этой версии не используется: локомотива нет.
