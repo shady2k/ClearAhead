@@ -3,7 +3,6 @@ package track
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"strings"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
@@ -23,54 +22,6 @@ func manifestOf(t *testing.T, m *mapfmt.Map) Manifest {
 		t.Fatalf("манифест: %v", err)
 	}
 	return man
-}
-
-// twoEdgesJSON — карта, записанная текстом. Нужна ровно одному тесту ниже, и
-// только потому, что он про РАЗБОР: остальные берут карту у фабрики.
-const twoEdgesJSON = `{
-  "format_version": 4, "map_id": "T", "map_revision": 1,
-  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 10, "heading": 0 } },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1" } ] },
-      { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N2.P1", "to": "N3.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
-    "E2": { "horizontal": [ { "kind": "straight", "length": 50.0 } ] }
-  } }
-}`
-
-// TestManifestStableUnderReformatting — хеш берётся из СОДЕРЖАНИЯ карты, а не
-// из байт её записи.
-//
-// Утверждение имеет смысл только там, где карта приходит текстом: проверяются
-// две разные записи одного документа. Фабрикой оно невыразимо и вместе с
-// разбором JSON лишается предмета.
-func TestManifestStableUnderReformatting(t *testing.T) {
-	decode := func(doc string) *mapfmt.Map {
-		t.Helper()
-		m, err := mapfmt.Decode(strings.NewReader(doc))
-		if err != nil {
-			t.Fatalf("разбор: %v", err)
-		}
-		if err := mapfmt.Validate(m); err != nil {
-			t.Fatalf("валидация: %v", err)
-		}
-		return m
-	}
-	reformatted := strings.ReplaceAll(twoEdgesJSON, "\n", " ")
-	reformatted = strings.ReplaceAll(reformatted, "  ", " ")
-	if manifestOf(t, decode(twoEdgesJSON)).TrackHash != manifestOf(t, decode(reformatted)).TrackHash {
-		t.Fatal("хеш зависит от форматирования исходного JSON")
-	}
 }
 
 // TestManifestChangesOnGeometry — миллиметр в геометрии меняет хеш.

@@ -8,7 +8,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"strconv"
@@ -108,26 +107,6 @@ func (r *ManifestRequest) Parse(in Input) error {
 	return nil
 }
 
-// ListMapsRequest — список карт в каталоге. У запроса нет ни одного поля
-// представления: любой сегмент пути или тело — невалидное представление, и
-// Parse его отвергает (как у ManifestRequest).
-type ListMapsRequest struct{}
-
-func (*ListMapsRequest) sealed() {}
-
-func (r *ListMapsRequest) native() ListMapsRequest { return *r }
-
-// Parse разбирает внешний вход. Единственное валидное представление — пустое.
-func (r *ListMapsRequest) Parse(in Input) error {
-	if len(in.Path) != 0 {
-		return fmt.Errorf("protocol: список карт не адресуется сегментами пути")
-	}
-	if len(in.Body) != 0 {
-		return fmt.Errorf("protocol: у запроса списка нет тела")
-	}
-	return nil
-}
-
 // NewMapRequest — создание карты-затравки. Как и список, запрос не несёт ни
 // полей, ни тела: имя карте даст «сохранить как», а не момент создания.
 type NewMapRequest struct{}
@@ -147,108 +126,8 @@ func (r *NewMapRequest) Parse(in Input) error {
 	return nil
 }
 
-// LoadMapRequest — загрузка карты из каталога по имени файла. Имя — один
-// сегмент пути: представление с разделителями не существует по построению
-// HTTP-разложения, а «..» в имени отвергает безопасность путей mapstore.
-type LoadMapRequest struct {
-	name string
-}
-
-func (*LoadMapRequest) sealed() {}
-
-func (r *LoadMapRequest) native() LoadMapRequest { return *r }
-
-// Parse разбирает внешний вход: имя из сегмента пути, тело запрещено.
-func (r *LoadMapRequest) Parse(in Input) error {
-	name := in.Path["name"]
-	if name == "" {
-		return fmt.Errorf("protocol: пустое имя карты")
-	}
-	if len(name) > 256 {
-		return fmt.Errorf("protocol: имя карты длиннее 256 символов")
-	}
-	if len(in.Body) != 0 {
-		return fmt.Errorf("protocol: у запроса загрузки нет тела")
-	}
-	r.name = name
-	return nil
-}
-
-// Name возвращает проверенное имя файла карты.
-func (r LoadMapRequest) Name() string { return r.name }
-
-// SaveMapRequest — сохранение карты под текущим именем. Тело — документ
-// карты: разбор строгий (mapfmt.Decode), как у файла. Валидацию и компиляцию
-// выполняет mapstore как часть операции сохранения — карта, не прошедшая
-// полный путь входа, на диск не попадает.
-type SaveMapRequest struct {
-	m mapfmt.Map
-}
-
-func (*SaveMapRequest) sealed() {}
-
-func (r *SaveMapRequest) native() SaveMapRequest { return *r }
-
-// Parse разбирает внешний вход: тело — документ карты, путь запрещён.
-func (r *SaveMapRequest) Parse(in Input) error {
-	if len(in.Path) != 0 {
-		return fmt.Errorf("protocol: сохранение не адресуется сегментами пути")
-	}
-	m, err := decodeMapBody(in.Body)
-	if err != nil {
-		return err
-	}
-	r.m = *m
-	return nil
-}
-
-// Map возвращает проверенный по форме документ карты.
-func (r SaveMapRequest) Map() mapfmt.Map { return r.m }
-
-// SaveAsMapRequest — сохранение карты под новым именем. Имя — сегмент пути,
-// тело — документ карты.
-type SaveAsMapRequest struct {
-	name string
-	m    mapfmt.Map
-}
-
-func (*SaveAsMapRequest) sealed() {}
-
-func (r *SaveAsMapRequest) native() SaveAsMapRequest { return *r }
-
-// Parse разбирает внешний вход: имя из сегмента пути, документ из тела.
-func (r *SaveAsMapRequest) Parse(in Input) error {
-	name := in.Path["name"]
-	if name == "" {
-		return fmt.Errorf("protocol: пустое имя карты")
-	}
-	if len(name) > 256 {
-		return fmt.Errorf("protocol: имя карты длиннее 256 символов")
-	}
-	m, err := decodeMapBody(in.Body)
-	if err != nil {
-		return err
-	}
-	r.name, r.m = name, *m
-	return nil
-}
-
-// Name возвращает проверенное имя файла карты.
-func (r SaveAsMapRequest) Name() string { return r.name }
-
-// Map возвращает проверенный по форме документ карты.
-func (r SaveAsMapRequest) Map() mapfmt.Map { return r.m }
-
-// decodeMapBody разбирает документ карты из тела запроса. Разбор — тот же,
-// что у файла на диске (mapfmt.Decode): строгий, с лимитами, дубликатами и
-// неизвестными полями. Тело пустое или не-документ — отказ барьера.
-func decodeMapBody(body json.RawMessage) (*mapfmt.Map, error) {
-	if len(body) == 0 {
-		return nil, fmt.Errorf("protocol: пустое тело карты")
-	}
-	m, err := mapfmt.Decode(bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("protocol: %w", err)
-	}
-	return m, nil
-}
+// Запросов на список, загрузку и сохранение карты больше нет: карта не
+// хранится файлом, а присланную документом сервер не принимает — строгий
+// разбор карты удалён вместе с парсером. Барьер валидации внешних вызовов от
+// этого не ослаб: он по-прежнему стоит перед каждым запросом, просто ни один
+// из оставшихся не несёт документа карты.

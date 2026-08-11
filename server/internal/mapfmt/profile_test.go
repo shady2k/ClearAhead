@@ -1,58 +1,47 @@
-package mapfmt
+package mapfmt_test
 
 import (
-	"os"
 	"strings"
 	"testing"
+
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-func TestDefaultProfileHasVersion(t *testing.T) {
-	p := DefaultProfile()
-	if p.Version != ProfileVersion {
-		t.Fatalf("версия профиля %d, ожидали %d", p.Version, ProfileVersion)
+func TestУПрофиляЕстьВерсия(t *testing.T) {
+	p := mapfmt.DefaultProfile()
+	if p.Version != mapfmt.ProfileVersion {
+		t.Fatalf("версия профиля %d, ожидали %d", p.Version, mapfmt.ProfileVersion)
 	}
 	if p.MinRadiusM <= 0 || p.MaxGrade <= 0 || p.MinTrackSpacingM <= 0 {
 		t.Fatalf("нормы профиля должны быть положительными: %+v", p)
 	}
 }
 
-// loadTestMap разбирает карту из testdata, фаталя на любой ошибке: карта
-// фикстуры обязана быть читаемой, иначе тест проверяет не то.
-func loadTestMap(t *testing.T, path string) *Map {
-	t.Helper()
-	f, err := os.Open(path)
-	if err != nil {
-		t.Fatalf("карта %s: %v", path, err)
+// TestНормыОтвергаютТесныйРадиус — модуль норм обязан назвать себя в тексте
+// отказа: карту отвергают по невозможности постройки, а не по форме, и автор
+// карты должен видеть разницу.
+//
+// Рецепт решётки снят: дуга короче прямой, и покрытие ребра run'ом сломалось бы
+// заодно — отказ пришёл бы от модуля отрисовки, который зовётся раньше.
+func TestНормыОтвергаютТесныйРадиус(t *testing.T) {
+	m := seedmap.Line(seedmap.WithoutConstruction(),
+		геометрияПерегона([]mapfmt.HPrim{дуга(100, 0.2)}, nil))
+	текст := отказ(t, m)
+	if !strings.Contains(текст, "нормы:") {
+		t.Fatalf("отказ обязан называть модуль «нормы», получено: %s", текст)
 	}
-	defer f.Close()
-	m, err := Decode(f)
-	if err != nil {
-		t.Fatalf("разбор %s: %v", path, err)
-	}
-	return m
-}
-
-func TestProfileRejectsTightRadius(t *testing.T) {
-	m := loadTestMap(t, "testdata/red/radius_below_min.json")
-	err := Validate(m)
-	if err == nil {
-		t.Fatal("карта с радиусом ниже минимума обязана быть отвергнута")
-	}
-	if !strings.Contains(err.Error(), "нормы:") {
-		t.Fatalf("отказ обязан называть модуль «нормы», получено: %v", err)
-	}
-	if !strings.Contains(err.Error(), "радиус") {
-		t.Fatalf("отказ обязан называть причину, получено: %v", err)
+	if !strings.Contains(текст, "радиус") {
+		t.Fatalf("отказ обязан называть причину, получено: %s", текст)
 	}
 }
 
-func TestProfileRejectsSteepGrade(t *testing.T) {
-	m := loadTestMap(t, "testdata/red/grade_above_max.json")
-	err := Validate(m)
-	if err == nil {
-		t.Fatal("карта с уклоном выше предела обязана быть отвергнута")
-	}
-	if !strings.Contains(err.Error(), "нормы:") || !strings.Contains(err.Error(), "уклон") {
-		t.Fatalf("отказ обязан называть модуль и причину, получено: %v", err)
+func TestНормыОтвергаютКрутойУклон(t *testing.T) {
+	m := seedmap.Line(геометрияПерегона(
+		[]mapfmt.HPrim{прямая(seedmap.LineLengthM)},
+		[]mapfmt.VPrim{{Kind: "grade", Length: seedmap.LineLengthM, SlopePermille: 50}}))
+	текст := отказ(t, m)
+	if !strings.Contains(текст, "нормы:") || !strings.Contains(текст, "уклон") {
+		t.Fatalf("отказ обязан называть модуль и причину, получено: %s", текст)
 	}
 }

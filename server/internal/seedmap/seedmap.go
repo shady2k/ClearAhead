@@ -343,3 +343,43 @@ func Corridor(opts ...Option) *mapfmt.Map {
 	}
 	return apply(m, opts)
 }
+
+// Идентификаторы заготовки новой карты.
+const (
+	BlankEdgeID = "E_MAIN"
+	BlankWest   = "N_WEST"
+	BlankEast   = "N_EAST"
+)
+
+// Blank — заготовка НОВОЙ карты, с которой начинает автор.
+//
+// Отличается от Line не длиной, а смыслом концов: западный объявлен границей
+// карты — оттуда придёт перегон, — а восточный тупиковым упором. Пустой карты
+// не бывает: валидатор отвергает карту без якорей, а якорь ссылается на
+// элемент, поэтому «пусто» выражается заготовкой, а не отсутствием элементов.
+func Blank(opts ...Option) *mapfmt.Map {
+	const lengthM = 500.0
+	m := &mapfmt.Map{
+		FormatVersion: mapfmt.FormatVersion,
+		MapID:         "NEW",
+		MapRevision:   1,
+		Anchors:       map[string]mapfmt.Anchor{BlankWest + ".P1": {}},
+		Topology: mapfmt.Topology{
+			Nodes: []mapfmt.Node{
+				{ID: BlankWest, Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: BlankEast, Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
+			},
+			Edges: []mapfmt.Edge{{ID: BlankEdgeID, From: BlankWest + ".P1", To: BlankEast + ".P1"}},
+		},
+		Geometry: mapfmt.Geometry{
+			Turnouts: map[string]mapfmt.TurnoutGeometry{},
+			Edges: map[string]mapfmt.Alignments{
+				BlankEdgeID: {Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: lengthM}}},
+			},
+		},
+		Construction: construction([]mapfmt.ConstructionRun{
+			run("RUN_"+BlankEdgeID, span(BlankEdgeID, 0, lengthM)),
+		}),
+	}
+	return apply(m, opts)
+}

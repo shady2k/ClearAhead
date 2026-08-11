@@ -18,14 +18,11 @@ func geometryURL(man track.Manifest) string {
 	return "/maps/" + man.MapID + "/revisions/" + strconv.Itoa(man.Revision) + "/geometry"
 }
 
-// newTestHandler поднимает сервер над свежим каталогом карт с картой-затравкой
+// newTestHandler поднимает сервер над картой-затравкой
 // в памяти: ручки геометрии и манифеста обслуживают ровно её.
 func newTestHandler(t *testing.T) (http.Handler, track.Manifest) {
 	t.Helper()
-	s, err := mapstore.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("каталог карт: %v", err)
-	}
+	s := mapstore.Open()
 	st, err := s.New()
 	if err != nil {
 		t.Fatalf("новая карта: %v", err)

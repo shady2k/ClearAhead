@@ -5,13 +5,12 @@ import (
 	"encoding/json"
 	"math"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/httpapi"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
@@ -295,15 +294,7 @@ func TestWireContractDecodesStrictly(t *testing.T) {
 // провода и манифеста.
 func compileFixture(t *testing.T) (*mapfmt.Map, *track.CompiledTrack, *track.RenderGeometry) {
 	t.Helper()
-	f, err := os.Open(filepath.Join("..", "mapfmt", "testdata", "fixture_station.json"))
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-	m, err := mapfmt.Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
+	m := seedmap.Station()
 	if err := mapfmt.Validate(m); err != nil {
 		t.Fatalf("валидация: %v", err)
 	}
@@ -344,20 +335,9 @@ func TestManifestFromFixture(t *testing.T) {
 	}
 	// Фикстура попадает в каталог карт и в память сервера через реальный путь
 	// загрузки — манифест ручки обязан совпасть с посчитанным напрямую.
-	dir := t.TempDir()
-	b, err := json.Marshal(m)
-	if err != nil {
-		t.Fatalf("сериализация фикстуры: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(dir, "fixture_station.json"), b, 0o644); err != nil {
-		t.Fatalf("запись фикстуры: %v", err)
-	}
-	s, err := mapstore.Open(dir)
-	if err != nil {
-		t.Fatalf("каталог карт: %v", err)
-	}
-	if _, err := s.Load("fixture_station.json"); err != nil {
-		t.Fatalf("загрузка фикстуры: %v", err)
+	s := mapstore.Open()
+	if _, err := s.Set(m); err != nil {
+		t.Fatalf("карта не прошла вход: %v", err)
 	}
 	h := httpapi.NewHandler(s)
 	w := httptest.NewRecorder()
@@ -374,7 +354,11 @@ func TestManifestFromFixture(t *testing.T) {
 	if got != man {
 		t.Fatalf("манифест %+v, ожидался %+v", got, man)
 	}
-	if got.MapID != "FIX_ST" || got.Revision != 2 {
-		t.Fatalf("манифест карты %q ревизии %d, ожидалась FIX_ST ревизии 2", got.MapID, got.Revision)
+	// Сверяем с самой картой, а не с литералом: манифест обязан описывать ту
+	// карту, из которой получен, и переименование фикстуры не должно требовать
+	// правки теста.
+	if got.MapID != m.MapID || got.Revision != m.MapRevision {
+		t.Fatalf("манифест карты %q ревизии %d, ожидалась %q ревизии %d",
+			got.MapID, got.Revision, m.MapID, m.MapRevision)
 	}
 }

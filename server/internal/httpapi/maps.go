@@ -2,13 +2,10 @@ package httpapi
 
 import (
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
-	"strings"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
-	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
 )
 
@@ -27,50 +24,18 @@ import (
 //
 // Безопасность путей — требование, а не пожелание: имя проверяет mapstore
 // (см. checkPath), сюда оно приходит одним сегментом пути и больше ничем.
+// serveMapOp обслуживает то, что осталось от операций над картой: создание
+// затравки. Список, загрузка, сохранение и «сохранить как» удалены вместе с
+// файловым хранилищем.
 func (a *api) serveMapOp(w http.ResponseWriter, r *http.Request) bool {
-	switch {
-	case r.URL.Path == "/maps":
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			methodNotAllowed(w, "GET, HEAD")
-			return true
-		}
-		a.dispatch(w, r, "maps.list", protocol.Input{})
-		return true
-
-	case r.URL.Path == "/maps/new":
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, "POST")
-			return true
-		}
-		a.dispatch(w, r, "maps.new", protocol.Input{})
-		return true
-
-	case r.URL.Path == "/maps/save":
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, "POST")
-			return true
-		}
-		a.dispatch(w, r, "maps.save", protocol.Input{Body: readBody(r)})
-		return true
-	}
-
-	op, name, ok := mapNamePath(r.URL.Path)
-	if !ok {
+	if r.URL.Path != "/maps/new" {
 		return false
 	}
 	if r.Method != http.MethodPost {
 		methodNotAllowed(w, "POST")
 		return true
 	}
-	switch op {
-	case "load":
-		a.dispatch(w, r, "maps.load", protocol.Input{Path: map[string]string{"name": name}})
-	case "save-as":
-		a.dispatch(w, r, "maps.save-as", protocol.Input{
-			Path: map[string]string{"name": name},
-			Body: readBody(r),
-		})
-	}
+	a.dispatch(w, r, "maps.new", protocol.Input{})
 	return true
 }
 
@@ -81,29 +46,12 @@ func (a *api) serveMapOp(w http.ResponseWriter, r *http.Request) bool {
 func (a *api) dispatch(w http.ResponseWriter, r *http.Request, method string, in protocol.Input) {
 	got, err := a.m.Dispatch(r.Context(), method, in)
 	if err != nil {
-		status := http.StatusBadRequest
-		if errors.Is(err, mapstore.ErrNoSuch) {
-			status = http.StatusNotFound
-		}
-		writeJSONError(w, status, err)
+		// 404 «карта не найдена» исчезло вместе с поиском по имени: карту
+		// больше нельзя спросить по имени, значит и не найтись она не может.
+		writeJSONError(w, http.StatusBadRequest, err)
 		return
 	}
 	writeJSON(w, got)
-}
-
-// mapNamePath раскладывает /maps/load/{name} и /maps/save-as/{name} на
-// операцию и имя. Значения не проверяются: это работа диспетчера
-// (protocol.Parse). Ручка лишь собирает protocol.Input.
-func mapNamePath(p string) (op, name string, ok bool) {
-	parts := strings.Split(strings.Trim(p, "/"), "/")
-	if len(parts) != 3 || parts[0] != "maps" {
-		return "", "", false
-	}
-	switch parts[1] {
-	case "load", "save-as":
-		return parts[1], parts[2], true
-	}
-	return "", "", false
 }
 
 // readBody механически вычитывает тело запроса. Значения не проверяются и не

@@ -15,30 +15,21 @@ import (
 )
 
 func main() {
-	mapPath := flag.String("map", "", "путь к файлу карты; не указан — сервер стартует без карты")
-	mapsDir := flag.String("maps", "server/maps", "каталог карт")
 	dbPath := flag.String("db", "world.db", "файл базы мира")
 	addr := flag.String("addr", ":8080", "адрес прослушивания")
 	flag.Parse()
 
-	store, err := mapstore.Open(*mapsDir)
-	if err != nil {
-		log.Fatalf("каталог карт %s: %v", *mapsDir, err)
-	}
+	// Затравка одна и та же для карты в памяти и для мира в базе: иначе
+	// геометрия описывала бы одну станцию, а рельеф — другую.
+	seed := seedmap.Station(seedmap.WithTerrain())
 
-	// Старт без карты — норма: сервер поднимается пустым и ждёт «новую» или
-	// «загрузить». Флаг -map необязателен: указали — грузим, не указали —
-	// пустой старт.
-	if *mapPath != "" {
-		st, err := store.LoadPath(*mapPath)
-		if err != nil {
-			log.Fatalf("карта %s: %v", *mapPath, err)
-		}
-		log.Printf("карта %s ревизия %d: %d элементов, геометрия %s",
-			st.Manifest.MapID, st.Manifest.Revision, len(st.Track.Elements), st.Manifest.RenderGeometryHash[:12])
-	} else {
-		log.Printf("пустой старт: карта не загружена, жду «новую» или «загрузить»")
+	store := mapstore.Open()
+	st, err := store.Set(seed)
+	if err != nil {
+		log.Fatalf("затравочная карта не проходит вход: %v", err)
 	}
+	log.Printf("карта %s ревизия %d: %d элементов, геометрия %s",
+		st.Manifest.MapID, st.Manifest.Revision, len(st.Track.Elements), st.Manifest.RenderGeometryHash[:12])
 
 	world, err := worldstore.Open(*dbPath)
 	if err != nil {
@@ -49,7 +40,7 @@ func main() {
 	// Бутстрап идемпотентен: заполняет только пустую базу. Затравка строится
 	// кодом, а не читается файлом, — карта, собранная кодом, не может разойтись
 	// со схемой формата, потому что перестаёт компилироваться.
-	rep, сделан, err := worldgen.Bootstrap(world, seedmap.Station(seedmap.WithTerrain()), 1)
+	rep, сделан, err := worldgen.Bootstrap(world, seed, 1)
 	if err != nil {
 		log.Fatalf("бутстрап мира: %v", err)
 	}

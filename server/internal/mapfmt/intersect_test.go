@@ -1,240 +1,136 @@
-package mapfmt
+package mapfmt_test
 
 import (
-	"os"
-	"path/filepath"
+	"math"
 	"strings"
 	"testing"
+
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 )
 
-// twoEdgeMap — две отдельные компоненты по одному ребру, каждая со своим
-// якорем. E1 всегда: якорь N1.P1 (0,0), курс 0, геометрия e1. E2: якорь N3.P1
-// (50,-50), курс π/2, геометрия e2, если не заменён вызовом.
-func twoEdgeMap(e1, e2 string) string {
-	return `{
-  "format_version": 4, "map_id": "X", "map_revision": 1,
-  "anchors": {
-    "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 },
-    "N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }
-  },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
-      { "id": "N3", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N4", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N3.P1", "to": "N4.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [` + e1 + `] },
-    "E2": { "horizontal": [` + e2 + `] }
-  } }
-}`
+// Пересечение осей в плане: две оси имеют общую точку, не объяснённую
+// топологией. Карты строятся двеКомпоненты — два ребра без общего порта, каждое
+// со своим якорем, — и вся разница между случаями в геометрии и позе второго.
+
+// TestОсиПересекаютсяПосередине — заведомое пересечение в середине: E1 идёт на
+// восток по y=0, E2 — на север из (50,-50). Общая точка (50, 0) не объяснена
+// топологией: у пары нет общего порта.
+func TestОсиПересекаютсяПосередине(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{},
+		[]mapfmt.HPrim{прямая(100)},
+		mapfmt.Anchor{X: 50, Y: -50, Heading: math.Pi / 2},
+		[]mapfmt.HPrim{прямая(100)},
+	)
+	отвергает(t, m, "E1 x E2 в (50.0, 0.0)")
 }
 
-func validateRejects(t *testing.T, doc, want string) {
-	t.Helper()
-	m, err := Decode(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
+// TestОсьУпираетсяВЧужуюСередину — конец пути, упирающийся в середину другого
+// без топологической связи: E2 длиной 50 от (50,-50) на север кончается в
+// (50, 0), на середине E1.
+func TestОсьУпираетсяВЧужуюСередину(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{},
+		[]mapfmt.HPrim{прямая(100)},
+		mapfmt.Anchor{X: 50, Y: -50, Heading: math.Pi / 2},
+		[]mapfmt.HPrim{прямая(50)},
+	)
+	отвергает(t, m, "E1 x E2")
+}
+
+// TestОсиКасаютсяБезПересечения — касание вне разрешённого порта. E1 идёт на
+// север по x=0. E2 — дуга радиуса 100 с центром (0,100) от 120° до 60° (по
+// часовой); её вершина (0,200) касается середины E1.
+func TestОсиКасаютсяБезПересечения(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{Heading: math.Pi / 2},
+		[]mapfmt.HPrim{прямая(300)},
+		// Начало дуги: центр (0,100) плюс радиус под 120°, курс — касательная.
+		mapfmt.Anchor{X: -50, Y: 100 + 100*math.Sqrt(3)/2, Heading: math.Pi / 6},
+		[]mapfmt.HPrim{дуга(100, -math.Pi/3)},
+	)
+	отвергает(t, m, "E1 x E2 в (0.0, 200.0)")
+}
+
+// TestОсиНалагаются — коллинеарное наложение: E2 лежит на линии E1 с 30-го по
+// 100-й метр. Общая ось записана дважды.
+func TestОсиНалагаются(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{},
+		[]mapfmt.HPrim{прямая(100)},
+		mapfmt.Anchor{X: 30},
+		[]mapfmt.HPrim{прямая(100)},
+	)
+	отвергает(t, m, "налагаются")
+}
+
+// TestОсьСамопересекается — цепочка одного элемента возвращается по себе:
+// прямая на восток до (100, 0), дуга на π вниз до (100, -100) и дуга на π по
+// той же окружности обратно. Конец цепочки приходит ровно в (100, 0) — в стык
+// прямой и первой дуги, который построением не объяснён. Второе ребро отставлено
+// далеко: предмет теста — сама цепочка.
+func TestОсьСамопересекается(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{},
+		[]mapfmt.HPrim{прямая(100), дуга(50, -math.Pi), дуга(50, -math.Pi)},
+		mapfmt.Anchor{X: 500},
+		[]mapfmt.HPrim{прямая(100)},
+	)
+	// Радиус 50 м ниже нормы профиля, но отказ обязан прийти раньше и по
+	// геометрии: модуль норм зовётся последним.
+	текст := отказ(t, m)
+	if !strings.Contains(текст, seedmap.LineEdgeID+" самопересекается в (100.0, 0.0)") {
+		t.Fatalf("ожидался отказ по самопересечению E1 в (100,0), получено: %s", текст)
 	}
-	err = Validate(m)
-	if err == nil {
-		t.Fatal("ожидался отказ, получен успех")
-	}
-	if want != "" && !strings.Contains(err.Error(), want) {
-		t.Fatalf("ожидалась ошибка про %q, получено: %v", want, err)
-	}
 }
 
-func validateAccepts(t *testing.T, doc string) {
-	t.Helper()
-	m, err := Decode(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
-	if err := Validate(m); err != nil {
-		t.Fatalf("карта должна быть валидна: %v", err)
-	}
-}
-
-// TestValidateAxisRejectsCrossing — синтетическая карта с заведомым
-// пересечением осей в середине: E1 идёт на восток по y=0, E2 — на север из
-// (50,-50). Пересечение в (50, 0) не объяснено топологией: у пары нет общего
-// порта. Это тот самый тест, который обязан быть красным до правки и зелёным
-// после.
-func TestValidateAxisRejectsCrossing(t *testing.T) {
-	validateRejects(t, twoEdgeMap(
-		`{ "kind": "straight", "length": 100.0 }`,
-		`{ "kind": "straight", "length": 100.0 }`),
-		"E1 x E2 в (50.0, 0.0)")
-}
-
-// TestValidateAxisRejectsTEnd — конец пути, упирающийся в середину другого без
-// топологической связи: E2 длиной 50 от (50,-50) на север кончается в (50, 0),
-// на середине E1.
-func TestValidateAxisRejectsTEnd(t *testing.T) {
-	validateRejects(t, twoEdgeMap(
-		`{ "kind": "straight", "length": 100.0 }`,
-		`{ "kind": "straight", "length": 50.0 }`),
-		"E1 x E2")
-}
-
-// TestValidateAxisRejectsTangent — касание без пересечения вне разрешённого
-// порта. E1 идёт на север по x=0. E2 — дуга радиуса 100 с центром (0,100) от
-// угла 120° до 60° (по часовой); её вершина (0,200) касается середины E1.
-func TestValidateAxisRejectsTangent(t *testing.T) {
-	doc := `{
-  "format_version": 4, "map_id": "T", "map_revision": 1,
-  "anchors": {
-    "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 1.5707963267948966 },
-    "N3.P1": { "x": -50, "y": 186.60254037844388, "z": 0, "heading": 0.5235987755982988 }
-  },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] },
-      { "id": "N3", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N4", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N3.P1", "to": "N4.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [ { "kind": "straight", "length": 300.0 } ] },
-    "E2": { "horizontal": [ { "kind": "arc", "radius": 100.0, "angle": -1.0471975511965976 } ] }
-  } }
-}`
-	validateRejects(t, doc, "E1 x E2 в (0.0, 200.0)")
-}
-
-// TestValidateAxisRejectsOverlap — коллинеарное наложение: E2 лежит на линии
-// E1 с 30-го по 100-й метр. Общая ось записана дважды.
-func TestValidateAxisRejectsOverlap(t *testing.T) {
-	doc := strings.Replace(twoEdgeMap(
-		`{ "kind": "straight", "length": 100.0 }`,
-		`{ "kind": "straight", "length": 100.0 }`),
-		`"N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }`,
-		`"N3.P1": { "x": 30, "y": 0, "z": 0, "heading": 0 }`, 1)
-	validateRejects(t, doc, "налагаются")
-}
-
-// TestValidateAxisRejectsSelfCrossing — цепочка одного элемента возвращается
-// по себе: прямая на восток, дуга на π вниз, дуга на π обратно. Вторая дуга
-// накладывается на первую (общая окружность), а её конец касается начала
-// прямой в (100, 0).
-func TestValidateAxisRejectsSelfCrossing(t *testing.T) {
-	doc := strings.Replace(twoEdgeMap(
-		`{ "kind": "straight", "length": 100.0 },
-		  { "kind": "arc", "radius": 50.0, "angle": -3.141592653589793 },
-		  { "kind": "arc", "radius": 50.0, "angle": -3.141592653589793 }`,
-		`{ "kind": "straight", "length": 100.0 }`),
-		`"N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }`,
-		`"N3.P1": { "x": 500, "y": 0, "z": 0, "heading": 0 }`, 1)
-	validateRejects(t, doc, "E1")
-}
-
-// TestValidateAxisRejectsTwoCrossings — прямая пересекает полную окружность
-// дважды: в (50, 0) и (250, 0). Обе точки обязаны попасть в отчёт.
-func TestValidateAxisRejectsTwoCrossings(t *testing.T) {
-	doc := strings.Replace(twoEdgeMap(
-		`{ "kind": "straight", "length": 300.0 }`,
-		`{ "kind": "arc", "radius": 100.0, "angle": 6.283185307179586 }`),
-		`"N3.P1": { "x": 50, "y": -50, "z": 0, "heading": 1.5707963267948966 }`,
-		`"N3.P1": { "x": 150, "y": -100, "z": 0, "heading": 0 }`, 1)
-	err := validateErr(t, doc)
-	for _, want := range []string{"в (50.0, 0.0)", "в (250.0, 0.0)"} {
-		if !strings.Contains(err, want) {
-			t.Fatalf("ожидалась точка %q, получено: %v", want, err)
+// TestДвеТочкиПересеченияПопадаютВОтчёт — прямая пересекает полную окружность
+// дважды: в (50, 0) и (250, 0). Обе точки обязаны попасть в отчёт: назвать одну
+// значит послать автора карты чинить полдефекта.
+func TestДвеТочкиПересеченияПопадаютВОтчёт(t *testing.T) {
+	m := двеКомпоненты(
+		mapfmt.Anchor{},
+		[]mapfmt.HPrim{прямая(300)},
+		mapfmt.Anchor{X: 150, Y: -100},
+		[]mapfmt.HPrim{дуга(100, 2*math.Pi)},
+	)
+	текст := отказ(t, m)
+	for _, точка := range []string{"в (50.0, 0.0)", "в (250.0, 0.0)"} {
+		if !strings.Contains(текст, точка) {
+			t.Fatalf("ожидалась точка %q, получено: %s", точка, текст)
 		}
 	}
 }
 
-func validateErr(t *testing.T, doc string) string {
-	t.Helper()
-	m, err := Decode(strings.NewReader(doc))
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
-	err = Validate(m)
-	if err == nil {
-		t.Fatal("ожидался отказ, получен успех")
-	}
-	return err.Error()
-}
-
-// TestValidateAxisJointAllowed — два коллинеарных ребра, стыкующихся концами в
+// TestСтыкВОбщемПортуРазрешён — два коллинеарных ребра, стыкующихся концами в
 // общем порту: общая точка объяснена топологией и разрешена.
-func TestValidateAxisJointAllowed(t *testing.T) {
-	doc := `{
-  "format_version": 4, "map_id": "J", "map_revision": 1,
-  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1" } ] },
-      { "id": "N3", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N2.P1", "to": "N3.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
-    "E2": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] }
-  } }
-}`
-	validateAccepts(t, doc)
+func TestСтыкВОбщемПортуРазрешён(t *testing.T) {
+	m := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
+		конец := m.Topology.Edges[0].To
+		m.Topology.Nodes = append(m.Topology.Nodes,
+			mapfmt.Node{ID: "NC", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}})
+		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: второеРебро, From: конец, To: "NC.P1"})
+		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
+		m.Geometry.Edges[второеРебро] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
+	}))
+	принимает(t, m)
 }
 
-// TestValidateAxisParallelTracksAllowed — два ребра между одними портами,
-// оси которых не совпадают: параллельный путь законен, это не наложение.
-func TestValidateAxisParallelTracksAllowed(t *testing.T) {
-	doc := `{
-  "format_version": 4, "map_id": "P", "map_revision": 1,
-  "anchors": { "N1.P1": { "element": "E1", "x": 0, "y": 0, "z": 0, "heading": 0 } },
-  "topology": {
-    "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] }
-    ],
-    "turnouts": [], "trackside": [],
-    "edges": [
-      { "id": "E1", "from": "N1.P1", "to": "N2.P1" },
-      { "id": "E2", "from": "N1.P1", "to": "N2.P1" }
-    ]
-  },
-  "geometry": { "turnouts": {}, "edges": {
-    "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] },
-    "E2": { "horizontal": [ { "kind": "arc", "radius": 200.0, "angle": 0.5 } ] }
-  } }
-}`
-	validateAccepts(t, doc)
-}
-
-// TestValidateFixtureStation — карта-фикстура обязана проходить валидацию,
-// включая проверку пересечений: она эталон для тестов, которые её грузят.
-func TestValidateFixtureStation(t *testing.T) {
-	f, err := os.Open(filepath.Join("testdata", "fixture_station.json"))
-	if err != nil {
-		t.Fatalf("карта: %v", err)
-	}
-	defer f.Close()
-	m, err := Decode(f)
-	if err != nil {
-		t.Fatalf("разбор: %v", err)
-	}
-	if err := Validate(m); err != nil {
-		t.Fatalf("фикстура должна проходить валидацию: %v", err)
-	}
+// TestПараллельныеПутиРазрешены — два ребра между одними портами, оси которых
+// не совпадают: параллельный путь законен, это не наложение.
+func TestПараллельныеПутиРазрешены(t *testing.T) {
+	m := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
+		первое := m.Topology.Edges[0]
+		m.Topology.Edges = append(m.Topology.Edges,
+			mapfmt.Edge{ID: второеРебро, From: первое.From, To: первое.To})
+		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{прямая(100)}}
+		m.Geometry.Edges[второеРебро] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{дуга(200, 0.5)}}
+		// В порту сходятся два элемента: якорь обязан назвать тот, ВНУТРЬ
+		// которого смотрит курс, иначе «направление порта» не определено.
+		m.Anchors = map[string]mapfmt.Anchor{
+			первое.From: {Element: seedmap.LineEdgeID},
+		}
+	}))
+	принимает(t, m)
 }

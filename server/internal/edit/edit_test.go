@@ -4,14 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -647,16 +646,9 @@ func TestRunsReproducedOnUnchangedTopology(t *testing.T) {
 	assertJSONEqual(t, testBaseMap().Construction.Runs, res.Map.Construction.Runs,
 		"run'ы после правки, не меняющей топологию")
 
-	// Реальная карта из testdata: fixture_station.json.
-	raw, err := os.ReadFile(filepath.Join("..", "mapfmt", "testdata", "fixture_station.json"))
-	if err != nil {
-		t.Fatalf("чтение fixture_station.json: %v", err)
-	}
-	var fx mapfmt.Map
-	if err := json.Unmarshal(raw, &fx); err != nil {
-		t.Fatalf("разбор fixture_station.json: %v", err)
-	}
-	assertValid(t, &fx, "fixture_station")
+	// Карта с настоящей горловиной — из фабрики, а не из файла.
+	fx := *seedmap.Station()
+	assertValid(t, &fx, "станция фабрики")
 	st2 := newStore(t, &fx)
 	before := fx.Construction.Runs
 	res2, err := st2.Preview(Intent{Op: OpCap, Cap: CapIntent{Port: "N_STOP_MAIN.P1"}})

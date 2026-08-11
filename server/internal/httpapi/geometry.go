@@ -71,11 +71,6 @@ func NewHandler(store *mapstore.Store) http.Handler {
 			return st.ManifestBody, nil
 		})
 
-	rpc.Register[protocol.ListMapsRequest](a.m, "maps.list",
-		func(_ context.Context, _ protocol.ListMapsRequest) (any, error) {
-			return a.store.List()
-		})
-
 	rpc.Register[protocol.NewMapRequest](a.m, "maps.new",
 		func(_ context.Context, _ protocol.NewMapRequest) (any, error) {
 			st, err := a.store.New()
@@ -85,26 +80,9 @@ func NewHandler(store *mapstore.Store) http.Handler {
 			return mapResult{Map: st.Map, Manifest: st.Manifest}, nil
 		})
 
-	rpc.Register[protocol.LoadMapRequest](a.m, "maps.load",
-		func(_ context.Context, req protocol.LoadMapRequest) (any, error) {
-			st, err := a.store.Load(req.Name())
-			if err != nil {
-				return nil, err
-			}
-			return mapResult{Map: st.Map, Manifest: st.Manifest}, nil
-		})
-
-	rpc.Register[protocol.SaveMapRequest](a.m, "maps.save",
-		func(_ context.Context, req protocol.SaveMapRequest) (any, error) {
-			mm := req.Map()
-			return a.store.Save(&mm)
-		})
-
-	rpc.Register[protocol.SaveAsMapRequest](a.m, "maps.save-as",
-		func(_ context.Context, req protocol.SaveAsMapRequest) (any, error) {
-			mm := req.Map()
-			return a.store.SaveAs(req.Name(), &mm)
-		})
+	// Ручек загрузки, сохранения и списка карт больше нет: карта не хранится
+	// файлом, а присланную документом сервер не принимает — приём разбором
+	// исчез вместе с парсером. Карта по-прежнему УЕЗЖАЕТ клиенту в ответе.
 
 	return a
 }
