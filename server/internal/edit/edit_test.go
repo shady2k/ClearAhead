@@ -35,9 +35,9 @@ func testBaseMap() *mapfmt.Map {
 				{ID: "N_END", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
 			Edges: []mapfmt.Edge{
-				{ID: "E0", From: "N_B.P1", To: "N1.P1"},
-				{ID: "E1", From: "N1.P1", To: "N2.P1"},
-				{ID: "E2", From: "N2.P1", To: "N_END.P1"},
+				{ID: "E0", Kind: mapfmt.KindRail, From: "N_B.P1", To: "N1.P1"},
+				{ID: "E1", Kind: mapfmt.KindRail, From: "N1.P1", To: "N2.P1"},
+				{ID: "E2", Kind: mapfmt.KindRail, From: "N2.P1", To: "N_END.P1"},
 			},
 		},
 		Geometry: mapfmt.Geometry{
@@ -336,7 +336,7 @@ func TestSequenceOfEditsValidates(t *testing.T) {
 		t.Fatalf("ревизия: %d, ожидается %d", er.Revision, rev)
 	}
 	if st.Revision() != rev {
-		t.Fatalf("стек: ревизия %d, ожидается %d", st.Revision(), rev)
+		t.Fatalf("текущая ревизия %d, ожидается %d", st.Revision(), rev)
 	}
 }
 
@@ -410,7 +410,7 @@ func TestErasePreviewMatchesActual(t *testing.T) {
 			st := newStore(t, testBaseMap())
 			in := Intent{Op: OpErase, Erase: EraseIntent{Target: tc.target, Mode: tc.mode}}
 
-			// Предпросмотр — чистый расчёт: стек не меняется.
+			// Предпросмотр — чистый расчёт: текущая карта не меняется.
 			rev := st.Revision()
 			prev, err := st.Preview(in)
 			if err != nil {
@@ -458,14 +458,14 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	)
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
-		ID: "SWX", Hand: "right",
+		ID: "SWX", Kind: mapfmt.KindRail, Hand: "right",
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{"SWX": {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
 	m.Topology.Edges = append(m.Topology.Edges,
-		mapfmt.Edge{ID: "EA", From: "N_A.P1", To: "SWX.C"},
-		mapfmt.Edge{ID: "EB", From: "SWX.S", To: "N_BR1.P1"},
-		mapfmt.Edge{ID: "EC", From: "SWX.D", To: "N_BR2.P1"},
+		mapfmt.Edge{ID: "EA", Kind: mapfmt.KindRail, From: "N_A.P1", To: "SWX.C"},
+		mapfmt.Edge{ID: "EB", Kind: mapfmt.KindRail, From: "SWX.S", To: "N_BR1.P1"},
+		mapfmt.Edge{ID: "EC", Kind: mapfmt.KindRail, From: "SWX.D", To: "N_BR2.P1"},
 	)
 	m.Geometry.Edges["EA"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
 	m.Geometry.Edges["EB"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
@@ -524,15 +524,15 @@ func TestEraseTurnoutCapsHangingEnd(t *testing.T) {
 	)
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
-		ID: "SWZ", Hand: "right",
+		ID: "SWZ", Kind: mapfmt.KindRail, Hand: "right",
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{"SWZ": {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
 	m.Topology.Edges = append(m.Topology.Edges,
-		mapfmt.Edge{ID: "EA", From: "N_A.P1", To: "SWZ.C"},
-		mapfmt.Edge{ID: "EB", From: "SWZ.S", To: "N_J.P1"},
-		mapfmt.Edge{ID: "EC", From: "N_J.P1", To: "N_C.P1"},
-		mapfmt.Edge{ID: "ED", From: "SWZ.D", To: "N_D.P1"},
+		mapfmt.Edge{ID: "EA", Kind: mapfmt.KindRail, From: "N_A.P1", To: "SWZ.C"},
+		mapfmt.Edge{ID: "EB", Kind: mapfmt.KindRail, From: "SWZ.S", To: "N_J.P1"},
+		mapfmt.Edge{ID: "EC", Kind: mapfmt.KindRail, From: "N_J.P1", To: "N_C.P1"},
+		mapfmt.Edge{ID: "ED", Kind: mapfmt.KindRail, From: "SWZ.D", To: "N_D.P1"},
 	)
 	m.Geometry.Edges["EA"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
 	m.Geometry.Edges["EB"] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: 40}}}
@@ -581,54 +581,34 @@ func TestEraseTurnoutCapsHangingEnd(t *testing.T) {
 	}
 }
 
-// ---- Критерий приёмки: отмена возвращает предыдущую ревизию ----
+// ---- Ревизии растут только вперёд ----
 
-func TestUndoReturnsPreviousRevision(t *testing.T) {
+// Ревизия рождается на каждом применении и монотонно растёт. Вернуть её назад
+// нечем: отмены нет (см. шапку пакета), поэтому проверять «номера не
+// переиспользуются после отката» больше не на чем — переиспользовать их мог
+// только откат.
+func TestRevisionsGrowForward(t *testing.T) {
 	st := newStore(t, testBaseMap())
 
-	applyPlace := func() Result {
+	applyPlace := func(from, to float64) Result {
 		res, err := st.Apply(Intent{Op: OpPlace, Place: PlaceIntent{
-			Element: "E2", From: 20, To: 60, Side: "right", Offset: 1.75, Width: 3.0,
+			Element: "E2", From: from, To: to, Side: "right", Offset: 1.75, Width: 3.0,
 		}})
 		if err != nil {
 			t.Fatalf("Apply: %v", err)
 		}
 		return res
 	}
-	r2 := applyPlace()
-	r3 := applyPlace()
+	r2 := applyPlace(20, 60)
+	r3 := applyPlace(70, 90)
 
-	// Ревизии монотонно растут.
 	if !(r2.Revision == 2 && r3.Revision == 3) {
 		t.Fatalf("ревизии: %d, %d — ожидались 2, 3", r2.Revision, r3.Revision)
 	}
-
-	got, ok := st.Undo()
-	if !ok || st.Revision() != 2 {
-		t.Fatalf("Undo: ok=%v, ревизия %d, ожидалась 2", ok, st.Revision())
+	if st.Revision() != 3 {
+		t.Fatalf("текущая ревизия %d, ожидалась 3", st.Revision())
 	}
-	assertJSONEqual(t, r2.Map, got, "откат на ревизию 2")
-
-	got, ok = st.Undo()
-	if !ok || st.Revision() != 1 {
-		t.Fatalf("Undo: ok=%v, ревизия %d, ожидалась 1", ok, st.Revision())
-	}
-	assertJSONEqual(t, testBaseMap(), got, "откат на исходную ревизию")
-
-	if _, ok := st.Undo(); ok {
-		t.Fatal("Undo ниже первой ревизии: ожидался отказ")
-	}
-
-	// Отмена с последующей правкой не переиспользует номера ревизий.
-	r4, err := st.Apply(Intent{Op: OpPlace, Place: PlaceIntent{
-		Element: "E2", From: 30, To: 70, Side: "left", Offset: 2.0, Width: 4.0,
-	}})
-	if err != nil {
-		t.Fatalf("Apply после отмены: %v", err)
-	}
-	if r4.Revision != 4 {
-		t.Fatalf("ревизия после отмены: %d, ожидалась 4 (номера не переиспользуются)", r4.Revision)
-	}
+	assertJSONEqual(t, r3.Map, st.Current(), "текущая карта и результат последней правки")
 }
 
 // ---- Run'ы: пересчёт и стабильность ----
@@ -707,8 +687,8 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 				{ID: "N_B", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
 			Edges: []mapfmt.Edge{
-				{ID: "E5", From: "N_A.P1", To: "N_J.P1"},
-				{ID: "E6", From: "N_B.P1", To: "N_J.P1"},
+				{ID: "E5", Kind: mapfmt.KindRail, From: "N_A.P1", To: "N_J.P1"},
+				{ID: "E6", Kind: mapfmt.KindRail, From: "N_B.P1", To: "N_J.P1"},
 			},
 		},
 		Geometry: mapfmt.Geometry{

@@ -18,7 +18,7 @@ import (
 // Run'ы решётки обновляются внутри операций хирургически: решётка —
 // авторитетный факт о физике, а не производная от нарезки на элементы
 // (требование 6), см. runs.go.
-func applyIntent(cur *mapfmt.Map, maxRev int, i Intent) (Result, error) {
+func applyIntent(cur *mapfmt.Map, i Intent) (Result, error) {
 	m := cloneMap(cur)
 	var prev *ErasePreview
 	var err error
@@ -42,7 +42,11 @@ func applyIntent(cur *mapfmt.Map, maxRev int, i Intent) (Result, error) {
 	if err := mapfmt.Validate(&m); err != nil {
 		return Result{}, fmt.Errorf("edit: результат правки не проходит валидацию: %w", err)
 	}
-	m.MapRevision = maxRev + 1
+	// Ревизия — следующая за текущей. Отдельный счётчик «максимальной когда-либо
+	// бывшей» ревизии был нужен только отмене: она возвращала карту назад, и без
+	// счётчика следующая правка переиспользовала бы уже выданный номер. Отмены
+	// нет — карта только вперёд, и номер берётся из неё же.
+	m.MapRevision = cur.MapRevision + 1
 	return Result{Map: m, Revision: m.MapRevision, Cascade: prev}, nil
 }
 
@@ -192,9 +196,14 @@ func applyExtend(m *mapfmt.Map, in ExtendIntent) error {
 	// вдоль приходящего пути и легло поверх него — валидатор отверг бы
 	// пересечение осей, но внятнее отказать заранее.
 	leafEndsHere := false
+	// Вид продолжения наследуется у продлеваемого ребра, а не задаётся
+	// намерением и не берётся константой: продление — это тот же путь дальше, и
+	// сменить рельсы на шоссе посреди перегона редактор не предлагает.
+	var kind string
 	for _, e := range m.Topology.Edges {
 		if e.To == in.Port {
 			leafEndsHere = true
+			kind = e.Kind
 			break
 		}
 	}
@@ -218,7 +227,7 @@ func applyExtend(m *mapfmt.Map, in ExtendIntent) error {
 
 	edgeID := allocID(m, "E_EXT")
 	nodeID := allocID(m, "N_EXT")
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: edgeID, From: in.Port, To: nodeID + ".P1"})
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: edgeID, Kind: kind, From: in.Port, To: nodeID + ".P1"})
 	m.Topology.Nodes = append(m.Topology.Nodes, mapfmt.Node{
 		ID:    nodeID,
 		Ports: []mapfmt.Port{{ID: "P1", Purpose: purpose}},
@@ -310,9 +319,14 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	branchID := allocID(m, swID+"_BR")
 	endNode := allocID(m, "N_"+swID+"_BR")
 
-	// Стрелка и её геометрия.
+	// Стрелка и её геометрия. Вид у стрелки, продолжения и ветви — вид
+	// разрезанного ребра: ветвление порождает продолжение ТОЙ ЖЕ сети, и
+	// спрашивать автора «а какого вида получившаяся стрелка» значило бы
+	// разрешить ему развилку из рельсов в шоссе, для которой нет ни геометрии,
+	// ни правил.
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
 		ID:   swID,
+		Kind: edge.Kind,
 		Hand: in.Hand,
 		Ports: mapfmt.TurnoutPorts{
 			Common:    "C",
@@ -330,10 +344,10 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	m.Topology.Edges[idx].To = swID + ".C"
 	m.Geometry.Edges[edge.ID] = mapfmt.Alignments{Horizontal: head}
 
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: contID, From: swID + ".S", To: edge.To})
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: contID, Kind: edge.Kind, From: swID + ".S", To: edge.To})
 	m.Geometry.Edges[contID] = mapfmt.Alignments{Horizontal: tail}
 
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: branchID, From: swID + ".D", To: endNode + ".P1"})
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: branchID, Kind: edge.Kind, From: swID + ".D", To: endNode + ".P1"})
 	m.Topology.Nodes = append(m.Topology.Nodes, mapfmt.Node{
 		ID:    endNode,
 		Ports: []mapfmt.Port{{ID: "P1", Purpose: purpose}},

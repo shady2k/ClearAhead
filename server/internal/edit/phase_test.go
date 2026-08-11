@@ -338,10 +338,10 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 			// сдвинулось — тест изолирует splitRuns от устройства стрелки.
 			post := splitTestMap(tc.spans)
 			post.Topology.Edges = []mapfmt.Edge{
-				{ID: "E0", From: "N_B.P1", To: "N1.P1"},
-				{ID: "E1", From: "N1.P1", To: "N_X.P1"},
-				{ID: "E1_CONT", From: "N_X.P1", To: "N2.P1"},
-				{ID: "E2", From: "N2.P1", To: "N_END.P1"},
+				{ID: "E0", Kind: mapfmt.KindRail, From: "N_B.P1", To: "N1.P1"},
+				{ID: "E1", Kind: mapfmt.KindRail, From: "N1.P1", To: "N_X.P1"},
+				{ID: "E1_CONT", Kind: mapfmt.KindRail, From: "N_X.P1", To: "N2.P1"},
+				{ID: "E2", Kind: mapfmt.KindRail, From: "N2.P1", To: "N_END.P1"},
 			}
 			post.Topology.Nodes = append(post.Topology.Nodes, mapfmt.Node{ID: "N_X", Ports: []mapfmt.Port{{ID: "P1"}}})
 			post.Geometry.Edges["E1"] = straightAlign(50)
