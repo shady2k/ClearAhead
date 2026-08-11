@@ -50,10 +50,20 @@ GO ?= go
 GODOT  ?= godot
 CLIENT ?= $(CURDIR)/client
 REGION ?= ST_A
-SHOT   ?= $(CURDIR)/client/shots/station.png
+## Снимки лежат ВНЕ проекта Godot, и это починка, а не вкус: пока они писались
+## в client/shots/, движок импортировал их как текстуры (кэш .godot/imported/
+## распухал доказательствами работы). У client/assets/ от этого был .gdignore, у
+## shots/ его забыли. Дешевле не иметь их внутри проекта вовсе.
+SHOT   ?= $(CURDIR)/shots/station.png
 VIEW   ?= station
 
-.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-shot
+# Запятая переменной, и это не причуда. $(call …) режет свои аргументы ПО
+# ЗАПЯТЫМ, поэтому «--position -9000,-9000» внутри $(call with_server,…) уезжало
+# вторым аргументом: до Godot доходило «--position -9000», и он отвечал «Invalid
+# position '-9000'». Снимок не делался вовсе, а виноватым выглядел клиент.
+COMMA := ,
+
+.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-shot client-import
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -72,6 +82,8 @@ help:
 	@echo '  make client-shot   снимок экрана в $(SHOT), окно за экраном'
 	@echo
 	@echo 'Переменные: DB, SERVER_ADDR, GODOT, REGION, SHOT, VIEW'
+	@echo 'VIEW: station (вся станция), throat (горловина со стрелками), wide (весь рельеф).'
+	@echo 'Горловина наводится по габаритам элементов с role.turnout, а не по числу.'
 	@echo
 	@echo 'Примеры:'
 	@echo '  make serve SERVER_ADDR=:8091 DB=/tmp/world.db'
@@ -87,8 +99,9 @@ help:
 	@echo 'Регион совпадает с map_id: на затравке это ST_A.'
 	@echo 'Чанк — двоичный, поэтому в примере показаны заголовки, а не тело.'
 	@echo
-	@echo 'Клиент — тупой рендер: рельеф мешем, путь лентой или нитью.'
+	@echo 'Клиент — тупой рендер: рельеф мешем, путь — отсыпка, решётка, нитки.'
 	@echo 'Нитью рисуется то, чему сервер не прислал ширины, — так видно нехватку.'
+	@echo 'Всё плоское, на отметке оси: от чего отсчитывается z, контракт не говорит.'
 	@echo 'Снимок и проверки — разные цели: почему, написано в шапке Makefile.'
 
 ## with_server — общий пролог целей dev*: поднять сервер, дождаться порта,
@@ -128,19 +141,19 @@ dev-bin:
 	@cd server && $(GO) build -o $(DEV_BIN) ./cmd/clearahead
 
 ## dev — СЕРВЕР И КЛИЕНТ одной командой. Обычный способ запустить всё.
-dev: dev-bin
+dev: dev-bin client-import
 	$(call with_server,$(GODOT) --path $(CLIENT) -- --server=$(SERVER_URL) --region=$(REGION))
 
 ## dev-check — сервер и проверки клиента, без единого окна. То, что стоит
 ## гонять после правки контракта: расхождение клиента с сервером видно числами.
-dev-check: dev-bin
+dev-check: dev-bin client-import
 	$(call with_server,$(GODOT) --headless --path $(CLIENT) --script res://tools/check.gd -- --server=$(SERVER_URL) --region=$(REGION))
 
 ## dev-shot — сервер, снимок, и оба гаснут. Окно настоящее (иначе нечего
 ## снимать), но уведено за экран.
-dev-shot: dev-bin
+dev-shot: dev-bin client-import
 	@mkdir -p $(dir $(SHOT))
-	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --view=$(VIEW) --quit-when-done)
+	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --view=$(VIEW) --quit-when-done)
 	@echo "снимок: $(SHOT)"
 
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
@@ -162,19 +175,34 @@ build:
 fmt:
 	cd server && gofmt -w .
 
+## client-import — пересобрать кэш импорта Godot, если его нет.
+##
+## Кэш производный, но НЕ ОДНОРАЗОВЫЙ, и это куплено ошибкой 2026-08-12: в
+## .godot/global_script_class_cache.cfg живёт таблица `class_name` → скрипт, а
+## `--headless --script` её не строит — он её ЧИТАЕТ. Без неё разбор check.gd
+## падает двумя десятками «Identifier "TrackBuild" not declared», и выглядит это
+## как поломка клиента, а не как отсутствие кэша.
+##
+## Отсюда же следует, что на СВЕЖЕМ КЛОНЕ (где .godot/ нет по .gitignore) любая
+## цель client* падала бы тем же способом. Условие — на файле таблицы, а не на
+## каталоге: каталог создаёт и пустой запуск.
+client-import:
+	@test -f $(CLIENT)/.godot/global_script_class_cache.cfg || \
+		$(GODOT) --headless --path $(CLIENT) --import >/dev/null 2>&1 || true
+
 ## client — клиент окном. Сервер должен быть уже поднят (make serve рядом):
 ## клиент ничего не подставляет вместо ответа и покажет отказ красным.
-client:
+client: client-import
 	$(GODOT) --path $(CLIENT) -- --server=$(SERVER_URL) --region=$(REGION)
 
 ## client-check — всё, что не пиксели. Окна нет вовсе.
-client-check:
+client-check: client-import
 	$(GODOT) --headless --path $(CLIENT) --script res://tools/check.gd -- \
 		--server=$(SERVER_URL) --region=$(REGION)
 
 ## client-shot — единственное доказательство, что нарисовано, а не «не упало».
 ## Окно настоящее (без него нечего снимать), но уведено за экран.
-client-shot:
+client-shot: client-import
 	@mkdir -p $(dir $(SHOT))
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1600x900 -- \
 		--server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --view=$(VIEW) \

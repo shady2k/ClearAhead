@@ -23,7 +23,3 @@ window/size/viewport_height=900
 
 renderer/rendering_method="mobile"
 renderer/rendering_method.mobile="mobile"
-
-[importer_defaults]
-
-; client/assets/vl80.glb в этой версии не используется: локомотива нет.
