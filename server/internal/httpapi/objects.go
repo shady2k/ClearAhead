@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -30,14 +31,54 @@ type RenderBuilding struct {
 	Height  float64 `json:"height"`
 }
 
+// RenderRiver — река в проводе: ось с отметкой уреза и замеренной шириной.
+//
+// # Что здесь есть и чего намеренно нет
+//
+// ЕСТЬ: где течёт, на какой отметке и докуда доходит вода. Это мир — второй
+// клиент обязан показать реку там же и такой же.
+//
+// НЕТ ГЛУБИНЫ И ШИРИНЫ БЕРЕГА. Оба числа уже сделали свою работу на сервере:
+// русло врезано в высоты, и форма берега приезжает клиенту в отсчётах чанка,
+// не стоя ни одного лишнего байта. Слать их значило бы предложить клиенту
+// повторить врезку — то есть ровно ту вторую реализацию, против которой заведено
+// правило «рецепта клиент не видит никогда».
+//
+// НЕТ ЦВЕТА, БЛЕСКА И РЯБИ. Вода выглядит так, как решит рендерер, — по той же
+// границе, по которой он выбирает цвет луга и меш ели.
+//
+// УРЕЗ ВЕЗЁТСЯ ЗАМЕРЕННЫМ, А НЕ ОДНИМ ЧИСЛОМ НА РЕКУ. Первая редакция несла
+// «полуширину глади» константой, и это была неправда: вода стоит там, где земля
+// поднялась до её отметки, а земля — шум плюс врезка. На пологом берегу вода
+// заходит дальше, на крутом ближе, и река постоянной ширины выдаёт себя
+// каналом. Сервер идёт по лучу от оси и находит урез (terrain.WaterEdge),
+// отдельно влево и вправо: берега у реки разные.
+type RenderRiver struct {
+	ID   string             `json:"id"`
+	Axis []RenderRiverPoint `json:"axis"`
+}
+
+// RenderRiverPoint — точка оси: план, отметка уреза и куда вода доходит.
+//
+// HalfLeft и HalfRight — расстояния от оси до уреза по левую и правую руку,
+// если смотреть по ходу оси. Клиент строит по ним ленту и ничего не считает.
+type RenderRiverPoint struct {
+	X         float64 `json:"x"`
+	Y         float64 `json:"y"`
+	Z         float64 `json:"z"`
+	HalfLeft  float64 `json:"half_left"`
+	HalfRight float64 `json:"half_right"`
+}
+
 // RenderObjects — тело ресурса семантических объектов региона.
 //
-// Массив непустой даже у карты без блока objects: форма контракта — «[]», а не
+// Массивы непустые даже у карты без блока objects: форма контракта — «[]», а не
 // null. То же правило, что у track_types и construction_runs.
 type RenderObjects struct {
 	Region    string           `json:"region"`
 	Revision  int              `json:"revision"`
 	Buildings []RenderBuilding `json:"buildings"`
+	Rivers    []RenderRiver    `json:"rivers"`
 }
 
 // BuildObjects переносит объекты карты в провод, сажая их на рабочую
@@ -50,9 +91,13 @@ func BuildObjects(m *mapfmt.Map, f *terrain.Field) *RenderObjects {
 		Region:    m.MapID,
 		Revision:  m.MapRevision,
 		Buildings: []RenderBuilding{},
+		Rivers:    []RenderRiver{},
 	}
 	if m.Objects == nil {
 		return out
+	}
+	for _, r := range m.Objects.Rivers {
+		out.Rivers = append(out.Rivers, RenderRiver{ID: r.ID, Axis: riverAxis(r, f)})
 	}
 	for _, b := range m.Objects.Buildings {
 		z := 0.0
@@ -125,4 +170,48 @@ func (a *objectsAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	WriteObjects(w, BuildObjects(&st.Map, field))
+}
+
+// riverAxis переносит ось русла в провод, замеряя урез в каждой точке.
+//
+// Нормаль берётся по СОСЕДНИМ точкам (центральной разностью, а на концах —
+// односторонней): та же схема, которой считается нормаль рельефа, и по той же
+// причине — направление в точке есть свойство линии, а не отрезка.
+//
+// Поле рельефа может отсутствовать: карта без рельефа законна. Тогда урез
+// замерить не по чему, и полуширины остаются нулями — река вырождается в линию.
+// Это честно: воды без земли не бывает, и подставить сюда полуширину русла
+// значило бы нарисовать ленту, висящую в пустоте.
+func riverAxis(r mapfmt.River, f *terrain.Field) []RenderRiverPoint {
+	out := make([]RenderRiverPoint, 0, len(r.Axis))
+	maxOut := r.HalfWidthM + r.BankM
+	for i, p := range r.Axis {
+		rp := RenderRiverPoint{X: p.X, Y: p.Y, Z: p.Z}
+		if f != nil {
+			tx, ty := riverTangent(r.Axis, i)
+			// Левая нормаль к ходу оси: поворот касательной на +90°.
+			nx, ny := -ty, tx
+			rp.HalfLeft = f.WaterEdge(p.X, p.Y, nx, ny, p.Z, maxOut)
+			rp.HalfRight = f.WaterEdge(p.X, p.Y, -nx, -ny, p.Z, maxOut)
+		}
+		out = append(out, rp)
+	}
+	return out
+}
+
+// riverTangent — единичное направление оси в точке i.
+func riverTangent(axis []mapfmt.RiverPoint, i int) (tx, ty float64) {
+	lo, hi := i-1, i+1
+	if lo < 0 {
+		lo = i
+	}
+	if hi >= len(axis) {
+		hi = i
+	}
+	dx, dy := axis[hi].X-axis[lo].X, axis[hi].Y-axis[lo].Y
+	n := math.Hypot(dx, dy)
+	if n == 0 {
+		return 1, 0
+	}
+	return dx / n, dy / n
 }

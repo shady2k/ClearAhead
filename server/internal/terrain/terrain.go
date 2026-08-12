@@ -85,7 +85,31 @@ type Field struct {
 	// индекс, намеренно: построек на регион единицы тысяч, а спрашивают их раз
 	// на ячейку покрова, то есть на порядок реже, чем ось.
 	cleared []clearedSpot
+	// rivers — русла с готовым индексом оси.
+	rivers []riverField
 }
+
+// riverField — река, приготовленная к запросам: размеры плюс индекс оси.
+type riverField struct {
+	halfWidthM, bankM, depthM float64
+	rimM, valleyM             float64
+	sandBandM                 float64
+	grid                      pointGrid
+}
+
+// riverStepM — шаг, до которого сгущается ось русла перед индексированием.
+//
+// Индекс отвечает на «расстояние до ближайшей ТОЧКИ», а нужно «расстояние до
+// ЛИНИИ». Разница на дуге равна стреле прогиба, и пять метров держат её ниже
+// сантиметра при любом мыслимом радиусе меандра — то есть ниже единицы
+// квантования высот. Считать расстояние до отрезков честнее, но это второй
+// индекс и второй способ спросить одно и то же; сгущение переиспользует тот,
+// что уже есть у оси пути.
+//
+// Пять метров, а не четыре: это тот же шаг, которым выбирается ось пути
+// (axisStepM), и совпадение здесь не случайно — оба индекса живут в одной
+// сетке и должны стоить одинаково.
+const riverStepM = 5.0
 
 // clearedSpot — круг вырубки вокруг постройки.
 type clearedSpot struct {
@@ -100,6 +124,44 @@ func buildingsOf(m *mapfmt.Map) []mapfmt.Building {
 		return nil
 	}
 	return m.Objects.Buildings
+}
+
+func riversOf(m *mapfmt.Map) []mapfmt.River {
+	if m.Objects == nil {
+		return nil
+	}
+	return m.Objects.Rivers
+}
+
+// densifyRiver сгущает ось русла до riverStepM, ЛИНЕЙНО интерполируя и план, и
+// отметку уреза.
+//
+// Отметку — тоже линейно: между двумя точками река течёт равномерно, и всякое
+// сглаживание профиля здесь означало бы, что сервер придумывает уклон, которого
+// автор не задавал.
+func densifyRiver(axis []mapfmt.RiverPoint) []axisPoint {
+	if len(axis) == 0 {
+		return nil
+	}
+	out := []axisPoint{{X: axis[0].X, Y: axis[0].Y, Z: axis[0].Z}}
+	for i := 1; i < len(axis); i++ {
+		a, b := axis[i-1], axis[i]
+		dx, dy := b.X-a.X, b.Y-a.Y
+		seg := math.Hypot(dx, dy)
+		n := int(math.Ceil(seg / riverStepM))
+		if n < 1 {
+			n = 1
+		}
+		for k := 1; k <= n; k++ {
+			t := float64(k) / float64(n)
+			out = append(out, axisPoint{
+				X: a.X + dx*t,
+				Y: a.Y + dy*t,
+				Z: a.Z + (b.Z-a.Z)*t,
+			})
+		}
+	}
+	return out
 }
 
 // pointGrid — равномерный индекс точек с расширяющимся поиском по кольцам.
@@ -206,6 +268,28 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 	// факт, который надо возить. Полуширина взята у спайка (VILLAGE_CLEAR 30 м).
 	for _, b := range buildingsOf(m) {
 		f.cleared = append(f.cleared, clearedSpot{x: b.X, y: b.Y, r: buildingClearM + math.Max(b.Width, b.Depth)*0.5})
+	}
+
+	// Русла: ось сгущается и кладётся в такой же индекс, что у оси пути. Строится
+	// ДО первого обращения к NaturalM — иначе рельеф успел бы посчитаться без
+	// реки, и берег появился бы только у тех чанков, что породились позже.
+	for _, r := range riversOf(m) {
+		// Ячейка индекса — по САМОМУ ДАЛЬНЕМУ вопросу, который ему зададут:
+		// долина шире песчаного пояса, и сетка, нарезанная по поясу, заставила
+		// бы врезку обходить кольца.
+		reach := r.HalfWidthM + r.BankM + math.Max(r.ValleyM, r.SandBandM)
+		if reach <= 0 {
+			continue
+		}
+		f.rivers = append(f.rivers, riverField{
+			halfWidthM: r.HalfWidthM,
+			bankM:      r.BankM,
+			depthM:     r.DepthM,
+			rimM:       r.RimM,
+			valleyM:    r.ValleyM,
+			sandBandM:  r.SandBandM,
+			grid:       newPointGrid(reach, densifyRiver(r.Axis)),
+		})
 	}
 
 	drops := formationDrops(m)
@@ -427,12 +511,120 @@ func insideAny(spans netloc.LinearU, u units.Distance) bool {
 }
 
 // NaturalM возвращает природную высоту в метрах — рельеф до земляных работ.
+//
+// Русло реки входит в ПРИРОДНУЮ поверхность, а не накладывается после земляных
+// работ, и порядок здесь значим. Река — форма земли, существовавшая до дороги;
+// земляные работы примиряют с осью пути ТО, ЧТО ЕСТЬ, включая берег. Обратный
+// порядок означал бы, что река размывает готовую насыпь, и мост под собой
+// прорезал бы полотно.
 func (f *Field) NaturalM(x, y float64) float64 {
 	h := f.recipe.BaseZ
 	for _, o := range f.recipe.Octaves {
 		h += o.AmplitudeM * valueNoise(f.recipe.Seed, x/o.WavelengthM, y/o.WavelengthM)
 	}
+	return f.carveRiver(x, y, h)
+}
+
+// carveRiver врезает русло и его долину в природную поверхность.
+//
+// Три пояса, считая от оси:
+//
+//	0 .. half            дно, плоское, на отметке «урез минус глубина»;
+//	half .. +bank        берег: от дна вверх до БРОВКИ («урез плюс rim»);
+//	+bank .. +valley     долина: от бровки к природной поверхности.
+//
+// Переходы сглажены тем же многочленом, что сглаживает шум: линейные давали бы
+// видимый излом по бровке и по краю долины. У внешнего края долины значение
+// равно натуре, поэтому шва с окружающим рельефом нет по построению.
+//
+// # ВНУТРИ СЛЕДА РЕКИ ФОРМА РЕКИ ПОБЕЖДАЕТ ШУМ, и это названо ценой
+//
+// Здесь НЕТ math.Min с натурой, хотя первая редакция его имела: «русло не
+// насыпает грунт, оно его выносит». Звучит верно и неверно по существу. С
+// ним река перестаёт держать воду: там, где шум опустил землю ниже уреза за
+// бровкой, вода выходила в поле, и замер это подтвердил — урез упирался в
+// потолок поиска на 76 м у трети точек оси.
+//
+// Поэтому в пределах half+bank+valley поверхность задаётся РЕКОЙ, а не шумом:
+// где надо — срезается, где надо — поднимается до бровки. Цена: рецепт рельефа
+// внутри этой полосы не действует, и рисунок шума там пропадает. Это ровно тот
+// же размен, на который уже пошли земляные работы у пути, — и обоснование то
+// же: форма, порождённая объектом, старше формы, порождённой шумом.
+//
+// Порт из спайка (`_carve_river`) по форме, но не по устройству: у спайка
+// отметки дна и уреза были константами на всю карту и долины не было вовсе —
+// её заменял клэмп низин (LAND_FLOOR). Здесь отметка берётся у ближайшей точки
+// оси, потому что река течёт под уклон.
+func (f *Field) carveRiver(x, y, h float64) float64 {
+	if len(f.rivers) == 0 {
+		return h
+	}
+	for i := range f.rivers {
+		r := &f.rivers[i]
+		reach := r.halfWidthM + r.bankM + r.valleyM
+		d, surfaceZ, ok := r.grid.nearest(x, y, reach)
+		if !ok {
+			continue
+		}
+		bed := surfaceZ - r.depthM
+		rim := surfaceZ + r.rimM
+		switch {
+		case d <= r.halfWidthM:
+			return bed
+		case d <= r.halfWidthM+r.bankM:
+			return bed + (rim-bed)*smoothstep(r.halfWidthM, r.halfWidthM+r.bankM, d)
+		default:
+			return rim + (h-rim)*smoothstep(r.halfWidthM+r.bankM, reach, d)
+		}
+	}
 	return h
+}
+
+// waterEdgeStepM — шаг поиска уреза. Полметра: вдвое мельче единицы, которой
+// урез вообще имеет смысл на кадре, и вчетверо мельче шага сетки высот.
+const waterEdgeStepM = 0.5
+
+// WaterEdge — на каком расстоянии от оси русла вода встречает берег.
+//
+// # Почему это ЗАМЕР, а не формула
+//
+// Первая редакция везла клиенту полуширину глади одним числом на реку —
+// «полуширина дна плюс берег». Это неправда, и неправда наглядная: урез там,
+// где рабочая поверхность поднимается до отметки воды, а поверхность эта —
+// шум плюс врезка плюс земляные работы. На пологом берегу вода заходит дальше,
+// на крутом — ближе, и река постоянной ширины выдаёт себя каналом.
+//
+// Поэтому здесь идут ПО ЛУЧУ и смотрят, где земля вышла из воды. Отдельно
+// влево и вправо: берега у реки разные, и симметричная лента — та же
+// канава, только скруглённая.
+//
+// Считать это на клиенте нельзя: ему пришлось бы знать врезку, то есть кусок
+// рецепта, который не показывают никогда.
+func (f *Field) WaterEdge(x, y, nx, ny, surfaceZ, maxOut float64) float64 {
+	last := 0.0
+	for d := waterEdgeStepM; d <= maxOut; d += waterEdgeStepM {
+		if f.WorkedM(x+nx*d, y+ny*d) >= surfaceZ {
+			return last
+		}
+		last = d
+	}
+	return maxOut
+}
+
+// riverAt — расстояние до ближайшего русла и отметка его уреза.
+//
+// Радиус поиска шире берега на песчаный пояс: покров спрашивает про пляж,
+// который лежит ЗА бровкой, и обрезанный по берегу поиск сообщал бы «реки
+// рядом нет» ровно там, где начинается песок.
+func (f *Field) riverAt(x, y float64) (dist, surfaceZ float64, r *riverField, ok bool) {
+	for i := range f.rivers {
+		rv := &f.rivers[i]
+		d, z, hit := rv.grid.nearest(x, y, rv.halfWidthM+rv.bankM+rv.sandBandM)
+		if hit {
+			return d, z, rv, true
+		}
+	}
+	return 0, 0, nil, false
 }
 
 // WorkedM возвращает рабочую высоту в метрах — после земляных работ.
@@ -729,6 +921,22 @@ func (f *Field) CoverAt(x, y float64) (class, closure int) {
 	veg := fractalNoise(c.Seed^0x7E6E, x/c.VegWavelengthM, y/c.VegWavelengthM, c.VegOctaves)
 	closure = grade(smoothstep(c.BareThreshold, c.ClosedThreshold, veg))
 
+	// ПЕСОК У УРЕЗА — первое правило, потому что оно самое сильное: русло и
+	// пляж не бывают ни лугом, ни лесом, что бы ни говорили маски.
+	//
+	// Пояс привязан к РУСЛУ, а не к отметке, и это правка ошибки, которую спайк
+	// нашёл у себя сам и записал: проверка песка была чисто по высоте, и на
+	// ровном месте вылезал песчаный поясок там, где воды нет вовсе. Песок — там,
+	// где река его намыла.
+	//
+	// Класс SurfaceSand объявлен в проводе с самого начала и до сегодня не
+	// порождался НИ РАЗУ — в chunk.go рядом с ним записано, почему: «пояс песка
+	// привязан к урезу воды, а воды в контракте ещё нет». Вода появилась.
+	dRiver, _, rv, nearRiver := f.riverAt(x, y)
+	if nearRiver && dRiver <= rv.halfWidthM+rv.sandBandM {
+		return chunk.SurfaceSand, 0
+	}
+
 	if veg < c.BareThreshold {
 		return chunk.SurfaceBareSoil, 0
 	}
@@ -743,6 +951,12 @@ func (f *Field) CoverAt(x, y float64) (class, closure int) {
 			cleared = true
 			break
 		}
+	}
+	// Мокрый берег леса не держит: до бровки русла дерево не встаёт. Это не та
+	// же вырубка, что вдоль пути — там лес СВЕЛИ, здесь он не растёт, — но
+	// выражается тем же признаком, потому что следствие одно.
+	if nearRiver && dRiver <= rv.halfWidthM+rv.bankM {
+		cleared = true
 	}
 	if !cleared {
 		forest := fractalNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM, c.ForestOctaves)

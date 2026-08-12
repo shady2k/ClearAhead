@@ -736,6 +736,7 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	# Ярусы уровня 0 копятся для рассева растительности: покров говорит, ГДЕ
 	# что растёт, высоты — на какой отметке, битовая карта леса — где ствол.
 	var ground: Array[Dictionary] = []
+	var terrain_box := Rect2()
 	var cover_got := 0
 	var forest_got := 0
 	var cover_empty := 0
@@ -817,6 +818,15 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 				"base_z": base_z, "level": int(c["level"]),
 				"cx": int(c["cx"]), "cz": int(c["cz"])})
 
+		# Габарит ПРИЕХАВШЕГО рельефа: угол чанка плюс его сторона. Радиус
+		# последнего уровня для этого не годится — он объявляет, докуда чанки
+		# МОГУТ храниться (8192 м), а не где они есть, и кадр по нему уходил в
+		# поле, где нет ничего, кроме дымки.
+		var side_m := rule.side_of(int(c["level"]))
+		var cell := Rect2(Vector2(float(c["cx"]) * side_m, float(c["cz"]) * side_m),
+			Vector2(side_m, side_m))
+		terrain_box = cell if got == 1 else terrain_box.merge(cell)
+
 		var mi := MeshInstance3D.new()
 		mi.name = "C%d_%d_%d" % [c["level"], c["cx"], c["cz"]]
 		mi.mesh = built["mesh"]
@@ -851,6 +861,7 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	# Охват рельефа — радиус последнего уровня ИЗ МАНИФЕСТА, а не «сколько-то
 	# километров»: за ним чанков не хранится вовсе.
 	stats["terrain_radius_m"] = rule.radius_of(rule.max_level)
+	stats["terrain_box"] = terrain_box
 
 
 ## _place_camera — навести камеру роли на габарит, названный `frame`.
@@ -916,12 +927,12 @@ func _frame_bbox(bbox: Rect2, elements: Array[TrackGeom.Element]) -> Rect2:
 				return bbox
 			return throat
 		"terrain":
-			# Весь приехавший рельеф: полоса вокруг оси шириной в радиус
-			# последнего уровня — число из манифеста, а не из головы.
-			var r := float(stats.get("terrain_radius_m", 0.0))
-			if r <= 0.0:
+			# Весь ПРИЕХАВШИЙ рельеф — габарит полученных чанков, а не радиус
+			# последнего уровня: тот говорит, докуда чанки МОГУТ храниться.
+			var tb: Rect2 = stats.get("terrain_box", Rect2())
+			if tb.size == Vector2.ZERO:
 				return bbox
-			return bbox.grow(r)
+			return tb
 		"network":
 			return bbox
 	_fail("габарит «%s» неизвестен — знаю network, throat, terrain" % frame)
@@ -993,6 +1004,8 @@ func _hud_text() -> String:
 			stats.get("bushes_drawn", 0), stats.get("grass_drawn", 0)])
 		l.append("  лес: битовых карт получено %d (только уровень 0)" % stats.get("forest_200", 0))
 		l.append("  построек %d (место, габарит и ОТМЕТКА — с сервера; форма крыши и цвет — здесь)" % stats.get("buildings_drawn", 0))
+		l.append("  рек %d, лент %d (ось, урез и ширина — с сервера; цвет и блеск — здесь)" % [
+			stats.get("rivers_drawn", 0), stats.get("river_quads", 0)])
 		l.append("  вершин %d, треугольников %d, высоты %.2f…%.2f м" % [
 			stats["vertices"], stats["triangles"], stats["z_min"], stats["z_max"]])
 		l.append("  крутизной покрашено %d вершин (%.1f %%), порог %s" % [
@@ -1010,8 +1023,10 @@ func _hud_text() -> String:
 	l.append("сервер говорит что и где, как это выглядит — дело рендерера.[/i]")
 	l.append("[i]где растёт лес и какой породы — прислано; МЕШ ели, куста и пучка,")
 	l.append("плотность рассева, небо, свет и дымка — клиентские, как и цвет класса.[/i]")
-	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: вода, локомотив,")
+	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: локомотив,")
 	l.append("решётка стрелки (переводные брусья).[/i]")
+	l.append("[i]русло врезано в ВЫСОТЫ: берег и долина приехали отсчётами чанка и")
+	l.append("не стоили ни одного лишнего байта. Лентой рисуется только гладь.[/i]")
 	l.append("[i]204 (чанка нет) оставлено дырой: base_z региона в манифест не приезжает.[/i]")
 	for s in (stats.get("sleepers_skipped", []) as Array):
 		l.append("[color=#ffc060]решётка пропущена — %s[/color]" % s)
@@ -1263,6 +1278,7 @@ func _draw_buildings() -> void:
 		_fail("объекты региона: %s" % r["error"])
 		return
 	var body: Dictionary = r["data"]
+	_draw_water(body.get("rivers", []) as Array)
 	var list: Array = body.get("buildings", []) as Array
 	if list.is_empty():
 		stats["buildings_drawn"] = 0
@@ -1319,6 +1335,100 @@ func _draw_buildings() -> void:
 	mi.material_override = mat
 	node.add_child(mi)
 	stats["buildings_drawn"] = drawn
+
+
+## _draw_water — водная гладь лентой по оси русла.
+##
+## # Что прислано и что решено здесь
+##
+## ОСЬ, ОТМЕТКА УРЕЗА И ДОКУДА ДОХОДИТ ВОДА — сервер, до каждой точки. Клиент не
+## считает ни ширины, ни уровня: берег вырезан в высотах, и где именно вода
+## встречает землю, знает только тот, кто эти высоты породил.
+##
+## ЦВЕТ, БЛЕСК И ПРОЗРАЧНОСТЬ — рендерер, по той же границе, по которой он
+## выбирает цвет луга и меш ели. Числа взяты у снесённого спайка, чтобы не
+## подбирать глазом второй раз уже подобранное.
+##
+## Лента чуть НИЖЕ присланного уреза: гладь и берег сходятся на одной отметке по
+## построению, и при точном совпадении они дерутся за z-буфер — вдоль всего
+## берега идёт мерцающая кромка. Опускание на сантиметр дешевле, чем отключение
+## проверки глубины, и в отличие от него не пускает воду поверх моста.
+const WATER_SINK := 0.01
+const C_WATER := Color(0.24, 0.44, 0.56)
+
+
+func _draw_water(rivers: Array) -> void:
+	if rivers.is_empty():
+		stats["rivers_drawn"] = 0
+		return
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var drawn := 0
+	var points := 0
+	for r_raw in rivers:
+		var r: Dictionary = r_raw as Dictionary
+		var axis: Array = r.get("axis", []) as Array
+		if axis.size() < 2:
+			# Река из одной точки — не река. Сервер такую не отдаёт (валидатор
+			# отказывает), и молча дорисовывать её здесь значило бы прятать
+			# расхождение версий контракта.
+			_fail("река %s: точек оси %d — ленту не построить" % [String(r.get("id", "")), axis.size()])
+			continue
+		for k in axis.size() - 1:
+			var a: Dictionary = axis[k] as Dictionary
+			var b: Dictionary = axis[k + 1] as Dictionary
+			var ax := float(a.get("x", 0.0))
+			var ay := float(a.get("y", 0.0))
+			var bx := float(b.get("x", 0.0))
+			var by := float(b.get("y", 0.0))
+			var t := Vector2(bx - ax, by - ay)
+			if t.length() < 1e-6:
+				continue
+			t = t.normalized()
+			# Левая нормаль к ходу оси — та же, по которой сервер мерил урез.
+			var n := Vector2(-t.y, t.x)
+			var az := float(a.get("z", 0.0)) - WATER_SINK
+			var bz := float(b.get("z", 0.0)) - WATER_SINK
+			var al := float(a.get("half_left", 0.0))
+			var ar := float(a.get("half_right", 0.0))
+			var bl := float(b.get("half_left", 0.0))
+			var br := float(b.get("half_right", 0.0))
+			var base := verts.size()
+			verts.append(TerrainMesh.to_godot(ax + n.x * al, ay + n.y * al, az))
+			verts.append(TerrainMesh.to_godot(bx + n.x * bl, by + n.y * bl, bz))
+			verts.append(TerrainMesh.to_godot(bx - n.x * br, by - n.y * br, bz))
+			verts.append(TerrainMesh.to_godot(ax - n.x * ar, ay - n.y * ar, az))
+			for _i in 4:
+				norms.append(Vector3.UP)
+			idx.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+			points += 1
+		drawn += 1
+
+	if idx.is_empty():
+		stats["rivers_drawn"] = 0
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new()
+	mi.name = "Water"
+	mi.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	# albedo_color, а не цвет вершины: движок переводит его из sRGB сам, и
+	# правило «в вершину класть линейный» сюда не относится (bd recall
+	# godot-vertex-color-linear).
+	mat.albedo_color = C_WATER
+	mat.roughness = 0.06
+	mat.metallic = 0.25
+	mi.material_override = mat
+	world.add_child(mi)
+	stats["rivers_drawn"] = drawn
+	stats["river_quads"] = points
 
 
 ## _house — коробка стен плюс плита крыши с напуском.

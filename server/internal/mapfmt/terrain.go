@@ -234,5 +234,81 @@ func (m *Map) validateObjects() error {
 			return bad("height", b.Height, MinBuildingHeightM, MaxBuildingHeightM)
 		}
 	}
+	return validateRivers(o.Rivers)
+}
+
+// Диапазоны рек. Числа предварительные и отвергают заведомо невозможное, а не
+// проверяют замысел: источник норм не назначен, как и у профиля.
+const (
+	MinRiverAxisPoints = 2
+	MaxRiverAxisPoints = 100000
+	MaxRiverHalfWidthM = 5000.0
+	MaxRiverBankM      = 5000.0
+	MaxRiverDepthM     = 500.0
+	MaxRiverSandBandM  = 1000.0
+	MaxRiverRimM       = 500.0
+	MaxRiverValleyM    = 20000.0
+)
+
+// validateRivers проверяет реки. Отказывает, не чинит.
+func validateRivers(rivers []River) error {
+	seen := make(map[string]bool, len(rivers))
+	for i := range rivers {
+		r := &rivers[i]
+		if err := ValidID("река", r.ID); err != nil {
+			return err
+		}
+		if seen[r.ID] {
+			return fmt.Errorf("mapfmt: река %q объявлена дважды", r.ID)
+		}
+		seen[r.ID] = true
+		// Один точки мало не по формальности: русло — ЛИНЕЙНЫЙ объект, и река
+		// из одной точки не имеет ни направления, ни длины. Врезать её в рельеф
+		// значило бы выдавить круглую яму и назвать это рекой.
+		if len(r.Axis) < MinRiverAxisPoints {
+			return fmt.Errorf("mapfmt: река %q: точек оси %d, нужно не меньше %d — у русла есть направление",
+				r.ID, len(r.Axis), MinRiverAxisPoints)
+		}
+		if len(r.Axis) > MaxRiverAxisPoints {
+			return fmt.Errorf("mapfmt: река %q: точек оси больше %d", r.ID, MaxRiverAxisPoints)
+		}
+		for k, p := range r.Axis {
+			for _, c := range []struct {
+				name string
+				v    float64
+			}{{"x", p.X}, {"y", p.Y}, {"z", p.Z}} {
+				if err := checkFiniteFloat(fmt.Sprintf("река %s: точка %d: %s", r.ID, k, c.name), c.v); err != nil {
+					return err
+				}
+			}
+		}
+		bad := func(what string, v, min, max float64) error {
+			return fmt.Errorf("mapfmt: река %q: %s %g вне [%g, %g] м", r.ID, what, v, min, max)
+		}
+		if !(r.HalfWidthM > 0 && r.HalfWidthM <= MaxRiverHalfWidthM) {
+			return bad("half_width", r.HalfWidthM, 0, MaxRiverHalfWidthM)
+		}
+		// Берег шириной ноль законен: обрыв — тоже берег. Отрицательный — нет.
+		if !(r.BankM >= 0 && r.BankM <= MaxRiverBankM) {
+			return bad("bank", r.BankM, 0, MaxRiverBankM)
+		}
+		if !(r.DepthM > 0 && r.DepthM <= MaxRiverDepthM) {
+			return bad("depth", r.DepthM, 0, MaxRiverDepthM)
+		}
+		if !(r.SandBandM >= 0 && r.SandBandM <= MaxRiverSandBandM) {
+			return bad("sand_band", r.SandBandM, 0, MaxRiverSandBandM)
+		}
+		// Бровка строго выше уреза: равная означала бы реку, налитую вровень с
+		// краями, и любая неровность шума выпускала бы воду в поле. Ноль здесь
+		// не «обрыв», как у берега, а неработающая река.
+		if !(r.RimM > 0 && r.RimM <= MaxRiverRimM) {
+			return bad("rim", r.RimM, 0, MaxRiverRimM)
+		}
+		// Долина шириной ноль законна: у горной реки её и нет, берег сразу
+		// упирается в склон. Отрицательной — нет.
+		if !(r.ValleyM >= 0 && r.ValleyM <= MaxRiverValleyM) {
+			return bad("valley", r.ValleyM, 0, MaxRiverValleyM)
+		}
+	}
 	return nil
 }

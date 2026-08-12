@@ -90,6 +90,27 @@ func _run() -> void:
 		_ok("регион %s объявлен играбельным" % region, bool(listed.get(region, false)),
 			"иначе оболочка покажет заглушку вместо входа")
 
+	# 1в. ВОДА. Проверяется не наличие поля, а то, ради чего оно заведено: у
+	#     каждой точки оси есть ПОЛОЖИТЕЛЬНАЯ полуширина по обе стороны. Ноль
+	#     значил бы, что урез замерить не удалось, и лента выродилась бы в линию
+	#     — на кадре это выглядит отсутствием реки, а не отказом.
+	var obj_res: Dictionary = await net.fetch_json(
+		"/regions/%s/revisions/%d/objects" % [region, int(man.get("revision", -1))])
+	_ok("объекты региона 200", obj_res["ok"], String(obj_res.get("error", "")))
+	if obj_res["ok"]:
+		var rivers: Array = (obj_res["data"] as Dictionary).get("rivers", []) as Array
+		_ok("реки в проводе", not rivers.is_empty(), "рек %d" % rivers.size())
+		var degenerate := 0
+		var pts := 0
+		for rv_raw in rivers:
+			for p_raw in ((rv_raw as Dictionary).get("axis", []) as Array):
+				var p: Dictionary = p_raw as Dictionary
+				pts += 1
+				if float(p.get("half_left", 0.0)) <= 0.0 or float(p.get("half_right", 0.0)) <= 0.0:
+					degenerate += 1
+		_ok("урез замерен во всех точках оси", degenerate == 0,
+			"точек %d, вырожденных %d" % [pts, degenerate])
+
 	# 1a. ИМЕНА ПОЛЕЙ. Проверка заведена после того, как клиент читал
 	#     `network.trackside` (поле переименовано в `structures` коммитом
 	#     3637504) и `track_hash` (умер вместе с ресурсом geometry). Ни то, ни
