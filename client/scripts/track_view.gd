@@ -364,6 +364,17 @@ static func _quad_strip(verts: PackedVector3Array, norms: PackedVector3Array,
 
 ## _box — прямоугольный параллелепипед по оси пути: длина вдоль, ширина поперёк,
 ## от z_bot до z_top. Шесть граней; торцы нужны, потому что коробка одиночная.
+## box_into — та же коробка, что _box, но с цветом вершины. Публичная: постройки
+## строятся ею же, и второй экземпляр той же геометрии разошёлся бы с первым.
+static func box_into(verts: PackedVector3Array, norms: PackedVector3Array, cols: PackedColorArray,
+		idx: PackedInt32Array, cx: float, cy: float, fwd: Vector2, half_len: float, half_wid: float,
+		z_bot: float, z_top: float, col: Color) -> void:
+	var before := verts.size()
+	_box(verts, norms, idx, cx, cy, fwd, half_len, half_wid, z_bot, z_top)
+	for _k in range(before, verts.size()):
+		cols.append(col)
+
+
 static func _box(verts: PackedVector3Array, norms: PackedVector3Array, idx: PackedInt32Array,
 		cx: float, cy: float, fwd: Vector2, half_len: float, half_wid: float,
 		z_bot: float, z_top: float) -> void:

@@ -71,6 +71,10 @@ func Validate(m *Map) error {
 	if err := validateTerrain(m.Terrain); err != nil {
 		return err
 	}
+
+	if err := m.validateObjects(); err != nil {
+		return err
+	}
 	return m.validateProfile(DefaultProfile())
 }
 

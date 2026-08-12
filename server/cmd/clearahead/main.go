@@ -69,6 +69,7 @@ func main() {
 		httpapi.NewRegionManifestHandler(world, store),
 		httpapi.NewNetworkHandler(store),
 		httpapi.NewChunksHandler(world),
+		httpapi.NewObjectsHandler(store),
 	))
 	mux.Handle("/", httpapi.NewHandler(store))
 

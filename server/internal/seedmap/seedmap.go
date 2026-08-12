@@ -25,7 +25,10 @@
 package seedmap
 
 import (
+	"fmt"
 	"math"
+
+	"github.com/shady2k/ClearAhead/server/internal/chunk"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
@@ -257,6 +260,11 @@ func Station(opts ...Option) *mapfmt.Map {
 		},
 		// Длина главного пути — 50 + 500·0,2 + 80 = 230: дуга задана радиусом и
 		// углом, длина выводится, а не записывается второй раз.
+		// Посёлок у станции с южной стороны. Числа и места взяты у снесённого
+		// спайка (VILLAGE, 12 точек), и там же записан довод, который стоит
+		// сохранить: «путь между посёлком и рекой — это и есть причина, по
+		// которой станция здесь стоит». Размеры предварительные.
+		Objects: &mapfmt.Objects{Buildings: village()},
 		Construction: construction([]mapfmt.ConstructionRun{
 			run("RUN_APPROACH_CROSS", span(StationApproach, 0, 120), span(StationCross, 0, 20)),
 			run("RUN_MAIN", span(StationMain, 0, 230)),
@@ -269,6 +277,34 @@ func Station(opts ...Option) *mapfmt.Map {
 
 // TrackTypeID — единственный тип решётки, порождаемый фабрикой.
 const TrackTypeID = "TRACK_MAIN_1435"
+
+// village — двенадцать домов посёлка.
+//
+// Габариты выведены из адреса той же функцией, что высота дерева
+// (chunk.ForestJitter): это не экономия байт — в карте они всё равно записаны
+// явно, — а способ получить правдоподобный разброс, не выдумывая двенадцать
+// троек чисел руками и не пряча выдумку за списком.
+func village() []mapfmt.Building {
+	spots := [][2]float64{
+		{70, -130}, {140, -112}, {206, -140}, {268, -116},
+		{96, -196}, {172, -212}, {246, -190}, {318, -152},
+		{330, -232}, {20, -178}, {396, -184}, {430, -124},
+	}
+	out := make([]mapfmt.Building, 0, len(spots))
+	for i, p := range spots {
+		w, d, h := chunk.ForestJitter(0, 0, i, 4096)
+		out = append(out, mapfmt.Building{
+			ID:      fmt.Sprintf("BLD_%02d", i+1),
+			X:       p[0],
+			Y:       p[1],
+			Heading: (d - 0.5) * 0.6,
+			Width:   16 + w*14,
+			Depth:   14 + d*10,
+			Height:  7 + h*9,
+		})
+	}
+	return out
+}
 
 // bufferStop — тупиковый упор в конце элемента.
 //

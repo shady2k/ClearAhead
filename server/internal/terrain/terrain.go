@@ -81,6 +81,25 @@ type Field struct {
 	// восьми километров. На мелкой сетке второй запрос обошёл бы сотни тысяч
 	// пустых ячеек.
 	lodGrid pointGrid
+	// cleared — пятна, внутри которых леса нет: вокруг построек. Список, а не
+	// индекс, намеренно: построек на регион единицы тысяч, а спрашивают их раз
+	// на ячейку покрова, то есть на порядок реже, чем ось.
+	cleared []clearedSpot
+}
+
+// clearedSpot — круг вырубки вокруг постройки.
+type clearedSpot struct {
+	x, y, r float64
+}
+
+// buildingClearM — на сколько метров ЗА габарит постройки лес не растёт.
+const buildingClearM = 30.0
+
+func buildingsOf(m *mapfmt.Map) []mapfmt.Building {
+	if m.Objects == nil {
+		return nil
+	}
+	return m.Objects.Buildings
 }
 
 // pointGrid — равномерный индекс точек с расширяющимся поиском по кольцам.
@@ -181,6 +200,13 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 	// Самый глубокий мыслимый перепад между осью и природной поверхностью —
 	// полный размах шума. Откос от него уходит на total*SideSlope в стороны.
 	f.reach = recipe.Earthworks.FormationHalfWidth + total*recipe.Earthworks.SideSlope
+
+	// Постройки вырубают лес вокруг себя. Правило живёт на СЕРВЕРЕ и клиенту не
+	// показывается — как и вырубка вдоль пути: это часть рецепта покрова, а не
+	// факт, который надо возить. Полуширина взята у спайка (VILLAGE_CLEAR 30 м).
+	for _, b := range buildingsOf(m) {
+		f.cleared = append(f.cleared, clearedSpot{x: b.X, y: b.Y, r: buildingClearM + math.Max(b.Width, b.Depth)*0.5})
+	}
 
 	drops := formationDrops(m)
 	for _, e := range els {
@@ -600,6 +626,13 @@ func (f *Field) CoverAt(x, y float64) (class, closure int) {
 	cleared := false
 	if d, ok := f.DistanceToAxis(x, y); ok && d <= c.ClearHalfWidthM {
 		cleared = true
+	}
+	for _, sp := range f.cleared {
+		dx, dy := x-sp.x, y-sp.y
+		if dx*dx+dy*dy <= sp.r*sp.r {
+			cleared = true
+			break
+		}
 	}
 	if !cleared {
 		forest := valueNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM)

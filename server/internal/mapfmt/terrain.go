@@ -139,3 +139,59 @@ func validateCover(c *Cover) error {
 	}
 	return nil
 }
+
+// Диапазоны построек. Числа предварительные и отвергают заведомо невозможное.
+const (
+	MinBuildingSizeM   = 2.0
+	MaxBuildingSizeM   = 500.0
+	MinBuildingHeightM = 2.0
+	MaxBuildingHeightM = 200.0
+	MaxBuildings       = 100000
+)
+
+// validateObjects проверяет семантические объекты региона. Отказывает, не чинит.
+func (m *Map) validateObjects() error {
+	o := m.Objects
+	if o == nil {
+		return nil
+	}
+	if len(o.Buildings) > MaxBuildings {
+		return fmt.Errorf("mapfmt: объекты: построек больше %d", MaxBuildings)
+	}
+	seen := make(map[string]bool, len(o.Buildings))
+	for i := range o.Buildings {
+		b := &o.Buildings[i]
+		if err := ValidID("постройка", b.ID); err != nil {
+			return err
+		}
+		if seen[b.ID] {
+			return fmt.Errorf("mapfmt: постройка %q объявлена дважды", b.ID)
+		}
+		seen[b.ID] = true
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: x", b.ID), b.X); err != nil {
+			return err
+		}
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: y", b.ID), b.Y); err != nil {
+			return err
+		}
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: heading", b.ID), b.Heading); err != nil {
+			return err
+		}
+		// Диапазоны, а не знак: дом шириной 0.001 м проходит «строго
+		// положительно» и рисуется невидимой щепкой, а миллион таких кладёт
+		// клиент.
+		bad := func(what string, v, min, max float64) error {
+			return fmt.Errorf("mapfmt: постройка %q: %s %g вне [%g, %g] м", b.ID, what, v, min, max)
+		}
+		if !(b.Width >= MinBuildingSizeM && b.Width <= MaxBuildingSizeM) {
+			return bad("width", b.Width, MinBuildingSizeM, MaxBuildingSizeM)
+		}
+		if !(b.Depth >= MinBuildingSizeM && b.Depth <= MaxBuildingSizeM) {
+			return bad("depth", b.Depth, MinBuildingSizeM, MaxBuildingSizeM)
+		}
+		if !(b.Height >= MinBuildingHeightM && b.Height <= MaxBuildingHeightM) {
+			return bad("height", b.Height, MinBuildingHeightM, MaxBuildingHeightM)
+		}
+	}
+	return nil
+}

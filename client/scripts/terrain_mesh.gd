@@ -186,7 +186,22 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 				var cj := mini(j, cover_cells - 1)
 				var packed := cover[cj * cover_cells + ci]
 				base = cover_colour(packed >> 4, packed & 0x0f)
-			cols[k] = slope_colour(slope, base).srgb_to_linear()
+			# АЛЬФА ВЕРШИНЫ — ТРАВЯНИСТОСТЬ, а не прозрачность: ею шейдер земли
+			# смешивает тайл дернины с тайлом грунта. Она приходит ПОКРОВОМ
+			# (класс и сомкнутость), и в этом весь смысл: сервер говорит, где
+			# какой биом, клиент рисует. Собственного шума у шейдера нет.
+			var grassy := 0.0
+			if has_cover:
+				var pk := cover[mini(j, cover_cells - 1) * cover_cells + mini(i, cover_cells - 1)]
+				var cl := pk >> 4
+				if cl != SURFACE_SAND and cl != SURFACE_BARE_SOIL:
+					grassy = float(pk & 0x0f) / 15.0
+			# Крутизна смывает дернину: на откосе грунт обнажён. То же правило,
+			# что красит вершину, — оно поверх присланного, а не вместо него.
+			grassy *= 1.0 - clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO), 0.0, 1.0)
+			var c := slope_colour(slope, base).srgb_to_linear()
+			c.a = grassy
+			cols[k] = c
 			if slope >= SCARP_SLOPE_LO:
 				steep += 1
 

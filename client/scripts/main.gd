@@ -46,6 +46,16 @@ const BUSH_CHANCE := 0.055
 const BUSH_H_MIN := 0.9
 const BUSH_H_MAX := 2.6
 
+## Постройки: всё это решения художника, названные списком.
+const BUILDING_SINK := 1.5
+const ROOF_OVERHANG := 0.7
+const ROOF_THICKNESS := 0.6
+const C_ROOF := Color(0.38, 0.39, 0.41)
+const HOUSE_COLORS := [
+	Color(0.84, 0.83, 0.79), Color(0.74, 0.62, 0.64), Color(0.66, 0.72, 0.63),
+	Color(0.55, 0.50, 0.62), Color(0.82, 0.75, 0.60), Color(0.60, 0.66, 0.72),
+]
+
 const BUFFER_STOP_LENGTH_RATIO := 0.33
 ## Крыло галочки крестовины. Восемь метров годились СХЕМЕ СВЕРХУ, где галочка
 ## была единственным способом показать особенность; на виде с оси она стала
@@ -664,15 +674,12 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	terrain.name = "Terrain"
 	world.add_child(terrain)
 
-	var mat := StandardMaterial3D.new()
-	# Цвет берётся ИЗ ВЕРШИНЫ, а вершина красится по крутизне (правило и его
-	# обоснование — в шапке terrain_mesh.gd). Зелени по-прежнему нет: она
-	# означала бы траву, которой в контракте нет. Есть ровно два тона — ровное и
-	# крутое, — и оба выведены из присланных высот, как нормаль.
-	mat.albedo_color = Color.WHITE
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.95
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	# ЗЕМЛЯ РИСУЕТСЯ ШЕЙДЕРОМ, а не плоским цветом вершины: цвет из покрова даёт
+	# верный ОБЩИЙ план и ровно ничего с высоты человека — кадр заполняет один
+	# ровный зелёный. Шейдер добавляет зерно ближнего плана (дернина и грунт),
+	# и биом ему задаёт СЕРВЕР: класс и сомкнутость лежат в вершине, цвет в RGB,
+	# травянистость в альфе. Собственного шума у шейдера нет.
+	var mat := GroundLook.material()
 
 	var candidates := rule.candidates(axis, bbox)
 	var got := 0
@@ -780,6 +787,7 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	stats["cover_200"] = cover_got
 	stats["cover_204"] = cover_empty
 	stats["forest_200"] = forest_got
+	await _draw_buildings()
 	_draw_vegetation(ground, rule)
 	stats["chunks_by_level"] = by_level
 	stats["vertices"] = verts
@@ -922,6 +930,7 @@ func _hud_text() -> String:
 			stats.get("trees_drawn", 0), stats.get("trees_conifer", 0), stats.get("trees_broadleaf", 0),
 			stats.get("bushes_drawn", 0), stats.get("grass_drawn", 0)])
 		l.append("  лес: битовых карт получено %d (только уровень 0)" % stats.get("forest_200", 0))
+		l.append("  построек %d (место, габарит и ОТМЕТКА — с сервера; форма крыши и цвет — здесь)" % stats.get("buildings_drawn", 0))
 		l.append("  вершин %d, треугольников %d, высоты %.2f…%.2f м" % [
 			stats["vertices"], stats["triangles"], stats["z_min"], stats["z_max"]])
 		l.append("  крутизной покрашено %d вершин (%.1f %%), порог %s" % [
@@ -939,7 +948,7 @@ func _hud_text() -> String:
 	l.append("сервер говорит что и где, как это выглядит — дело рендерера.[/i]")
 	l.append("[i]где растёт лес и какой породы — прислано; МЕШ ели, куста и пучка,")
 	l.append("плотность рассева, небо, свет и дымка — клиентские, как и цвет класса.[/i]")
-	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: вода, здания,")
+	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: вода, локомотив,")
 	l.append("решётка стрелки (переводные брусья).[/i]")
 	l.append("[i]204 (чанка нет) оставлено дырой: base_z региона в манифест не приезжает.[/i]")
 	for s in (stats.get("sleepers_skipped", []) as Array):
@@ -1161,3 +1170,95 @@ func _multimesh(parent: Node3D, name_: String, mesh: ArrayMesh, xforms: Array[Tr
 	mi.multimesh = mm
 	mi.material_override = mat
 	parent.add_child(mi)
+
+
+## _draw_buildings — постройки из третьего ресурса региона.
+##
+## # Что прислано и что решено здесь
+##
+## Место, поворот, габарит и ОТМЕТКА — сервер. Отметку он считает сам и везёт
+## явно: направление авторитета тут обратное пути — путь диктует отметку земле,
+## а дом её принимает. Считать её на клиенте нельзя, и это замерено: расхождение
+## отметки между уровнем 0 и уровнем 4 в среднем 0.39 м и до 2.30 м, то есть дом
+## висел бы или тонул в зависимости от того, какой чанк успел загрузиться.
+##
+## Форма крыши, цвет стен и напуск карниза — РЕНДЕРЕР. По той же границе, по
+## которой клиент строит ель: сервер сказал «здесь дом 18 × 21 × 14», из каких
+## треугольников он сложен — не факт о мире.
+func _draw_buildings() -> void:
+	# Ревизия берётся ИЗ МАНИФЕСТА, а не из stats: в stats она лежит значением
+	# JSON (float), и int() от null дал бы ноль, то есть запрос к
+	# /revisions/0/objects и честный 404 не по той причине.
+	var rev := int(float(stats.get("revision", -1.0)))
+	if rev <= 0:
+		_fail("объекты региона: манифест не назвал ревизию — спрашивать нечего")
+		return
+	var r: Dictionary = await net.fetch_json("/regions/%s/revisions/%d/objects" % [region, rev])
+	if not r["ok"]:
+		_fail("объекты региона: %s" % r["error"])
+		return
+	var body: Dictionary = r["data"]
+	var list: Array = body.get("buildings", []) as Array
+	if list.is_empty():
+		stats["buildings_drawn"] = 0
+		return
+
+	var node := Node3D.new()
+	node.name = "Buildings"
+	world.add_child(node)
+
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var cols := PackedColorArray()
+	var idx := PackedInt32Array()
+	var drawn := 0
+	for b_raw in list:
+		var b: Dictionary = b_raw as Dictionary
+		var w := float(b.get("width", 0.0)) * 0.5
+		var d := float(b.get("depth", 0.0)) * 0.5
+		var h := float(b.get("height", 0.0))
+		if w <= 0.0 or d <= 0.0 or h <= 0.0:
+			continue
+		var x := float(b.get("x", 0.0))
+		var y := float(b.get("y", 0.0))
+		var z := float(b.get("z", 0.0))
+		var a := float(b.get("heading", 0.0))
+		var fwd := Vector2(cos(a), sin(a))
+		# Цвет стены — из хеша ИМЕНИ дома, а не из порядка в списке: порядок
+		# может измениться, а дом останется тем же, и перекрашивать его при
+		# пересортировке было бы враньём про постоянство места.
+		var col: Color = HOUSE_COLORS[abs(hash(String(b.get("id", "")))) % HOUSE_COLORS.size()]
+		# Заглубление: дом стоит НА земле, но её отметка взята в одной точке, а
+		# пятно у дома двадцать метров. Опустить коробку на BUILDING_SINK — то
+		# же лечение, что у спайка, и названо оно там же: дешевле, чем сажать
+		# каждый угол отдельно, и незаметно, пока участок не на склоне.
+		_house(verts, norms, cols, idx, x, y, z - BUILDING_SINK, fwd, w, d, h, col)
+		drawn += 1
+
+	if idx.is_empty():
+		return
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = verts
+	arrays[Mesh.ARRAY_NORMAL] = norms
+	arrays[Mesh.ARRAY_COLOR] = cols
+	arrays[Mesh.ARRAY_INDEX] = idx
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	var mi := MeshInstance3D.new()
+	mi.name = "Houses"
+	mi.mesh = mesh
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.9
+	mi.material_override = mat
+	node.add_child(mi)
+	stats["buildings_drawn"] = drawn
+
+
+## _house — коробка стен плюс плита крыши с напуском.
+func _house(v: PackedVector3Array, n: PackedVector3Array, c: PackedColorArray, idx: PackedInt32Array,
+		x: float, y: float, z: float, fwd: Vector2, hw: float, hd: float, h: float, wall: Color) -> void:
+	TrackView.box_into(v, n, c, idx, x, y, fwd, hd, hw, z, z + h, wall)
+	TrackView.box_into(v, n, c, idx, x, y, fwd, hd + ROOF_OVERHANG, hw + ROOF_OVERHANG,
+		z + h, z + h + ROOF_THICKNESS, C_ROOF)

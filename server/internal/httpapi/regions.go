@@ -28,6 +28,7 @@ type regionsRouter struct {
 	manifest http.Handler
 	network  http.Handler
 	chunks   http.Handler
+	objects  http.Handler
 }
 
 // NewRegionsHandler собирает корень /regions/ из готовых подручек.
@@ -36,6 +37,7 @@ type regionsRouter struct {
 //
 //	GET /regions/{region}                            — манифест региона
 //	GET /regions/{region}/revisions/{n}/network      — сеть региона (путь)
+//	GET /regions/{region}/revisions/{n}/objects            — постройки региона
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}         — рельеф, высоты
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/cover   — покров той же клетки
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/forest  — лес, только уровень 0
@@ -44,8 +46,8 @@ type regionsRouter struct {
 // /maps/{id}/revisions/{n}/geometry, рельеф на /regions/{id}/chunks/…, а
 // связывало их соглашение `region := m.MapID` из одной строки
 // worldgen.Bootstrap — то есть знание, которого у клиента нет и быть не должно.
-func NewRegionsHandler(manifest, network, chunks http.Handler) http.Handler {
-	return &regionsRouter{manifest: manifest, network: network, chunks: chunks}
+func NewRegionsHandler(manifest, network, chunks, objects http.Handler) http.Handler {
+	return &regionsRouter{manifest: manifest, network: network, chunks: chunks, objects: objects}
 }
 
 func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,6 +63,8 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.manifest.ServeHTTP(w, r)
 	case len(parts) == 5 && parts[2] == "revisions" && parts[4] == "network":
 		h.network.ServeHTTP(w, r)
+	case len(parts) == 5 && parts[2] == "revisions" && parts[4] == "objects":
+		h.objects.ServeHTTP(w, r)
 	case len(parts) == 6 && parts[2] == "chunks":
 		h.chunks.ServeHTTP(w, r)
 	// Покров — ХВОСТ адреса чанка, а не свой ресурс: клетка одна, и два пути к

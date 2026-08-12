@@ -34,6 +34,7 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		NewRegionManifestHandler(world, maps),
 		NewNetworkHandler(maps),
 		NewChunksHandler(world),
+		NewObjectsHandler(maps),
 	)
 	return h, st, world
 }
