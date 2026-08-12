@@ -10,12 +10,23 @@
 ## `features`. Нет цепочки до типа — нет и вещи: пустой список, а не подстановка
 ## от соседа.
 ##
-## Чего здесь нет и не будет, пока контракт молчит: ВСЯКОЙ ВЕРТИКАЛИ. Толщина
-## призмы, высота шпалы, профиль рельса, верх плиты платформы не выводятся ни из
-## чего, потому что не сказано даже, от чего отсчитывается `z` элемента — от
-## головки рельса, от верха призмы или от бровки (разбор 2026-08-12, §3.4).
-## Пока это не названо, неизвестно даже, вверх откладывать или вниз. Поэтому всё
-## плоское, на отметке оси, и об этом написано на экране.
+## ВЕРТИКАЛЬ ПРИЕХАЛА 2026-08-12, и вместе с ней — то, чего не хватало, чтобы её
+## применить: `z` объявлен ПОВЕРХНОСТЬЮ КАТАНИЯ (контракт отрисовки, редакция 6,
+## §2). Отсюда единственное правило, по которому здесь считается всё вертикальное:
+##
+##     от `z` откладывают ВНИЗ, и первым идёт рельс.
+##
+##     верх головки        z
+##     подошва рельса      z − rail.height
+##     верх шпалы          то же
+##     низ шпалы           z − rail.height − sleeper.height
+##     верх призмы         низ шпалы + ballast.crib_depth
+##     основная площадка   z − formation_to_rail_top
+##
+## `formation_to_rail_top` берётся ПРИСЛАННЫМ, а не складывается здесь из трёх
+## слагаемых: сервер считает ту же сумму для земляных работ, и два независимых
+## сложения одного числа разойдутся округлением — рельеф встанет не там, где низ
+## призмы.
 class_name TrackBuild
 extends RefCounted
 
@@ -30,15 +41,28 @@ extends RefCounted
 const STATION_EPS := 1e-9
 
 
-## Шпала: поза центра и два размера из типа пути. Высоты нет — см. шапку.
+## Шпала: поза центра и три размера из типа пути.
 class Sleeper:
 	var pose: TrackGeom.AxisPoint
 	## Поперёк пути (`sleeper.length`) и вдоль (`sleeper.width`) — именно так их
-	## называет render-contract §3, и перепутать их значит развернуть решётку.
+	## называет контракт §3, и перепутать их значит развернуть решётку.
 	var length_m: float
 	var width_m: float
+	## Высота шпалы. −1 значит «не прислана» — тогда шпала рисуется плоской, а не
+	## коробкой выдуманной толщины.
+	var height_m: float = -1.0
+	## Высота рельса: шпала лежит НЕ на отметке оси, а на высоту рельса ниже.
+	var rail_height_m: float = -1.0
 	var run_id: String
 	var element_id: String
+
+	## top_z / bottom_z — верх и низ шпалы. Оба отсчитаны вниз от поверхности
+	## катания, потому что именно ею объявлен `z`.
+	func top_z() -> float:
+		return pose.z - maxf(rail_height_m, 0.0)
+
+	func bottom_z() -> float:
+		return top_z() - maxf(height_m, 0.0)
 
 
 ## Покрытый участок: кусок элемента, за который отвечает один строительный
@@ -53,9 +77,39 @@ class Span:
 	var run_id: String
 	var type_id: String
 	## −1 значит «не прислано». Ноль значил бы «прислан ноль», а это разное.
+	##
+	## Различие не педантизм: ballast.crib_depth = 0 — законное значение (призма
+	## вровень с постелью шпалы), и спутать его с «не прислали» значило бы
+	## нарисовать призму там, где её высоту не объявляли.
 	var gauge_m: float = -1.0
 	var ballast_half_width_m: float = -1.0
+	var rail_height_m: float = -1.0
+	var rail_head_width_m: float = -1.0
+	var sleeper_height_m: float = -1.0
+	var ballast_depth_m: float = -1.0
+	var ballast_crib_depth_m: float = -1.0
+	var ballast_side_slope: float = -1.0
+	var formation_to_rail_top_m: float = -1.0
+	## Покрыт ли участок строительным прогоном. У прохода стрелки false: тип у
+	## него есть (role.type), а run'а нет и быть не может — решётка устройства
+	## нерегулярна (контракт §6). Отсюда: призма и нитки на ветви рисуются, шпалы
+	## нет, и это состояние данных, а не недоделка клиента.
+	var from_run: bool = true
 	var axis: Array[TrackGeom.AxisPoint] = []
+
+	## has_prism — хватает ли присланного, чтобы построить призму телом.
+	##
+	## Все пять чисел разом, а не «сколько есть»: призма из четырёх чисел с
+	## подставленным пятым — выдумка, отличающаяся от честной только тем, что её
+	## не видно.
+	func has_prism() -> bool:
+		return (ballast_half_width_m > 0.0 and ballast_depth_m >= 0.0
+			and ballast_crib_depth_m >= 0.0 and ballast_side_slope > 0.0
+			and formation_to_rail_top_m > 0.0)
+
+	## has_rail_body — хватает ли на рельс телом.
+	func has_rail_body() -> bool:
+		return gauge_m > 0.0 and rail_height_m > 0.0 and rail_head_width_m > 0.0
 
 	## threads — ровно две нитки на ±gauge/2 в плановых (x, y, z отметки оси).
 	##
@@ -79,10 +133,32 @@ class PlatformStrip:
 	var side: String
 	var offset_m: float
 	var width_m: float
+	## Верх плиты НАД ПОВЕРХНОСТЬЮ КАТАНИЯ и толщина плиты. −1 значит «не
+	## прислано» — тогда платформа остаётся полосой на отметке оси.
+	var height_m: float = -1.0
+	var slab_thickness_m: float = -1.0
 	## Кромки: near — та, что у пути (на `offset`), far — дальняя
-	## (на `offset + width`). Обе на отметке ОСИ: высота верха плиты неизвестна.
+	## (на `offset + width`). z у обеих — отметка ВЕРХА ПЛИТЫ, если высоту
+	## прислали, иначе отметка оси.
 	var near: PackedVector3Array = PackedVector3Array()
 	var far: PackedVector3Array = PackedVector3Array()
+
+	func has_slab() -> bool:
+		return height_m > 0.0 and slab_thickness_m > 0.0
+
+
+## Тупиковый упор: точка на оси и габарит.
+##
+## Появился в проводе 2026-08-12. До того упоров не отдавали вовсе, и снесённый
+## спайк выводил их ИЗ ТОПОЛОГИИ сам — то есть рисовал то, чего ему не присылали.
+## Этому клиенту такое запрещено, поэтому до появления `structures` вида
+## `buffer_stop` тупики просто обрывались ничем.
+class BufferStop:
+	var id: String
+	var element_id: String
+	var pose: TrackGeom.AxisPoint
+	var height_m: float
+	var width_m: float
 
 
 ## Крестовина: точка и обе касательные, всё присланное.
@@ -195,6 +271,12 @@ static func sleepers(network: Dictionary, by_id: Dictionary) -> Dictionary:
 		var pitch := float(sleeper["pitch"])
 		var s_len := float(sleeper["length"])
 		var s_wid := float(sleeper["width"])
+		# Высота шпалы и высота рельса — отдельно от трёх обязательных: без них
+		# шпала рисуется плоской, но раскладка от этого не страдает, и терять
+		# из-за них всю решётку было бы хуже, чем нарисовать её без толщины.
+		var s_hgt := float(sleeper.get("height", -1.0))
+		var rail: Dictionary = (types[type_id] as Dictionary).get("rail", {}) as Dictionary
+		var r_hgt := float(rail.get("height", -1.0))
 		var phase := float(run.get("phase", 0.0))
 
 		var spans := spans_of_run(run)
@@ -220,6 +302,8 @@ static func sleepers(network: Dictionary, by_id: Dictionary) -> Dictionary:
 			s.pose = el.pose_at(float(addr["u"]))
 			s.length_m = s_len
 			s.width_m = s_wid
+			s.height_m = s_hgt
+			s.rail_height_m = r_hgt
 			s.run_id = run_id
 			s.element_id = eid
 			list.append(s)
@@ -287,22 +371,77 @@ static func covered_spans(network: Dictionary, by_id: Dictionary, max_seg_m: flo
 			span.run_id = String(run.get("id", ""))
 			span.type_id = type_id
 			span.axis = axis
-			if t.has("gauge"):
-				span.gauge_m = float(t["gauge"])
-			if ballast.has("half_width"):
-				span.ballast_half_width_m = float(ballast["half_width"])
+			_fill_type(span, t)
 			out.append(span)
+
+	# Проходы стрелок. Run'ами они не покрываются по правилу — решётка
+	# устройства нерегулярна, — но ТИП у них есть с 2026-08-12: он приезжает в
+	# role.type (контракт §6). До того у ветвей не было ни одного размера, и они
+	# рисовались ниткой; теперь у них есть призма и колея, а шпал по-прежнему
+	# нет, потому что рецепта решётки устройства в контракте нет.
+	for eid in by_id:
+		var el: TrackGeom.Element = by_id[eid]
+		if el.role.is_empty():
+			continue
+		var dev_type := String(el.role.get("type", ""))
+		if dev_type == "" or not types.has(dev_type):
+			continue
+		var axis_all := el.sample_range(0.0, el.length_m, max_seg_m, max_ang_rad)
+		if axis_all.size() < 2:
+			continue
+		var dspan := Span.new()
+		dspan.element_id = eid
+		dspan.run_id = ""
+		dspan.type_id = dev_type
+		dspan.from_run = false
+		dspan.axis = axis_all
+		_fill_type(dspan, types[dev_type] as Dictionary)
+		out.append(dspan)
 	return out
 
 
-## offset_line — полилиния, отложенная по левой нормали на d (со знаком).
-static func offset_line(axis: Array[TrackGeom.AxisPoint], d: float) -> PackedVector3Array:
+## _fill_type — перенос чисел типа в участок. Одной функцией на оба источника
+## (run и устройство): два места, читающие один тип, разошлись бы в том, какое
+## поле считать обязательным.
+static func _fill_type(span: Span, t: Dictionary) -> void:
+	var ballast: Dictionary = t.get("ballast", {}) as Dictionary
+	var rail: Dictionary = t.get("rail", {}) as Dictionary
+	var sleeper: Dictionary = t.get("sleeper", {}) as Dictionary
+	if t.has("gauge"):
+		span.gauge_m = float(t["gauge"])
+	if ballast.has("half_width"):
+		span.ballast_half_width_m = float(ballast["half_width"])
+	if ballast.has("depth"):
+		span.ballast_depth_m = float(ballast["depth"])
+	if ballast.has("crib_depth"):
+		span.ballast_crib_depth_m = float(ballast["crib_depth"])
+	if ballast.has("side_slope"):
+		span.ballast_side_slope = float(ballast["side_slope"])
+	if rail.has("height"):
+		span.rail_height_m = float(rail["height"])
+	if rail.has("head_width"):
+		span.rail_head_width_m = float(rail["head_width"])
+	if sleeper.has("height"):
+		span.sleeper_height_m = float(sleeper["height"])
+	# Сумма берётся ПРИСЛАННОЙ, а не складывается из трёх слагаемых: ту же сумму
+	# считает сервер для земляных работ, и два сложения разойдутся округлением.
+	if t.has("formation_to_rail_top"):
+		span.formation_to_rail_top_m = float(t["formation_to_rail_top"])
+
+
+## offset_line — полилиния, отложенная по левой нормали на d (со знаком) и
+## поднятая на dz над отметкой оси.
+##
+## Подъём отдельным параметром, а не правкой z у вызывающего: смещение поперёк и
+## смещение по высоте — разные вещи, и складывать их в одном числе значило бы
+## завести координату, у которой два смысла.
+static func offset_line(axis: Array[TrackGeom.AxisPoint], d: float, dz: float = 0.0) -> PackedVector3Array:
 	var out := PackedVector3Array()
 	out.resize(axis.size())
 	for k in axis.size():
 		var p: TrackGeom.AxisPoint = axis[k]
 		var n := p.left()
-		out[k] = Vector3(p.x + n.x * d, p.y + n.y * d, p.z)
+		out[k] = Vector3(p.x + n.x * d, p.y + n.y * d, p.z + dz)
 	return out
 
 
@@ -319,6 +458,11 @@ static func platforms(network: Dictionary, by_id: Dictionary, max_seg_m: float, 
 		var st: Dictionary = s_raw as Dictionary
 		var sid := String(st.get("id", ""))
 		var kind := String(st.get("kind", ""))
+		if kind == "buffer_stop":
+			# Упоры собираются отдельной функцией: у них точечный спан и габарит,
+			# а не две кромки вдоль. Здесь они пропускаются молча — молча именно
+			# потому, что их НЕ пропустили, а обработали в другом месте.
+			continue
 		if kind != "platform":
 			# Неизвестный вид сооружения НЕ рисуется приближением: его форма не
 			# описана, и полоса «на всякий случай» была бы выдумкой.
@@ -354,9 +498,51 @@ static func platforms(network: Dictionary, by_id: Dictionary, max_seg_m: float, 
 			strip.side = side
 			strip.offset_m = offset
 			strip.width_m = width
-			strip.near = offset_line(axis, sgn * offset)
-			strip.far = offset_line(axis, sgn * (offset + width))
+			# Высота верха плиты — НАД ПОВЕРХНОСТЬЮ КАТАНИЯ, поэтому прибавляется
+			# к отметке оси, а не вычитается. Единственное число вертикали,
+			# которое откладывают вверх: платформа выше рельса, всё остальное
+			# ниже.
+			strip.height_m = float(st.get("height", -1.0))
+			strip.slab_thickness_m = float(st.get("slab_thickness", -1.0))
+			var lift := strip.height_m if strip.height_m > 0.0 else 0.0
+			strip.near = offset_line(axis, sgn * offset, lift)
+			strip.far = offset_line(axis, sgn * (offset + width), lift)
 			out.append(strip)
+	return {"list": out, "skipped": skipped}
+
+
+## buffer_stops — упоры из `structures`.
+##
+## Спан упора ТОЧЕЧНЫЙ (from == to) — это проверяет валидатор сервера, и клиент
+## на проверку опирается, а не повторяет её: поза берётся в точке `from`.
+static func buffer_stops(network: Dictionary, by_id: Dictionary) -> Dictionary:
+	var out: Array[BufferStop] = []
+	var skipped: Array[String] = []
+	for s_raw in (network.get("structures", []) as Array):
+		var st: Dictionary = s_raw as Dictionary
+		if String(st.get("kind", "")) != "buffer_stop":
+			continue
+		var sid := String(st.get("id", ""))
+		if not (st.has("height") and st.has("width")):
+			skipped.append("%s: нет height/width — габарита упора не прислали" % sid)
+			continue
+		var spans: Array = st.get("spans", []) as Array
+		if spans.is_empty():
+			skipped.append("%s: спан пуст — где упор, неизвестно" % sid)
+			continue
+		var sp: Dictionary = spans[0] as Dictionary
+		var eid := String(sp.get("element", ""))
+		if not by_id.has(eid):
+			skipped.append("%s: спан ссылается на элемент %s, которого в сети нет" % [sid, eid])
+			continue
+		var el: TrackGeom.Element = by_id[eid]
+		var bs := BufferStop.new()
+		bs.id = sid
+		bs.element_id = eid
+		bs.pose = el.pose_at(float(sp.get("from", 0.0)))
+		bs.height_m = float(st["height"])
+		bs.width_m = float(st["width"])
+		out.append(bs)
 	return {"list": out, "skipped": skipped}
 
 

@@ -237,6 +237,85 @@ func _check_construction(network: Dictionary, elements: Array[TrackGeom.Element]
 			uncovered.append(el.id)
 	_ok("непокрытые элементы названы и остались нитью", true, str(uncovered))
 
+	# ШПАЛА ЛЕЖИТ НА ПРИЗМЕ, А НЕ НА ОТМЕТКЕ ОСИ. Датум z — поверхность катания
+	# (контракт редакции 6 §2), значит верх шпалы ровно на высоту рельса ниже.
+	if not sleepers.is_empty():
+		var s1: TrackBuild.Sleeper = sleepers[0]
+		var t1: Dictionary = types.values()[0] as Dictionary
+		var rail1: Dictionary = t1.get("rail", {}) as Dictionary
+		var slp1: Dictionary = t1.get("sleeper", {}) as Dictionary
+		if rail1.has("height") and slp1.has("height"):
+			var want_top := s1.pose.z - float(rail1["height"])
+			var want_bot := want_top - float(slp1["height"])
+			_ok("верх шпалы = z − rail.height", absf(s1.top_z() - want_top) < 1e-9,
+				"%.4f при отметке оси %.4f" % [s1.top_z(), s1.pose.z])
+			_ok("низ шпалы = верх − sleeper.height", absf(s1.bottom_z() - want_bot) < 1e-9,
+				"толщина %.3f м" % (s1.top_z() - s1.bottom_z()))
+
+	# ВЕРТИКАЛЬНЫЙ СТЕК СХОДИТСЯ САМ С СОБОЙ. formation_to_rail_top —
+	# производное поле, и контракт §3.2 обещает, что оно не расходится со
+	# слагаемыми. Обещание проверяется, а не принимается на слово: расхождение
+	# означало бы, что земля сервера и призма клиента встанут на разной отметке.
+	for tid in types:
+		var t: Dictionary = types[tid]
+		var rl: Dictionary = t.get("rail", {}) as Dictionary
+		var sp_t: Dictionary = t.get("sleeper", {}) as Dictionary
+		var bl: Dictionary = t.get("ballast", {}) as Dictionary
+		if not (t.has("formation_to_rail_top") and rl.has("height") and sp_t.has("height") and bl.has("depth")):
+			continue
+		var sum := float(bl["depth"]) + float(sp_t["height"]) + float(rl["height"])
+		_ok("тип %s: formation_to_rail_top = depth + sleeper.height + rail.height" % tid,
+			absf(float(t["formation_to_rail_top"]) - sum) < 1e-9,
+			"%.4f м против суммы %.4f м" % [float(t["formation_to_rail_top"]), sum])
+		# Ящик нельзя засыпать выше верха шпалы — это отказ валидатора сервера,
+		# и клиент проверяет, что отказ работает: призма выше шпалы означала бы
+		# закопанную решётку.
+		if bl.has("crib_depth"):
+			_ok("тип %s: crib_depth не выше sleeper.height" % tid,
+				float(bl["crib_depth"]) <= float(sp_t["height"]) + 1e-12,
+				"%.3f при высоте шпалы %.3f" % [float(bl["crib_depth"]), float(sp_t["height"])])
+
+	# ПРИЗМА СТРОИТСЯ У ВСЕХ УЧАСТКОВ, включая ветви стрелок. До того, как тип
+	# устройства поехал в провод, ветви не имели ни одного размера и рисовались
+	# ниткой; проверка ловит откат этого.
+	var no_prism: Array[String] = []
+	for sp in spans:
+		if not sp.has_prism():
+			no_prism.append(sp.element_id)
+	_ok("призма строится у всех покрытых участков", no_prism.is_empty(), str(no_prism))
+
+	var no_rail: Array[String] = []
+	for sp in spans:
+		if not sp.has_rail_body():
+			no_rail.append(sp.element_id)
+	_ok("рельс телом у всех покрытых участков", no_rail.is_empty(), str(no_rail))
+
+	# УПОРЫ. Их не было в проводе до 2026-08-12, и спайк выводил их из топологии
+	# сам. Проверяем, что теперь они ПРИСЛАНЫ и разобраны, а не выведены.
+	var bs := TrackBuild.buffer_stops(network, by_id)
+	var stops: Array[TrackBuild.BufferStop] = bs["list"]
+	var declared := 0
+	for st_raw in (network.get("structures", []) as Array):
+		if String((st_raw as Dictionary).get("kind", "")) == "buffer_stop":
+			declared += 1
+	_ok("упоров разобрано столько, сколько прислано", stops.size() == declared,
+		"%d из %d" % [stops.size(), declared])
+	_ok("упоры ничего не пропустили", (bs["skipped"] as Array).is_empty(), str(bs["skipped"]))
+
+	# ПРОФИЛЬ. Сумма длин цепочки обязана совпадать с длиной элемента по плану,
+	# иначе z(u) определена не всюду — а «не всюду определённая отметка» это
+	# отказ, а не особенность (контракт §5).
+	var prof_bad: Array[String] = []
+	for el in elements:
+		if el.profile.is_empty():
+			continue
+		var total := 0.0
+		for seg in el.profile:
+			total += float(seg["length"])
+		if absf(total - el.length_m) > 1e-6:
+			prof_bad.append("%s: цепочка %.6f м против плана %.6f м" % [el.id, total, el.length_m])
+	_ok("длина цепочки профиля = длине по плану", prof_bad.is_empty(), str(prof_bad))
+
 	# НИТКИ. Ровно две на участок, ровно на ±gauge/2 — форма предписана
 	# render-contract §3, и это единственная её проверка без окна.
 	var pairs := 0

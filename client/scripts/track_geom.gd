@@ -83,7 +83,16 @@ class Element:
 	var length_m: float = 0.0
 	var length_declared_m: float = 0.0
 	var start_z: float = 0.0
+	## Уклон ДО первого звена профиля. При пустой цепочке он один описывает
+	## элемент целиком — это прежнее поведение, и оно не сломано.
 	var slope: float = 0.0
+	## Цепочка вертикального профиля: [{length, s0, s1}], уклоны безразмерные.
+	##
+	## До 2026-08-12 её не было в проводе вовсе, и отметка считалась линейно —
+	## start_z + slope·u. Контракт редакции 6 §5 назвал это тем, чем оно было:
+	## не «нейтральностью в плане», а потерей на последнем шаге. Цепочка ЕСТЬ в
+	## карте, компилятор её разбирает и терял при сериализации.
+	var profile: Array[Dictionary] = []
 	## Ширина отсыпки. НЕТ ЗНАЧЕНИЯ ПО УМОЛЧАНИЮ: если сервер не связал элемент
 	## ни с одним типом пути, ширина остаётся отрицательной, и элемент рисуется
 	## нитью в один пиксель — видимым признаком того, что размера не прислали.
@@ -117,7 +126,36 @@ class Element:
 				y -= (cos(nh) - cos(h)) / p.curvature
 				h = nh
 			rest -= s
-		return AxisPoint.new(x, y, start_z + slope * uu, h, uu)
+		return AxisPoint.new(x, y, start_z + rise_at(uu), h, uu)
+
+	## rise_at — подъём от start_z до точки u по цепочке профиля.
+	##
+	## Звено с постоянным уклоном даёт прямую, звено с меняющимся — ПАРАБОЛУ:
+	## уклон меняется по u линейно, значит отметка — интеграл линейной функции.
+	## Формула на звене длиной L с уклонами s0 и s1, при локальном t:
+	##
+	##     rise = s0·t + (s1 − s0)·t² / (2L)
+	##
+	## Пустая цепочка даёт прежний линейный расчёт. Это не подстановка вместо
+	## данных: сервер шлёт цепочку всегда (плоский элемент приезжает одним звеном
+	## нулевого уклона), и пустой она бывает только у ответа старого сервера.
+	func rise_at(uu: float) -> float:
+		if profile.is_empty():
+			return slope * uu
+		var rise := 0.0
+		var rest := uu
+		for seg in profile:
+			if rest <= 0.0:
+				break
+			var seg_len := float(seg["length"])
+			if seg_len <= 0.0:
+				continue
+			var t := minf(rest, seg_len)
+			var s0 := float(seg["s0"])
+			var s1 := float(seg["s1"])
+			rise += s0 * t + (s1 - s0) * t * t / (2.0 * seg_len)
+			rest -= t
+		return rise
 
 	## sample_range — точки оси на отрезке [u0, u1] с заданной подробностью.
 	##
@@ -164,6 +202,28 @@ static func tessellate_element(el: Dictionary, max_seg_m: float, max_ang_rad: fl
 	out.start_heading = float(plan.get("heading", 0.0))
 	out.start_z = float(start.get("z", 0.0))
 	out.slope = float(start.get("slope", 0.0))
+	# Цепочка профиля разворачивается в пару уклонов на звено — той же формой,
+	# какой её держит компилятор сервера. Уклоны в проводе в ПРОМИЛЛЕ (как в
+	# карте), здесь переводятся в безразмерные один раз и в одном месте.
+	var running_slope := out.slope
+	for v_raw in (el.get("profile", []) as Array):
+		var v: Dictionary = v_raw as Dictionary
+		var seg_len := float(v.get("length", 0.0))
+		var kind := String(v.get("kind", ""))
+		var s0 := running_slope
+		var s1 := running_slope
+		if kind == "grade":
+			s0 = float(v.get("slope_permille", 0.0)) / 1000.0
+			s1 = s0
+		elif kind == "vertical_curve":
+			s1 = float(v.get("end_slope_permille", 0.0)) / 1000.0
+		else:
+			# Неизвестное звено НЕ пропускается молча: пропуск сдвинул бы весь
+			# оставшийся профиль по u, и отметка разошлась бы с серверной тем
+			# сильнее, чем дальше от начала. Цепочка обрывается, и это видно.
+			break
+		out.profile.append({"length": seg_len, "s0": s0, "s1": s1})
+		running_slope = s1
 	out.role = (el.get("role", {}) as Dictionary) if el.has("role") else {}
 
 	for p_raw in (el.get("primitives", []) as Array):

@@ -15,19 +15,23 @@
 ## Так на затравке ST_A ветви стрелок (SW1:*, SW2:*) остаются нитью: ни один
 ## construction_run их не покрывает. Это не дефект клиента, а состояние данных.
 ##
-## ВСЁ ПЛОСКОЕ И НА ОТМЕТКЕ ОСИ. Ни балласт телом, ни шпала коробкой, ни рельс
-## профилем, ни плита платформы толщиной не рисуются, и это не лень: в контракте
-## не сказано, от чего отсчитывается `z` элемента — от головки рельса, от верха
-## призмы или от бровки земляного полотна. Пока это не названо, неизвестно даже,
-## вверх откладывать высоту или вниз, и любое вертикальное число было бы
-## выдумкой того же рода, что снесённые восемь промилле продольного профиля.
+## ПУТЬ СТАЛ ТЕЛОМ 2026-08-12. До того здесь всё было плоским и на отметке оси —
+## не по лени, а потому что контракт не говорил, от чего эта отметка считается.
+## Редакция 6 §2 назвала её ПОВЕРХНОСТЬЮ КАТАНИЯ, и вертикаль стала считаемой.
 ##
-## Глубина: ось пути лежит ровно на обработанной поверхности рельефа (сервер
-## сажает землю на отметку оси), поэтому всё нарисованное и меш рельефа
-## совпадают в точности и дерутся за z-буфер. Лечится это отключением ПРОВЕРКИ
-## ГЛУБИНЫ у материалов пути, а не подъёмом пути на «маленькую» высоту: подъём
-## был бы сдвигом координаты, то есть данными, которых никто не присылал.
-## Порядок слоёв задаётся render_priority — он экранный и миру не принадлежит.
+## Глубина: раньше ось пути лежала ровно на обработанной поверхности рельефа
+## (сервер сажал землю на отметку оси), всё дралось за z-буфер, и лечилось это
+## отключением ПРОВЕРКИ ГЛУБИНЫ. Теперь земля лежит на `formation_to_rail_top`
+## ниже — на затравке это 0.68 м, — и телам драться не с чем: они занимают ровно
+## тот объём, который раньше был щелью. Поэтому solid_material проверку глубины
+## НЕ отключает.
+##
+## Отключённой она осталась у ЛИНИЙ — нитей и галочек крестовин: те по-прежнему
+## лежат на отметке оси, потому что у них нет толщины ни в каком смысле, и
+## поднимать их некуда.
+##
+## Порядок слоёв (render_priority) сохранён для плоских слоёв; телам он не нужен
+## и не назначается — их разводит сама геометрия.
 class_name TrackView
 extends RefCounted
 
@@ -38,6 +42,57 @@ const PRIO_SLEEPER := 3
 const PRIO_RAIL := 4
 const PRIO_LINE := 5
 const PRIO_FROG := 6
+
+
+## prism_mesh — балластная призма ТЕЛОМ: трапеция, протянутая вдоль оси.
+##
+## Все пять чисел приезжают с сервера, ни одно не выведено:
+##
+##   верх призмы     z − rail_height − sleeper_height + crib_depth
+##   низ призмы      z − formation_to_rail_top
+##   полуширина верха   ballast.half_width
+##   полуширина низа    half_width + side_slope · высота призмы
+##
+## Заложение откоса — «метров по горизонтали на метр по вертикали», ровно как у
+## земляных работ: одна единица на два откоса в одной карте заведена нарочно
+## (контракт §3), потому что две единицы у одноимённых величин — заготовленная
+## ошибка.
+##
+## Строится четырьмя полосами (верх, два откоса, низ), а не замкнутым объёмом с
+## торцами: торцы на стыке соседних участков смотрели бы внутрь друг друга, и
+## их пришлось бы гасить по признаку смежности, которого у клиента нет. Цена
+## названа: у одиночного участка призма открыта с концов, и в виде вплотную это
+## видно.
+static func prism_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if not span.has_prism() or span.axis.size() < 2:
+		return null
+	var n := span.axis.size()
+	var top_hw := span.ballast_half_width_m
+	var prism_h := span.ballast_depth_m + span.ballast_crib_depth_m
+	var bot_hw := top_hw + span.ballast_side_slope * prism_h
+
+	var top_l := PackedVector3Array(); top_l.resize(n)
+	var top_r := PackedVector3Array(); top_r.resize(n)
+	var bot_l := PackedVector3Array(); bot_l.resize(n)
+	var bot_r := PackedVector3Array(); bot_r.resize(n)
+	for k in n:
+		var p: TrackGeom.AxisPoint = span.axis[k]
+		var nl := p.left()
+		var z_top := p.z - span.rail_height_m - span.sleeper_height_m + span.ballast_crib_depth_m
+		var z_bot := p.z - span.formation_to_rail_top_m
+		top_l[k] = TerrainMesh.to_godot(p.x + nl.x * top_hw, p.y + nl.y * top_hw, z_top)
+		top_r[k] = TerrainMesh.to_godot(p.x - nl.x * top_hw, p.y - nl.y * top_hw, z_top)
+		bot_l[k] = TerrainMesh.to_godot(p.x + nl.x * bot_hw, p.y + nl.y * bot_hw, z_bot)
+		bot_r[k] = TerrainMesh.to_godot(p.x - nl.x * bot_hw, p.y - nl.y * bot_hw, z_bot)
+
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	_quad_strip(verts, norms, idx, top_r, top_l)
+	_quad_strip(verts, norms, idx, top_l, bot_l)
+	_quad_strip(verts, norms, idx, bot_r, top_r)
+	_quad_strip(verts, norms, idx, bot_l, bot_r)
+	return _mesh(verts, norms, idx)
 
 
 ## ribbon_mesh — лента постоянной полуширины вдоль оси.
@@ -98,30 +153,122 @@ static func sleeper_mesh(list: Array[TrackBuild.Sleeper]) -> ArrayMesh:
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var idx := PackedInt32Array()
-	verts.resize(list.size() * 4)
-	norms.resize(list.size() * 4)
-	idx.resize(list.size() * 6)
-	for k in list.size():
-		var s: TrackBuild.Sleeper = list[k]
+	for s_raw in list:
+		var s: TrackBuild.Sleeper = s_raw
 		var p := s.pose
-		var n := p.left()
-		var f := p.forward()
-		var hl := s.length_m * 0.5
-		var hw := s.width_m * 0.5
-		var b := k * 4
-		verts[b] = TerrainMesh.to_godot(p.x + n.x * hl - f.x * hw, p.y + n.y * hl - f.y * hw, p.z)
-		verts[b + 1] = TerrainMesh.to_godot(p.x + n.x * hl + f.x * hw, p.y + n.y * hl + f.y * hw, p.z)
-		verts[b + 2] = TerrainMesh.to_godot(p.x - n.x * hl + f.x * hw, p.y - n.y * hl + f.y * hw, p.z)
-		verts[b + 3] = TerrainMesh.to_godot(p.x - n.x * hl - f.x * hw, p.y - n.y * hl - f.y * hw, p.z)
-		for c in 4:
-			norms[b + c] = Vector3.UP
-		var q := k * 6
-		idx[q] = b
-		idx[q + 1] = b + 1
-		idx[q + 2] = b + 2
-		idx[q + 3] = b
-		idx[q + 4] = b + 2
-		idx[q + 5] = b + 3
+		# Шпала — коробка, если высоту прислали, и плоский прямоугольник, если
+		# нет. Второй случай остаётся не для красоты: карта без sleeper.height
+		# сегодня отвергается валидатором, но ответ СТАРОГО сервера её не несёт,
+		# и клиент обязан показать решётку без толщины, а не исчезнуть.
+		_box(verts, norms, idx, p.x, p.y, p.forward(),
+			s.width_m * 0.5, s.length_m * 0.5, s.bottom_z(), s.top_z())
+	return _mesh(verts, norms, idx)
+
+
+## rail_body_mesh — рельсы телом, ОБЪЯВЛЕННЫМ УПРОЩЕНИЕМ.
+##
+## Прямоугольник `head_width × rail.height`, внутренней гранью на ±gauge/2.
+## Это не профиль рельса и не выдаётся за него: контракт (редакция 6 §8) держит
+## профиль отложенным и прямо называет прямоугольник упрощением. Заведена ровно
+## одна величина формы — ширина головки, — и заведена по условию: gauge задан
+## между ВНУТРЕННИМИ РАБОЧИМИ ГРАНЯМИ, и без ширины головки рельс некуда
+## поставить, не выдумав её.
+##
+## Цена умолчания измерена на снесённом спайке: без ширины головки нитки
+## поставили по осям головок вместо рабочих граней, и колея вышла 1.335 вместо
+## 1.435.
+##
+## Рисуются три грани — верх и два бока. Низ не рисуется: он лежит на шпале и не
+## виден ниоткуда, а треугольники стоят денег.
+static func rail_body_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if not span.has_rail_body() or span.axis.size() < 2:
+		return null
+	var n := span.axis.size()
+	var inner := span.gauge_m * 0.5
+	var outer := inner + span.rail_head_width_m
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+
+	var sides: Array[float] = [1.0, -1.0]
+	for sgn in sides:
+		var top_i := PackedVector3Array(); top_i.resize(n)
+		var top_o := PackedVector3Array(); top_o.resize(n)
+		var bot_i := PackedVector3Array(); bot_i.resize(n)
+		var bot_o := PackedVector3Array(); bot_o.resize(n)
+		for k in n:
+			var p: TrackGeom.AxisPoint = span.axis[k]
+			var nl := p.left()
+			var z_bot := p.z - span.rail_height_m
+			top_i[k] = TerrainMesh.to_godot(p.x + nl.x * inner * sgn, p.y + nl.y * inner * sgn, p.z)
+			top_o[k] = TerrainMesh.to_godot(p.x + nl.x * outer * sgn, p.y + nl.y * outer * sgn, p.z)
+			bot_i[k] = TerrainMesh.to_godot(p.x + nl.x * inner * sgn, p.y + nl.y * inner * sgn, z_bot)
+			bot_o[k] = TerrainMesh.to_godot(p.x + nl.x * outer * sgn, p.y + nl.y * outer * sgn, z_bot)
+		if sgn > 0.0:
+			_quad_strip(verts, norms, idx, top_i, top_o)
+			_quad_strip(verts, norms, idx, top_o, bot_o)
+			_quad_strip(verts, norms, idx, bot_i, top_i)
+		else:
+			_quad_strip(verts, norms, idx, top_o, top_i)
+			_quad_strip(verts, norms, idx, bot_o, top_o)
+			_quad_strip(verts, norms, idx, top_i, bot_i)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## slab_mesh — плита платформы: верх, торец у пути и дальний торец.
+##
+## Толщина нужна не для объёма ради объёма: платформа видна СБОКУ, и торец плиты
+## с просветом под ним — то, чем она отличается от прямоугольника, нарисованного
+## на земле. Низ плиты не рисуется — он лежит на насыпи и не виден.
+static func slab_mesh(strip: TrackBuild.PlatformStrip) -> ArrayMesh:
+	if not strip.has_slab():
+		return null
+	var n := mini(strip.near.size(), strip.far.size())
+	if n < 2:
+		return null
+	var t := strip.slab_thickness_m
+	var top_n := PackedVector3Array(); top_n.resize(n)
+	var top_f := PackedVector3Array(); top_f.resize(n)
+	var bot_n := PackedVector3Array(); bot_n.resize(n)
+	var bot_f := PackedVector3Array(); bot_f.resize(n)
+	for k in n:
+		var a := strip.near[k]
+		var b := strip.far[k]
+		top_n[k] = TerrainMesh.to_godot(a.x, a.y, a.z)
+		top_f[k] = TerrainMesh.to_godot(b.x, b.y, b.z)
+		bot_n[k] = TerrainMesh.to_godot(a.x, a.y, a.z - t)
+		bot_f[k] = TerrainMesh.to_godot(b.x, b.y, b.z - t)
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	_quad_strip(verts, norms, idx, top_n, top_f)
+	_quad_strip(verts, norms, idx, bot_n, top_n)
+	_quad_strip(verts, norms, idx, top_f, bot_f)
+	return _mesh(verts, norms, idx)
+
+
+## buffer_stop_mesh — упоры коробками.
+##
+## Габарит присланный: height — над поверхностью катания, width — поперёк пути.
+## Длина вдоль пути НЕ прислана и здесь взята равной трети ширины — это решение
+## художника того же рода, что длина крыла крестовины, и оно названо: упор,
+## нарисованный плоским прямоугольником, не читался бы как препятствие. Второй
+## клиент вправе взять другую пропорцию, и мир от этого не изменится.
+static func buffer_stop_mesh(list: Array[TrackBuild.BufferStop], length_ratio: float) -> ArrayMesh:
+	if list.is_empty():
+		return null
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	for b_raw in list:
+		var b: TrackBuild.BufferStop = b_raw
+		var p := b.pose
+		_box(verts, norms, idx, p.x, p.y, p.forward(),
+			b.width_m * length_ratio * 0.5, b.width_m * 0.5, p.z, p.z + b.height_m)
+	if idx.is_empty():
+		return null
 	return _mesh(verts, norms, idx)
 
 
@@ -189,6 +336,75 @@ static func frog_mesh(list: Array[TrackBuild.Frog], wing_m: float, half_w_m: flo
 	return _mesh(verts, norms, idx)
 
 
+## _quad_strip — полоса между двумя направляющими, дописанная в общие буферы.
+##
+## Нормаль считается из самой геометрии квада, а не задаётся Vector3.UP: у
+## откоса призмы она наклонная, и UP сделал бы откос неотличимым по свету от
+## верха. Порядок направляющих задаёт сторону: (a, b) даёт нормаль наружу при
+## обходе против часовой в плане.
+static func _quad_strip(verts: PackedVector3Array, norms: PackedVector3Array,
+		idx: PackedInt32Array, a: PackedVector3Array, b: PackedVector3Array) -> void:
+	var n := mini(a.size(), b.size())
+	if n < 2:
+		return
+	for k in n - 1:
+		var p0 := a[k]
+		var p1 := b[k]
+		var p2 := a[k + 1]
+		var p3 := b[k + 1]
+		var nrm := (p2 - p0).cross(p1 - p0).normalized()
+		if nrm == Vector3.ZERO:
+			nrm = Vector3.UP
+		var base := verts.size()
+		verts.append(p0); verts.append(p1); verts.append(p2); verts.append(p3)
+		for c in 4:
+			norms.append(nrm)
+		idx.append_array([base, base + 1, base + 2, base + 1, base + 3, base + 2])
+
+
+## _box — прямоугольный параллелепипед по оси пути: длина вдоль, ширина поперёк,
+## от z_bot до z_top. Шесть граней; торцы нужны, потому что коробка одиночная.
+static func _box(verts: PackedVector3Array, norms: PackedVector3Array, idx: PackedInt32Array,
+		cx: float, cy: float, fwd: Vector2, half_len: float, half_wid: float,
+		z_bot: float, z_top: float) -> void:
+	var f := fwd.normalized()
+	if f == Vector2.ZERO:
+		return
+	var l := Vector2(-f.y, f.x)
+	# Массивы типизированы явно: у нетипизированного литерала элемент цикла
+	# приезжает Variant, и sgn.x не выводится — GDScript отказывается разбирать
+	# файл целиком. Поймано снимком, а не проверками: check.gd не трогает
+	# track_view.gd вовсе и потому дал 78 «ok» при неразбираемом рисующем коде.
+	var levels: Array[float] = [z_bot, z_top]
+	var signs: Array[Vector2] = [Vector2(-1, -1), Vector2(1, -1), Vector2(1, 1), Vector2(-1, 1)]
+	var corners := PackedVector3Array()
+	for sz in levels:
+		for sgn in signs:
+			var px := cx + f.x * half_len * sgn.x + l.x * half_wid * sgn.y
+			var py := cy + f.y * half_len * sgn.x + l.y * half_wid * sgn.y
+			corners.append(TerrainMesh.to_godot(px, py, sz))
+	# Грани перечислены явно: 0..3 — низ, 4..7 — верх, порядок обхода задаёт
+	# наружную нормаль.
+	var faces: Array[PackedInt32Array] = [
+		PackedInt32Array([4, 5, 6, 7]), PackedInt32Array([3, 2, 1, 0]),
+		PackedInt32Array([0, 1, 5, 4]), PackedInt32Array([1, 2, 6, 5]),
+		PackedInt32Array([2, 3, 7, 6]), PackedInt32Array([3, 0, 4, 7]),
+	]
+	for face in faces:
+		var p0: Vector3 = corners[face[0]]
+		var p1: Vector3 = corners[face[1]]
+		var p2: Vector3 = corners[face[2]]
+		var p3: Vector3 = corners[face[3]]
+		var nrm := (p1 - p0).cross(p2 - p0).normalized()
+		if nrm == Vector3.ZERO:
+			nrm = Vector3.UP
+		var base := verts.size()
+		verts.append(p0); verts.append(p1); verts.append(p2); verts.append(p3)
+		for c in 4:
+			norms.append(nrm)
+		idx.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+
+
 static func _strip(verts: PackedVector3Array, norms: PackedVector3Array) -> ArrayMesh:
 	var pairs := verts.size() / 2
 	var idx := PackedInt32Array()
@@ -210,6 +426,19 @@ static func _mesh(verts: PackedVector3Array, norms: PackedVector3Array, idx: Pac
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
+
+
+## solid_material — материал ТЕЛА: обычный, с проверкой глубины.
+##
+## Отличается от flat_material ровно тем, ради чего писалась вся редакция 6:
+## тело занимает объём, у него есть верх и бок под разным углом к свету, и
+## отключать ему проверку глубины больше не за что. Раньше отключали потому, что
+## путь и земля лежали на одной отметке и дрались за z-буфер; теперь земля на
+## `formation_to_rail_top` ниже, и щель между ними заполнена призмой.
+static func solid_material(colour: Color) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = colour
+	return m
 
 
 ## flat_material — материал плоского слоя пути.

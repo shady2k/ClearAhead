@@ -26,6 +26,11 @@ const TESS_MAX_ANG_RAD := 0.05
 ## Крыло длиннее и тоньше, чем «на глаз»: при марке 1/9 касательные расходятся на
 ## 6.4°, и два широких крыла сливаются в одну полосу — галочка перестаёт быть
 ## галочкой. 8 м на 0.15 м разводит концы почти на метр, и V читается.
+## Длина упора вдоль пути как доля его ширины. Ширина и высота присланы, длина
+## НЕТ — и это решение художника того же рода, что длина крыла крестовины: упор,
+## нарисованный без длины, не читался бы как препятствие. Названо здесь, а не
+## спрятано в функции, чтобы выдумка была видна списком.
+const BUFFER_STOP_LENGTH_RATIO := 0.33
 const FROG_WING_M := 8.0
 const FROG_HALF_W_M := 0.15
 
@@ -37,7 +42,7 @@ const FROG_HALF_W_M := 0.15
 const MANIFEST_FIELDS := ["region", "epoch", "revision", "network_model_hash", "network_hash", "chunks"]
 const NETWORK_FIELDS := ["region", "revision", "elements", "structures", "track_types",
 	"construction_runs", "features", "placement_algorithm"]
-const ELEMENT_FIELDS := ["id", "kind", "start", "primitives", "role"]
+const ELEMENT_FIELDS := ["id", "kind", "start", "primitives", "profile", "role"]
 
 ## Шаг выборки оси для выбора уровня чанка. В манифесте его НЕТ: сервер
 ## объявляет радиусы, но не то, по каким точкам он мерит расстояние. Расхождение
@@ -319,8 +324,29 @@ func _apply_track_types(network: Dictionary, elements: Array[TrackGeom.Element])
 				el.type_id = type_id
 				covered += 1
 
-	stats["elements_with_width"] = covered
-	stats["elements_without_width"] = elements.size() - covered
+	# Проходы стрелок: run'ами не покрыты по правилу, но с 2026-08-12 несут
+	# СВОЙ тип в role.type (контракт редакции 6 §6). До того у ветвей не было ни
+	# одного размера, и это было видно на кадре — они рисовались ниткой. Правило
+	# «нет цепочки до типа — нет и размера» не ослаблено: цепочка просто стала
+	# доходить туда, куда раньше обрывалась.
+	var by_role := 0
+	for el in elements:
+		if el.ballast_half_width_m >= 0.0 or el.role.is_empty():
+			continue
+		var dev_type := String(el.role.get("type", ""))
+		if not types.has(dev_type):
+			continue
+		var dt: Dictionary = types[dev_type]
+		var db: Dictionary = dt.get("ballast", {}) as Dictionary
+		if not db.has("half_width"):
+			continue
+		el.ballast_half_width_m = float(db["half_width"])
+		el.type_id = dev_type
+		by_role += 1
+
+	stats["elements_with_width"] = covered + by_role
+	stats["elements_width_from_device_type"] = by_role
+	stats["elements_without_width"] = elements.size() - covered - by_role
 	var bare: Array[String] = []
 	for el in elements:
 		if el.ballast_half_width_m < 0.0:
@@ -340,7 +366,8 @@ func _apply_track_types(network: Dictionary, elements: Array[TrackGeom.Element])
 ## _draw_track — всё, что приехало про путь, слоями.
 ##
 ## Порядок слоёв снизу вверх: отсыпка, платформа, шпалы, нитки, галочки
-## крестовин. Всё ПЛОСКОЕ и на отметке оси — причина в шапке track_view.gd, и
+## крестовин. Вертикаль отсчитывается ВНИЗ от головки рельса — причина в шапке
+## track_view.gd, и
 ## она же написана на экране.
 func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> void:
 	var node := Node3D.new()
@@ -350,27 +377,38 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	var by_id := TrackBuild.elements_by_id(elements)
 	var spans := TrackBuild.covered_spans(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
 
-	# 1. Отсыпка — по УЧАСТКАМ прогонов, а не по элементам целиком: спан вправе
-	#    покрывать часть элемента, и лента во всю его длину была бы отсыпкой там,
-	#    где её не объявляли.
+	# 1. Балластная призма — ТЕЛОМ, если прислан весь вертикальный стек, и лентой
+	#    на отметке оси, если прислана только полуширина. Второй случай оставлен
+	#    не для красоты: так выглядит ответ сервера, не знающего редакции 6, и
+	#    клиент обязан показать его честно, а не исчезнуть.
+	#
+	#    По УЧАСТКАМ прогонов, а не по элементам целиком: спан вправе покрывать
+	#    часть элемента, и лента во всю его длину была бы отсыпкой там, где её не
+	#    объявляли.
 	var ballast := Node3D.new()
 	ballast.name = "Ballast"
 	node.add_child(ballast)
-	var ballast_mat := TrackView.flat_material(Color(0.40, 0.38, 0.36), TrackView.PRIO_BALLAST)
+	var prism_mat := TrackView.solid_material(Color(0.46, 0.44, 0.41))
+	var flat_ballast_mat := TrackView.flat_material(Color(0.40, 0.38, 0.36), TrackView.PRIO_BALLAST)
 	var covered := {}
+	var prisms := 0
 	var ribbons := 0
 	for sp in spans:
 		covered[sp.element_id] = true
-		if sp.ballast_half_width_m <= 0.0:
-			continue
 		var mi := MeshInstance3D.new()
-		mi.name = "%s@%s" % [sp.element_id, sp.run_id]
-		mi.mesh = TrackView.ribbon_mesh(sp.axis, sp.ballast_half_width_m)
+		mi.name = "%s@%s" % [sp.element_id, sp.run_id if sp.from_run else sp.type_id]
+		if sp.has_prism():
+			mi.mesh = TrackView.prism_mesh(sp)
+			mi.material_override = prism_mat
+			prisms += 1
+		elif sp.ballast_half_width_m > 0.0:
+			mi.mesh = TrackView.ribbon_mesh(sp.axis, sp.ballast_half_width_m)
+			mi.material_override = flat_ballast_mat
+			ribbons += 1
 		if mi.mesh == null:
 			continue
-		mi.material_override = ballast_mat
 		ballast.add_child(mi)
-		ribbons += 1
+	stats["ballast_prisms_drawn"] = prisms
 	stats["ballast_ribbons_drawn"] = ribbons
 
 	# 2. Платформа. Полоса от offset до offset + width со стороны side на
@@ -380,48 +418,92 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	var plat_node := Node3D.new()
 	plat_node.name = "Platforms"
 	node.add_child(plat_node)
+	var slab_mat := TrackView.solid_material(Color(0.78, 0.77, 0.74))
 	var plat_mat := TrackView.flat_material(Color(0.74, 0.73, 0.70), TrackView.PRIO_PLATFORM)
 	var plats_drawn := 0
+	var slabs := 0
 	for p in platforms:
 		var mi := MeshInstance3D.new()
 		mi.name = p.id
-		mi.mesh = TrackView.strip_mesh(p.near, p.far)
+		if p.has_slab():
+			mi.mesh = TrackView.slab_mesh(p)
+			mi.material_override = slab_mat
+			slabs += 1
+		else:
+			mi.mesh = TrackView.strip_mesh(p.near, p.far)
+			mi.material_override = plat_mat
 		if mi.mesh == null:
 			continue
-		mi.material_override = plat_mat
 		plat_node.add_child(mi)
 		plats_drawn += 1
-		plat_node.add_child(_label(p.far[p.far.size() / 2],
-			"%s  %s  %.2f…%.2f м от оси" % [p.id, p.side, p.offset_m, p.offset_m + p.width_m],
-			Color(0.98, 0.98, 0.92)))
+		var caption := "%s  %s  %.2f…%.2f м от оси" % [p.id, p.side, p.offset_m, p.offset_m + p.width_m]
+		if p.has_slab():
+			caption += "  +%.2f м над УГР" % p.height_m
+		plat_node.add_child(_label(p.far[p.far.size() / 2], caption, Color(0.98, 0.98, 0.92)))
 	stats["platforms_drawn"] = plats_drawn
+	stats["platform_slabs_drawn"] = slabs
 	stats["platforms_skipped"] = plat_res["skipped"]
 
+	# 2б. Упоры. Габарит присланный: height над поверхностью катания, width
+	#     поперёк. До 2026-08-12 их не отдавали вовсе, и снесённый спайк выводил
+	#     их из топологии сам — этому клиенту такое запрещено.
+	var bs_res := TrackBuild.buffer_stops(network, by_id)
+	var stops: Array[TrackBuild.BufferStop] = bs_res["list"]
+	var bs_mi := MeshInstance3D.new()
+	bs_mi.name = "BufferStops"
+	bs_mi.mesh = TrackView.buffer_stop_mesh(stops, BUFFER_STOP_LENGTH_RATIO)
+	if bs_mi.mesh != null:
+		bs_mi.material_override = TrackView.solid_material(Color(0.72, 0.16, 0.14))
+		node.add_child(bs_mi)
+	stats["buffer_stops_drawn"] = stops.size()
+	stats["buffer_stops_skipped"] = bs_res["skipped"]
+
 	# 3. Шпалы. Раскладка целиком из рецепта: phase + n·pitch по полуоткрытому
-	#    правилу, поза аналитическая. Высота шпалы для вида сверху не нужна
-	#    вовсе: решётка — плоские прямоугольники length × width.
+	#    правилу, поза аналитическая. Коробкой, если прислана sleeper.height, и
+	#    плоским прямоугольником, если нет.
 	var sl := TrackBuild.sleepers(network, by_id)
 	var sleepers: Array[TrackBuild.Sleeper] = sl["list"]
 	var sleeper_mi := MeshInstance3D.new()
 	sleeper_mi.name = "Sleepers"
 	sleeper_mi.mesh = TrackView.sleeper_mesh(sleepers)
 	if sleeper_mi.mesh != null:
-		sleeper_mi.material_override = TrackView.flat_material(Color(0.24, 0.19, 0.15), TrackView.PRIO_SLEEPER)
+		sleeper_mi.material_override = TrackView.solid_material(Color(0.26, 0.20, 0.16))
 		node.add_child(sleeper_mi)
 	stats["sleepers_drawn"] = sleepers.size()
 	stats["sleeper_runs"] = sl["runs"]
 	stats["sleepers_skipped"] = sl["skipped"]
 
-	# 4. Нитки — по две на участок, на ±gauge/2 от оси.
+	# 4. Рельсы. Телом — объявленным упрощением (прямоугольник head_width ×
+	#    rail.height, внутренней гранью на ±gauge/2), если ширина головки
+	#    прислана. Символической ниткой в один пиксель, если нет: ширина нитки
+	#    ЭКРАННАЯ, и полоса в метрах заявляла бы ширину головки, которой не
+	#    прислали.
+	var rails_node := Node3D.new()
+	rails_node.name = "Rails"
+	node.add_child(rails_node)
+	var rail_mat := TrackView.solid_material(Color(0.62, 0.63, 0.66))
+	var thread_mat := TrackView.flat_material(Color(0.90, 0.91, 0.95), TrackView.PRIO_RAIL, true)
 	var threads: Array[PackedVector3Array] = []
+	var rail_bodies := 0
 	for sp in spans:
+		if sp.has_rail_body():
+			var rmi := MeshInstance3D.new()
+			rmi.name = "%s@rail" % sp.element_id
+			rmi.mesh = TrackView.rail_body_mesh(sp)
+			if rmi.mesh != null:
+				rmi.material_override = rail_mat
+				rails_node.add_child(rmi)
+				rail_bodies += 1
+			continue
 		threads.append_array(sp.threads())
-	var rail_mi := MeshInstance3D.new()
-	rail_mi.name = "Rails"
-	rail_mi.mesh = TrackView.rail_mesh(threads)
-	if rail_mi.mesh != null:
-		rail_mi.material_override = TrackView.flat_material(Color(0.90, 0.91, 0.95), TrackView.PRIO_RAIL, true)
-		node.add_child(rail_mi)
+	if not threads.is_empty():
+		var thread_mi := MeshInstance3D.new()
+		thread_mi.name = "Threads"
+		thread_mi.mesh = TrackView.rail_mesh(threads)
+		if thread_mi.mesh != null:
+			thread_mi.material_override = thread_mat
+			rails_node.add_child(thread_mi)
+	stats["rail_bodies_drawn"] = rail_bodies
 	stats["rail_threads_drawn"] = threads.size()
 	stats["rail_spans_drawn"] = spans.size()
 
@@ -687,13 +769,18 @@ func _hud_text() -> String:
 	if stats.has("elements"):
 		l.append("[b]путь[/b]: элементов %d, длина по примитивам %.2f м (объявлено %.2f м, расхождение %.4f м)" % [
 			stats["elements"], stats["length_total_m"], stats["length_declared_m"], stats["length_mismatch_m"]])
-		l.append("  отсыпка лентой на %d участках прогонов; нитью, без размеров, %d элемента: %s" % [
-			stats.get("ballast_ribbons_drawn", 0), stats.get("bare_lines_drawn", 0),
-			", ".join(stats["elements_without_width_ids"])])
-		l.append("  шпал %d (рецепт: phase + n·pitch, полуоткрыто), ниток %d на %d участках, платформ %d, крестовин %d, стрелок %d" % [
-			stats.get("sleepers_drawn", 0), stats.get("rail_threads_drawn", 0),
-			stats.get("rail_spans_drawn", 0), stats.get("platforms_drawn", 0),
-			stats.get("frogs_drawn", 0), stats.get("devices", 0)])
+		l.append("  призма телом на %d участках, лентой на %d, нитью (без размеров) %d элемента: %s" % [
+			stats.get("ballast_prisms_drawn", 0), stats.get("ballast_ribbons_drawn", 0),
+			stats.get("bare_lines_drawn", 0), ", ".join(stats["elements_without_width_ids"])])
+		l.append("  шпал %d (рецепт: phase + n·pitch, полуоткрыто), рельсов телом %d, ниток %d, участков %d" % [
+			stats.get("sleepers_drawn", 0), stats.get("rail_bodies_drawn", 0),
+			stats.get("rail_threads_drawn", 0), stats.get("rail_spans_drawn", 0)])
+		l.append("  платформ %d (плитой %d), упоров %d, крестовин %d, стрелок %d" % [
+			stats.get("platforms_drawn", 0), stats.get("platform_slabs_drawn", 0),
+			stats.get("buffer_stops_drawn", 0), stats.get("frogs_drawn", 0), stats.get("devices", 0)])
+		if int(stats.get("elements_width_from_device_type", 0)) > 0:
+			l.append("  из них %d ветви стрелок: размеры по role.type, run'ами они не покрыты" % [
+				stats.get("elements_width_from_device_type", 0)])
 		for d in (stats.get("device_lines", []) as Array):
 			l.append("    %s" % d)
 	if stats.has("chunks_requested"):
@@ -708,18 +795,20 @@ func _hud_text() -> String:
 		l.append("  decode_s16: %d мкс всего, %.0f мкс на чанк, %.1f нс на отсчёт" % [
 			stats["decode_usec_total"], stats["decode_usec_per_chunk"], stats["decode_ns_per_sample"]])
 	l.append("")
-	l.append("[b]ПЛОСКО, НА ОТМЕТКЕ ОСИ, И ВОТ ПОЧЕМУ.[/b] Не нарисованы толщина балластной")
-	l.append("призмы, высота шпалы, профиль рельса и верх плиты платформы: в контракте не")
-	l.append("сказано, от чего отсчитывается z элемента — от головки рельса, от верха призмы")
-	l.append("или от бровки. Пока это не названо, неизвестно даже, вверх откладывать или вниз,")
-	l.append("и любое вертикальное число было бы выдумкой.")
+	l.append("[b]ВЕРТИКАЛЬ ОТ ГОЛОВКИ РЕЛЬСА.[/b] z элемента — поверхность катания")
+	l.append("(контракт отрисовки, редакция 6). Вниз от неё: рельс, шпала, призма. Земля — на")
+	l.append("formation_to_rail_top ниже, и это число сервер считает тем же, чем земляные работы.")
+	l.append("[i]объявленное упрощение: рельс — прямоугольник head_width × height; профиля")
+	l.append("рельса в контракте нет. Длина упора вдоль пути и длина крыла крестовины — стиль.[/i]")
 	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: покров и цвет земли, трава,")
-	l.append("деревья, вода, здания, небо, упоры тупиков, решётка стрелки (переводные брусья).[/i]")
+	l.append("деревья, вода, здания, небо, решётка стрелки (переводные брусья).[/i]")
 	l.append("[i]204 (чанка нет) оставлено дырой: base_z региона в манифест не приезжает.[/i]")
 	for s in (stats.get("sleepers_skipped", []) as Array):
 		l.append("[color=#ffc060]решётка пропущена — %s[/color]" % s)
 	for s in (stats.get("platforms_skipped", []) as Array):
 		l.append("[color=#ffc060]сооружение пропущено — %s[/color]" % s)
+	for s in (stats.get("buffer_stops_skipped", []) as Array):
+		l.append("[color=#ffc060]упор пропущен — %s[/color]" % s)
 	for s in (stats.get("frogs_skipped", []) as Array):
 		l.append("[color=#ffc060]особенность пропущена — %s[/color]" % s)
 	for s in (stats.get("unknown_fields", []) as Array):
