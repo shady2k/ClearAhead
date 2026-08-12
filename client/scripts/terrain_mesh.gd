@@ -225,6 +225,10 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 		"triangles": (n - 1) * (n - 1) * 2,
 		"z_min": z_min,
 		"z_max": z_max,
+		# Отсчёты отдаются наружу, а не выбрасываются после сборки меша: по ним
+		# рассевается растительность, и второй разбор того же тела ради тех же
+		# чисел был бы двойной работой на каждый чанк.
+		"heights": h,
 		"steep_vertices": steep,
 		"decode_usec": decode_usec,
 		"build_usec": build_usec,

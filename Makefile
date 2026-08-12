@@ -82,7 +82,7 @@ help:
 	@echo '  make client-shot   снимок экрана в $(SHOT), окно за экраном'
 	@echo
 	@echo 'Переменные: DB, SERVER_ADDR, GODOT, REGION, SHOT, VIEW'
-	@echo 'VIEW: station (вся станция), throat (горловина со стрелками), wide (весь рельеф).'
+	@echo 'VIEW: station (вся станция), throat (горловина), wide (весь рельеф), track (с оси, горизонтально).'
 	@echo 'Горловина наводится по габаритам элементов с role.turnout, а не по числу.'
 	@echo
 	@echo 'Примеры:'

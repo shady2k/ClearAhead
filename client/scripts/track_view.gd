@@ -446,12 +446,21 @@ static func solid_material(colour: Color) -> StandardMaterial3D:
 ## Проверка глубины выключена по причине из шапки, а запись глубины — заодно:
 ## слои лежат в одной плоскости (все на отметке оси), и запись без проверки
 ## рвала бы их на куски по порядку отрисовки.
+## ПРОВЕРКА ГЛУБИНЫ БОЛЬШЕ НЕ ОТКЛЮЧАЕТСЯ, и это отмена лечения, а не новая
+## настройка. Отключали её потому, что путь и земля лежали на ОДНОЙ отметке и
+## дрались за z-буфер: сервер сажал землю на отметку оси. С 2026-08-12 земля
+## лежит на formation_to_rail_top ниже (на затравке 0.68 м), драться не с чем.
+##
+## Оставленное отключение стало вредным ровно тогда, когда появился вид с оси:
+## галочки крестовин и нити рисовались ПОВЕРХ ВСЕГО и висели сквозь рельеф
+## красными полосами на горизонте. Плоскому виду сверху это было незаметно.
+##
+## render_priority сохранён: он разводит слои, лежащие в одной плоскости, а
+## таких ещё хватает — нити и галочки толщины не имеют ни в каком смысле.
 static func flat_material(colour: Color, priority: int, unshaded: bool = false) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = colour
 	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.no_depth_test = true
-	m.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
 	m.render_priority = priority
 	if unshaded:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED

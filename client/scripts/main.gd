@@ -30,9 +30,30 @@ const TESS_MAX_ANG_RAD := 0.05
 ## НЕТ — и это решение художника того же рода, что длина крыла крестовины: упор,
 ## нарисованный без длины, не читался бы как препятствие. Названо здесь, а не
 ## спрятано в функции, чтобы выдумка была видна списком.
+## Рассев растительности — решения художника. Названы константами и здесь,
+## чтобы выдумка была видна списком, а не растворялась в коде.
+## Порог сомкнутости: ниже него трава не появляется вовсе (голая земля).
+## Высота глаза и дальность взгляда для вида «track». Решения художника: у
+## человека глаз около 1.7 м, а смотреть надо туда, где путь ещё читается.
+const EYE_HEIGHT_M := 1.75
+const EYE_LOOK_AHEAD_M := 120.0
+
+const GRASS_MIN_CLOSURE := 4
+const GRASS_MAX_PER_CELL := 14
+const GRASS_H_MIN := 0.22
+const GRASS_H_MAX := 0.55
+const BUSH_CHANCE := 0.055
+const BUSH_H_MIN := 0.9
+const BUSH_H_MAX := 2.6
+
 const BUFFER_STOP_LENGTH_RATIO := 0.33
-const FROG_WING_M := 8.0
-const FROG_HALF_W_M := 0.15
+## Крыло галочки крестовины. Восемь метров годились СХЕМЕ СВЕРХУ, где галочка
+## была единственным способом показать особенность; на виде с оси она стала
+## красной полосой во весь кадр. Число уменьшено до порядка настоящего крыла
+## крестовины — это по-прежнему решение художника, но теперь оно хотя бы не
+## спорит с масштабом того, поверх чего лежит.
+const FROG_WING_M := 1.4
+const FROG_HALF_W_M := 0.07
 
 ## Корневые поля, которые клиент умеет читать. Список нужен не для порядка:
 ## поле `trackside` переименовали в `structures` (3637504), клиент остался на
@@ -98,20 +119,58 @@ func _build_scene() -> void:
 	world.name = "World"
 	add_child(world)
 
+	# НЕБО, СВЕТ И ВОЗДУХ — РЕШЕНИЕ ХУДОЖНИКА ЦЕЛИКОМ, и это записано в границе
+	# владения: пока в мире нет времени суток и погоды, азимут солнца и цвет
+	# неба не являются фактами о месте. Как появятся широта и час — азимут и
+	# высота солнца станут миром, а палитра неба останется здесь.
+	#
+	# До 2026-08-12 фоном стоял тёмно-серый цвет, и это была не заглушка, а
+	# следствие прежнего закона: земля была серой, потому что покрова не
+	# присылали, и небо цвета неба над серой землёй выглядело бы враньём.
+	# Покров приехал — врать больше нечем.
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color(0.07, 0.09, 0.12)
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color(0.45, 0.5, 0.58)
-	e.ambient_light_energy = 0.6
+	e.background_mode = Environment.BG_SKY
+	var sky := Sky.new()
+	var pmat := ProceduralSkyMaterial.new()
+	pmat.sky_top_color = Color(0.30, 0.50, 0.78)
+	pmat.sky_horizon_color = Color(0.78, 0.86, 0.93)
+	pmat.ground_horizon_color = Color(0.74, 0.81, 0.87)
+	pmat.ground_bottom_color = Color(0.52, 0.60, 0.57)
+	pmat.sun_angle_max = 12.0
+	sky.sky_material = pmat
+	e.sky = sky
+	# Свет неба, а не выдуманный ambient: цвет заливки берётся из того же неба,
+	# и небо с землёй перестают спорить о том, какого цвета воздух.
+	e.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	e.ambient_light_energy = 1.0
+	# Дымка. Числа спайка (разбор §1.6): на 500 м даёт заметное смягчение, на
+	# 2 км — сплошную завесу, отчего дальний край рельефа перестаёт резать глаз
+	# ступенькой уровня подробности.
+	e.fog_enabled = true
+	e.fog_density = 0.00018
+	e.fog_aerial_perspective = 0.30
+	e.fog_sky_affect = 0.0
+	# SSAO НЕ включается: проект собран мобильным рендерером, и там его нет —
+	# движок отвечает предупреждением и молча игнорирует. Оставлять включённым
+	# значило бы держать в коде настройку, которая ничего не делает, и объяснять
+	# следующему, почему её не видно на кадре.
 	env.environment = e
 	add_child(env)
 
 	var sun := DirectionalLight3D.new()
 	sun.name = "Sun"
-	sun.rotation = Vector3(deg_to_rad(-50.0), deg_to_rad(-40.0), 0.0)
-	sun.light_energy = 1.1
+	sun.rotation = Vector3(deg_to_rad(-48.0), deg_to_rad(-128.0), 0.0)
+	sun.light_energy = 1.05
+	sun.light_color = Color(1.0, 0.97, 0.90)
+	sun.shadow_enabled = true
+	sun.directional_shadow_max_distance = 900.0
+	sun.light_angular_distance = 1.6
+	# Смещения теней — не вкус, а лечение САМОЗАТЕНЕНИЯ: без них решётка и
+	# призма покрывались собственной тенью от каждой шпалы и уходили в чёрное.
+	# Видно только на виде с оси: сверху тень падала мимо камеры.
+	sun.shadow_bias = 0.05
+	sun.shadow_normal_bias = 2.0
 	add_child(sun)
 
 	camera = Camera3D.new()
@@ -623,7 +682,11 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	var decode_usec := 0
 	var build_usec := 0
 	var steep := 0
+	# Ярусы уровня 0 копятся для рассева растительности: покров говорит, ГДЕ
+	# что растёт, высоты — на какой отметке, битовая карта леса — где ствол.
+	var ground: Array[Dictionary] = []
 	var cover_got := 0
+	var forest_got := 0
 	var cover_empty := 0
 	var by_level := {}
 	var t0 := Time.get_ticks_usec()
@@ -673,6 +736,16 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		else:
 			_fail("покров %d/%d/%d: %s" % [c["level"], c["cx"], c["cz"], cr["error"]])
 
+		# Лес — только уровень 0: за коридором деревья рассыпает клиент по покрову,
+		# потому что рубить их некому (контракт чанков §5а, разбор раскладки).
+		var forest := PackedByteArray()
+		if int(c["level"]) == 0:
+			var fr2: Dictionary = await net.fetch(path + "/forest")
+			if fr2["ok"] and int(fr2["code"]) == 200:
+				forest = fr2["body"]
+				forest_got += 1
+			elif not fr2["ok"]:
+				_fail("лес %d/%d/%d: %s" % [c["level"], c["cx"], c["cz"], fr2["error"]])
 		var built := TerrainMesh.build(r["body"], base_z, c["level"], c["cx"], c["cz"], rule, cover)
 		if not built["ok"]:
 			_fail(String(built["error"]))
@@ -688,6 +761,10 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		build_usec += int(built["build_usec"])
 		steep += int(built["steep_vertices"])
 
+		if int(c["level"]) == 0 and not cover.is_empty():
+			ground.append({"cover": cover, "forest": forest, "heights": built["heights"],
+				"base_z": base_z, "cx": int(c["cx"]), "cz": int(c["cz"])})
+
 		var mi := MeshInstance3D.new()
 		mi.name = "C%d_%d_%d" % [c["level"], c["cx"], c["cz"]]
 		mi.mesh = built["mesh"]
@@ -699,6 +776,8 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	stats["chunks_204"] = empty
 	stats["cover_200"] = cover_got
 	stats["cover_204"] = cover_empty
+	stats["forest_200"] = forest_got
+	_draw_vegetation(ground, rule)
 	stats["chunks_by_level"] = by_level
 	stats["vertices"] = verts
 	stats["triangles"] = tris
@@ -722,6 +801,30 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 
 
 func _place_camera(bbox: Rect2, elements: Array[TrackGeom.Element]) -> void:
+	# ВИД С ПУТИ — единственный, который смотрит ГОРИЗОНТАЛЬНО, и потому
+	# единственный, на котором видно небо, дымку и силуэт леса. Остальные виды
+	# смотрят сверху, и по ним нельзя судить, похоже ли это на железную дорогу.
+	#
+	# Точка берётся из ДАННЫХ, а не из координат: начало самого длинного
+	# элемента, отметка его оси плюс высота глаза. Высота глаза — решение
+	# художника (у человека она около 1.7 м), и потому названа константой.
+	if shot_view == "track":
+		var longest: TrackGeom.Element = null
+		for el in elements:
+			if longest == null or el.length_m > longest.length_m:
+				longest = el
+		if longest == null:
+			_fail("вид «путь»: ни одного элемента не приехало — вставать некуда")
+			return
+		var a0 := longest.pose_at(0.0)
+		var a1 := longest.pose_at(minf(EYE_LOOK_AHEAD_M, longest.length_m))
+		var eye := TerrainMesh.to_godot(a0.x, a0.y, a0.z + EYE_HEIGHT_M)
+		var target := TerrainMesh.to_godot(a1.x, a1.y, a1.z + EYE_HEIGHT_M)
+		camera.global_position = eye
+		camera.look_at(target, Vector3.UP)
+		stats["view"] = "track: с оси %s, глаз на %.2f м над головкой рельса" % [longest.id, EYE_HEIGHT_M]
+		return
+
 	# Камера наводится по ГАБАРИТАМ ДАННЫХ: центр пути и его размер, высота —
 	# середина диапазона приехавших отсчётов. Ни одного числа о мире здесь нет.
 	var view_box := bbox
@@ -812,6 +915,10 @@ func _hud_text() -> String:
 		l.append("  по уровням: %s" % str(stats["chunks_by_level"]))
 		l.append("  покров: 200 → %d, 204 (рецепта покрова нет) → %d; класс и сомкнутость на ячейку 64×64" % [
 			stats.get("cover_200", 0), stats.get("cover_204", 0)])
+		l.append("  растительность: деревьев %d (хвойных %d, лиственных %d), кустов %d, пучков травы %d" % [
+			stats.get("trees_drawn", 0), stats.get("trees_conifer", 0), stats.get("trees_broadleaf", 0),
+			stats.get("bushes_drawn", 0), stats.get("grass_drawn", 0)])
+		l.append("  лес: битовых карт получено %d (только уровень 0)" % stats.get("forest_200", 0))
 		l.append("  вершин %d, треугольников %d, высоты %.2f…%.2f м" % [
 			stats["vertices"], stats["triangles"], stats["z_min"], stats["z_max"]])
 		l.append("  крутизной покрашено %d вершин (%.1f %%), порог %s" % [
@@ -827,8 +934,10 @@ func _hud_text() -> String:
 	l.append("рельса в контракте нет. Длина упора вдоль пути и длина крыла крестовины — стиль.[/i]")
 	l.append("[i]класс поверхности прислан; ЦВЕТ класса — законно клиентский, как меш ели:")
 	l.append("сервер говорит что и где, как это выглядит — дело рендерера.[/i]")
-	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: трава, деревья, вода,")
-	l.append("здания, небо, решётка стрелки (переводные брусья).[/i]")
+	l.append("[i]где растёт лес и какой породы — прислано; МЕШ ели, куста и пучка,")
+	l.append("плотность рассева, небо, свет и дымка — клиентские, как и цвет класса.[/i]")
+	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: вода, здания,")
+	l.append("решётка стрелки (переводные брусья).[/i]")
 	l.append("[i]204 (чанка нет) оставлено дырой: base_z региона в манифест не приезжает.[/i]")
 	for s in (stats.get("sleepers_skipped", []) as Array):
 		l.append("[color=#ffc060]решётка пропущена — %s[/color]" % s)
@@ -891,3 +1000,121 @@ func _save_shot() -> void:
 	var err := img.save_png(shot_path)
 	print("СНИМОК %s: %s (%dx%d, save_png=%d)" % [
 		"СОХРАНЁН" if err == OK else "НЕ СОХРАНЁН", shot_path, img.get_width(), img.get_height(), err])
+
+
+## _draw_vegetation — деревья, кусты и трава по ярусам уровня 0.
+##
+## # Что здесь чьё
+##
+## ГДЕ РАСТЁТ — сервер: класс покрова и битовая карта леса. Ни одна из трёх
+## посадок не берёт собственного шума — иначе клиент придумал бы, где растёт
+## трава, а это факт о месте.
+##
+## КАК ВЫГЛЯДИТ — клиент: меши, пропорции, число сегментов, плотность рассева,
+## порог сомкнутости, с которого трава появляется. Второй рендерер вправе взять
+## другие, и мир не изменится.
+##
+## Экземплярами (MultiMesh), а не узлами: у травинки нет тождества, выделять ей
+## узел сцены нечем и незачем.
+func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
+	if ground.is_empty():
+		return
+	var node := Node3D.new()
+	node.name = "Vegetation"
+	world.add_child(node)
+
+	var cells := rule.samples - 1
+	var side := rule.side_of(0)
+	var step := side / float(cells)
+
+	var spruce: Array[Transform3D] = []
+	var broad: Array[Transform3D] = []
+	var bushes: Array[Transform3D] = []
+	var grass: Array[Transform3D] = []
+
+	for g_raw in ground:
+		var g: Dictionary = g_raw
+		var cover: PackedByteArray = g["cover"]
+		var forest: PackedByteArray = g["forest"]
+		var heights: PackedFloat32Array = g["heights"]
+		var base_z: float = g["base_z"]
+		var cx: int = g["cx"]
+		var cz: int = g["cz"]
+		var has_forest := forest.size() == cells * cells / 8
+
+		if has_forest:
+			var res := Forest.trees(forest, cover, heights, base_z, rule.samples, cx, cz, side)
+			for st_raw in (res["list"] as Array):
+				var st: Forest.Stem = st_raw
+				var t := Transform3D(Basis.IDENTITY.scaled(Vector3(st.height_m, st.height_m, st.height_m)),
+					TerrainMesh.to_godot(st.x, st.y, st.z))
+				if st.species == TerrainMesh.SURFACE_FOREST_BROAD:
+					broad.append(t)
+				else:
+					spruce.append(t)
+
+		# Трава и кусты — по ячейкам покрова. Порог сомкнутости и плотность
+		# рассева клиентские: сервер сказал «здесь луг густоты 11», во сколько
+		# пучков это развернуть — вопрос кадра, а не мира.
+		var ox := float(cx) * side
+		var oz := float(cz) * side
+		for j in cells:
+			for i in cells:
+				var k := j * cells + i
+				var packed := cover[k]
+				var cls := packed >> 4
+				var closure := packed & 0x0f
+				if closure < GRASS_MIN_CLOSURE:
+					continue
+				if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
+					continue
+				# Ячейка со стволом травой не засевается: под елью её не видно, а
+				# пучков она стоит столько же.
+				if has_forest and (forest[k / 8] & (1 << (k % 8))) != 0:
+					continue
+				var z := base_z + float(heights[j * rule.samples + i]) * 0.01
+				var per_cell := int(round(float(closure) / 15.0 * float(GRASS_MAX_PER_CELL)))
+				for n in per_cell:
+					var jt := Forest.jitter(cx, cz, i + n * 97, j + n * 31)
+					var gx := ox + (float(i) + jt[0]) * step
+					var gy := oz + (float(j) + jt[1]) * step
+					var h := GRASS_H_MIN + float(jt[2]) * (GRASS_H_MAX - GRASS_H_MIN)
+					grass.append(Transform3D(
+						Basis.IDENTITY.rotated(Vector3.UP, float(jt[2]) * TAU).scaled(Vector3(h, h, h)),
+						TerrainMesh.to_godot(gx, gy, z)))
+				# Куст — редко и по той же сомкнутости.
+				var bj := Forest.jitter(cx, cz, i + 7919, j + 6271)
+				if bj[2] < BUSH_CHANCE * float(closure) / 15.0:
+					var bh := BUSH_H_MIN + float(bj[0]) * (BUSH_H_MAX - BUSH_H_MIN)
+					bushes.append(Transform3D(
+						Basis.IDENTITY.rotated(Vector3.UP, float(bj[1]) * TAU).scaled(Vector3(bh * 1.4, bh, bh * 1.4)),
+						TerrainMesh.to_godot(ox + (float(i) + bj[0]) * step, oz + (float(j) + bj[1]) * step, z)))
+
+	var mat := Vegetation.material()
+	_multimesh(node, "Spruce", Vegetation.spruce_mesh(), spruce, mat)
+	_multimesh(node, "Broadleaf", Vegetation.broadleaf_mesh(), broad, mat)
+	_multimesh(node, "Bushes", Vegetation.bush_mesh(false), bushes, mat)
+	_multimesh(node, "Grass", Vegetation.grass_mesh(), grass, mat)
+
+	stats["trees_drawn"] = spruce.size() + broad.size()
+	stats["trees_conifer"] = spruce.size()
+	stats["trees_broadleaf"] = broad.size()
+	stats["bushes_drawn"] = bushes.size()
+	stats["grass_drawn"] = grass.size()
+
+
+func _multimesh(parent: Node3D, name_: String, mesh: ArrayMesh, xforms: Array[Transform3D],
+		mat: StandardMaterial3D) -> void:
+	if xforms.is_empty() or mesh == null:
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = xforms.size()
+	for k in xforms.size():
+		mm.set_instance_transform(k, xforms[k])
+	var mi := MultiMeshInstance3D.new()
+	mi.name = name_
+	mi.multimesh = mm
+	mi.material_override = mat
+	parent.add_child(mi)
