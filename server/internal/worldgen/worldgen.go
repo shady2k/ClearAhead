@@ -94,18 +94,22 @@ func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision int64)
 		if err != nil {
 			return err
 		}
+		// Лес считается ИЗ ПОКРОВА, а не из рецепта заново: инвариант «бит
+		// только в лесном классе» так держится по построению, а не проверкой.
+		forest := field.ChunkForest(a, cover)
 		if err := s.PutChunk(worldstore.Chunk{
 			Address:  a,
 			Revision: revision,
 			BaseZmm:  baseZmm,
 			Heights:  heights,
 			Cover:    cover,
+			Forest:   forest,
 		}); err != nil {
 			return err
 		}
 		rep.ByLevel[a.Level]++
 		rep.TotalChunks++
-		rep.TotalBytes += chunk.HeightsBytes + len(cover)
+		rep.TotalBytes += chunk.HeightsBytes + len(cover) + len(forest)
 		return nil
 	})
 	if err != nil {

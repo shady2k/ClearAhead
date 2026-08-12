@@ -71,6 +71,7 @@ CREATE TABLE IF NOT EXISTS chunks (
     base_z_mm INTEGER NOT NULL,
     heights   BLOB    NOT NULL,
     cover     BLOB,
+    forest    BLOB,
     PRIMARY KEY (region, level, cx, cz)
 ) STRICT;
 `
@@ -90,6 +91,7 @@ CREATE TABLE IF NOT EXISTS chunks (
 // x” сделал бы их неразличимыми.
 var migrations = []string{
 	`ALTER TABLE chunks ADD COLUMN cover BLOB`,
+	`ALTER TABLE chunks ADD COLUMN forest BLOB`,
 }
 
 // Store — открытая база мира.
@@ -191,6 +193,10 @@ type Chunk struct {
 	// покрова тогда не существует вовсе, и клиент об этом узнаёт кодом ответа, а
 	// не разбором нулей.
 	Cover []byte
+	// Forest — битовая карта занятости, chunk.ForestBytes байт, либо nil.
+	// nil на уровнях выше нулевого — не пропуск, а форма: лес существует только
+	// там, где его рубят (chunk.ForestLevel).
+	Forest []byte
 }
 
 // PutChunk записывает статический ярус.
@@ -208,23 +214,31 @@ func (s *Store) PutChunk(c Chunk) error {
 	// Версия хеша поднята с v1 до v2, и это не косметика: покров вошёл в
 	// содержимое чанка, а хеш служит ETag'ом. Оставь v1 — и чанк, у которого
 	// изменился только покров, отдался бы клиенту как неизменённый.
+	if c.Forest != nil && len(c.Forest) != chunk.ForestBytes {
+		return fmt.Errorf("worldstore: лес %d байт, ожидалось %d", len(c.Forest), chunk.ForestBytes)
+	}
+	// v3: лес вошёл в содержимое чанка. Версия хеша поднимается вместе с
+	// КАЖДЫМ слоем — иначе чанк, у которого изменился только новый слой,
+	// отдался бы клиенту как неизменённый.
 	h := sha256.New()
-	fmt.Fprintf(h, "v2|%d|", c.BaseZmm)
+	fmt.Fprintf(h, "v3|%d|", c.BaseZmm)
 	h.Write(blob)
 	h.Write(c.Cover)
+	h.Write(c.Forest)
 	hash := hex.EncodeToString(h.Sum(nil))
 
 	_, err = s.db.Exec(`
-		INSERT INTO chunks (region, level, cx, cz, revision, hash, base_z_mm, heights, cover)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		INSERT INTO chunks (region, level, cx, cz, revision, hash, base_z_mm, heights, cover, forest)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(region, level, cx, cz) DO UPDATE SET
 			revision = excluded.revision,
 			hash = excluded.hash,
 			base_z_mm = excluded.base_z_mm,
 			heights = excluded.heights,
-			cover = excluded.cover`,
+			cover = excluded.cover,
+			forest = excluded.forest`,
 		c.Address.Region, c.Address.Level, c.Address.CX, c.Address.CZ,
-		c.Revision, hash, c.BaseZmm, blob, c.Cover)
+		c.Revision, hash, c.BaseZmm, blob, c.Cover, c.Forest)
 	if err != nil {
 		return fmt.Errorf("worldstore: запись чанка %s/%d/%d/%d: %w",
 			c.Address.Region, c.Address.Level, c.Address.CX, c.Address.CZ, err)
@@ -242,10 +256,10 @@ func (s *Store) GetChunk(a chunk.Address) (Chunk, bool, error) {
 	c.Address = a
 	var blob []byte
 	err := s.db.QueryRow(`
-		SELECT revision, hash, base_z_mm, heights, cover FROM chunks
+		SELECT revision, hash, base_z_mm, heights, cover, forest FROM chunks
 		WHERE region = ? AND level = ? AND cx = ? AND cz = ?`,
 		a.Region, a.Level, a.CX, a.CZ,
-	).Scan(&c.Revision, &c.Hash, &c.BaseZmm, &blob, &c.Cover)
+	).Scan(&c.Revision, &c.Hash, &c.BaseZmm, &blob, &c.Cover, &c.Forest)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Chunk{}, false, nil
 	}

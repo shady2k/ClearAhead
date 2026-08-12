@@ -636,3 +636,46 @@ func (f *Field) ChunkCover(a chunk.Address) ([]byte, error) {
 
 // HasCover сообщает, есть ли у карты рецепт покрова.
 func (f *Field) HasCover() bool { return f.recipe.Cover != nil }
+
+// ChunkForest разворачивает лес чанка в битовую карту занятости.
+//
+// # Инвариант, который сервер обязан держать
+//
+// Бит стоит ТОЛЬКО в ячейке лесного класса. Проверять это на выходе к рендереру
+// незачем — отказ живёт на входе в мир: здесь лес и порождается, и здесь же
+// единственное место, где он мог бы разойтись с покровом. Клиент, встретивший
+// бит в ячейке песка, дерево не рисует, и это отказ, а не подстановка.
+//
+// # Плотность
+//
+// Вероятность дерева берётся из СОМКНУТОСТИ той же ячейки: внутри массива лес
+// гуще к середине и редеет к опушке, и это уже описано покровом. Отдельной
+// маски плотности нет намеренно — она была бы третьей копией одного поля.
+//
+// Жребий — та же ForestJitter, что даёт смещение и высоту, но взятая по
+// ДРУГОМУ полю: пусти посадку и высоту от одного числа — и высокие деревья
+// оказались бы систематически в одном углу ячейки.
+//
+// Лес существует только на уровне 0 (chunk.ForestLevel): за границей коридора
+// деревья рассыпает клиент по покрову, потому что рубить их некому.
+func (f *Field) ChunkForest(a chunk.Address, cover []byte) []byte {
+	if a.Level != chunk.ForestLevel || len(cover) != chunk.CoverBytes {
+		return nil
+	}
+	out := make([]byte, chunk.ForestBytes)
+	for j := 0; j < chunk.CoverCells; j++ {
+		for i := 0; i < chunk.CoverCells; i++ {
+			class, closure := chunk.UnpackCover(cover[chunk.CoverIndex(i, j)])
+			if class != chunk.SurfaceForestConifer && class != chunk.SurfaceForestBroad {
+				continue
+			}
+			// Жребий по третьему числу: первые два уйдут на смещение, и общий
+			// источник посадил бы высокие деревья в один угол ячейки.
+			_, _, lot := chunk.ForestJitter(a.CX, a.CZ, i+chunk.CoverCells, j)
+			if lot < float64(closure)/15.0 {
+				chunk.SetForestOccupied(out, i, j)
+			}
+		}
+	}
+	return out
+}

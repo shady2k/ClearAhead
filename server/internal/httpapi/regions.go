@@ -38,6 +38,7 @@ type regionsRouter struct {
 //	GET /regions/{region}/revisions/{n}/network      — сеть региона (путь)
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}         — рельеф, высоты
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/cover   — покров той же клетки
+//	GET /regions/{region}/chunks/{level}/{cx}/{cz}/forest  — лес, только уровень 0
 //
 // Корень один, и это регион. До биды ClearAhead-8kx их было два: сеть на
 // /maps/{id}/revisions/{n}/geometry, рельеф на /regions/{id}/chunks/…, а
@@ -64,7 +65,7 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.chunks.ServeHTTP(w, r)
 	// Покров — ХВОСТ адреса чанка, а не свой ресурс: клетка одна, и два пути к
 	// ней развели бы её тождество надвое (разбор — в шапке chunkPath).
-	case len(parts) == 7 && parts[2] == "chunks" && parts[6] == "cover":
+	case len(parts) == 7 && parts[2] == "chunks" && (parts[6] == "cover" || parts[6] == "forest"):
 		h.chunks.ServeHTTP(w, r)
 	default:
 		http.NotFound(w, r)
