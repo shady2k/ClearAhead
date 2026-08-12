@@ -1,0 +1,33 @@
+{
+  "format_version": 1,
+  "assets": [
+    {
+      "name": "loco_vl80",
+      "file": "vl80.glb",
+      "media_type": "model/gltf-binary",
+      "source_hash": "sha256-aa84b78c2cfbb9eca7551fe3a03e14c5fac66d7da2c97a4082f82c0ca9cdda26",
+      "drop_nodes": ["vl80tk1.002_10", "vl80tk1.003_11"],
+      "anchor": "rail_top_gauge_center",
+      "scale": 1.0286,
+      "translation": [0, 0, 8.451],
+      "attribution": {
+        "title": "Electric Freight Locomotive",
+        "author": "fabirbige — https://sketchfab.com/fabirbige",
+        "source": "https://sketchfab.com/3d-models/electric-freight-locomotive-c6defdc4fa134923aab8591a42bb918a",
+        "license": "CC-BY-4.0",
+        "modified": true,
+        "modifications": "из сцены убраны два кузова (vl80tk1.002, vl80tk1.003), отставленные на 8.15 м вбок и не стоящие ни на чём; постановка задана масштабом 1.0286 и сдвигом каталога — байты геометрии не тронуты"
+      }
+    }
+  ],
+  "stock": [
+    {
+      "id": "VL80",
+      "length": 34.18,
+      "bogie_base": 24.71,
+      "width": 3.63,
+      "height": 5.4,
+      "appearance": "loco_vl80"
+    }
+  ]
+}

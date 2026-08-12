@@ -294,6 +294,13 @@ var _water_node: MeshInstance3D = null
 ## Держатся порознь от прочей сцены потому, что рельеф теперь лежит в НЕСКОЛЬКИХ
 ## слоях подробности сразу, а твердь обязана быть ровно одна: якоря покрывают
 ## плоскость один раз, все остальные узлы — их же место, показанное грубее.
+## Подвижной состав. Держится отдельно от _terrain_node и прочего мира, потому
+## что живёт по другому закону: рельеф и путь неизменны за партию, а состав —
+## состояние, и он единственный, кого придётся обновлять по приходу снапшота.
+var _stock_root: Node3D = null
+var _stock_units: Array = []
+var _stock_types := {}      # id паспорта -> Dictionary
+var _stock_assets := {}     # имя вида   -> Dictionary записи каталога
 var _terrain_node: Node3D = null
 var _terrain_solid: Array[MeshInstance3D] = []
 
@@ -759,6 +766,15 @@ func _load_world() -> void:
 	_apply_track_types(network, elements)
 	_draw_track(elements, network)
 
+	# 2а. ПОДВИЖНОЙ СОСТАВ — сразу после пути и ДО рельефа.
+	#
+	# Порядок не случаен: положение машины считается по элементу, значит путь
+	# обязан быть разобран; а вот рельефа ей не нужно вовсе — она стоит на
+	# поверхности катания, отметку которой несёт сам элемент. Ждать рельеф,
+	# чтобы показать локомотив, значило бы поставить показ в зависимость от
+	# двухсот запросов чанков.
+	await _load_rolling_stock(elements)
+
 	# 3. Рельеф. Адреса чанков клиент выводит САМ, из правила манифеста и
 	#    собственной оси.
 	# Шаг выборки оси — ИЗ МАНИФЕСТА (axis_step_m): им сервер выбирает точки оси,
@@ -795,6 +811,92 @@ func _load_world() -> void:
 	# этой точки не существует.
 	_plant_grass()
 	_refresh_ui()
+
+	# ВИДЫ — ПОСЛЕДНИМИ, и это решение о том, чего ждать игроку. Ассет весит
+	# двадцать мегабайт против килобайтов всего остального; поставь его в
+	# начало — и первый кадр ждал бы вида машины, которую уже видно коробкой.
+	await _load_stock_meshes()
+	_refresh_ui()
+
+
+## _load_rolling_stock — набор контента, живое состояние и постановка коробок.
+##
+## ДВА ЗАПРОСА, А НЕ ОДИН, и это разделение по сроку жизни, а не по вкусу: набор
+## («какие машины бывают») перепроверяется по ETag и почти всегда приходит из
+## кэша, живое состояние («что где стоит») не кэшируется вовсе.
+##
+## Отказ любого из них — НЕ конец загрузки: мир без подвижного состава
+## законен и рисуется целиком. Причина уезжает в отказы на экране, а не в лог,
+## потому что записанная в проекте грабля звучит так: отказ обработан штатно, в
+## логе пусто, а на экране пусто тоже.
+func _load_rolling_stock(elements: Array[TrackGeom.Element]) -> void:
+	var set_res: WorldApi.Content = await api.content()
+	if set_res.failed():
+		_fail("набор контента: %s" % set_res.reason)
+		return
+	for raw in (set_res.data.get("stock", []) as Array):
+		var t := raw as Dictionary
+		_stock_types[String(t.get("id", ""))] = t
+	for raw in (set_res.data.get("assets", []) as Array):
+		var a := raw as Dictionary
+		_stock_assets[String(a.get("name", ""))] = a
+	stats["stock_types"] = _stock_types.size()
+	stats["stock_assets"] = _stock_assets.size()
+
+	var live_res: WorldApi.Live = await api.live(region)
+	if live_res.failed():
+		_fail("живое состояние: %s" % live_res.reason)
+		return
+	stats["match"] = String(live_res.data.get("match", ""))
+
+	_stock_root = Node3D.new()
+	_stock_root.name = "rolling_stock"
+	world.add_child(_stock_root)
+	var res := RollingStock.place(_stock_root, live_res.data, _stock_types, elements)
+	_stock_units = res["units"]
+	stats["stock_units"] = _stock_units.size()
+	for note in (res["skipped"] as Array):
+		errors.append("единица не поставлена — %s" % note)
+
+
+## _load_stock_meshes — качает виды и меняет коробки на меши.
+##
+## Один ассет качается ОДИН РАЗ, даже если на него ссылаются десять машин: адрес
+## есть хеш содержимого, и дедупликация здесь даровая — ровно то, ради чего
+## адресация по содержимому и выбрана.
+##
+## Отказ вида не отменяет машину: коробка остаётся стоять там же, где стояла, и
+## это по-прежнему верное положение верной машины. Отсутствие вида обязано быть
+## ВИДНО — оно уезжает в отказы, а не гасится молча.
+func _load_stock_meshes() -> void:
+	if _stock_units.is_empty():
+		return
+	var cache := {}
+	var loaded := 0
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		if not _stock_assets.has(u.appearance):
+			errors.append("вид %s единицы %s в наборе не объявлен" % [u.appearance, u.id])
+			continue
+		var asset := _stock_assets[u.appearance] as Dictionary
+		var address := String(asset.get("hash", ""))
+		if not cache.has(address):
+			var blob: WorldApi.AssetBlob = await api.asset(address)
+			if blob.failed():
+				errors.append("вид %s: %s" % [u.appearance, blob.reason])
+				cache[address] = PackedByteArray()
+			else:
+				cache[address] = blob.bytes
+		var bytes: PackedByteArray = cache[address]
+		if bytes.is_empty():
+			continue
+		var why := RollingStock.show_mesh(u, bytes, asset)
+		if why != "":
+			errors.append("вид %s единицы %s: %s" % [u.appearance, u.id, why])
+			continue
+		loaded += 1
+		stats["stock_asset_bytes"] = int(stats.get("stock_asset_bytes", 0)) + bytes.size()
+	stats["stock_meshes"] = loaded
 
 
 func _parse_elements(network: Dictionary) -> Array[TrackGeom.Element]:
@@ -1756,10 +1858,38 @@ func _frame_bbox(bbox: Rect2, elements: Array[TrackGeom.Element]) -> Rect2:
 			if tb.size == Vector2.ZERO:
 				return bbox
 			return tb
+		"stock":
+			# Габарит ПОСТАВЛЕННЫХ единиц — с запасом в их же длину, иначе
+			# машина упирается в края кадра и её не рассмотреть. Ни одной
+			# единицы — сказать вслух, а не показать вместо неё всю сеть:
+			# «навёлся на состав, а состава нет» обязано быть видно.
+			var sb := _stock_bbox()
+			if sb.size == Vector2.ZERO:
+				_fail("габарит «состав»: в партии нет ни одной поставленной единицы")
+				return bbox
+			return sb
 		"network":
 			return bbox
-	_fail("габарит «%s» неизвестен — знаю network, throat, terrain" % frame)
+	_fail("габарит «%s» неизвестен — знаю network, throat, terrain, stock" % frame)
 	return bbox
+
+
+## _stock_bbox — габарит поставленного подвижного состава.
+##
+## Считается по точкам отсчёта и длинам, а не по узлам сцены: узел может ещё не
+## иметь меша (вид качается), а положение известно сразу.
+func _stock_bbox() -> Rect2:
+	var mn := Vector2(INF, INF)
+	var mx := Vector2(-INF, -INF)
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		var half := u.length_m
+		var c := Vector2(u.pose.x, u.pose.y)
+		mn = Vector2(minf(mn.x, c.x - half), minf(mn.y, c.y - half))
+		mx = Vector2(maxf(mx.x, c.x + half), maxf(mx.y, c.y + half))
+	if mn.x == INF:
+		return Rect2()
+	return Rect2(mn, mx - mn)
 
 
 ## _role_bbox — габарит элементов, входящих в устройства.
@@ -1879,17 +2009,26 @@ func _hud_text() -> String:
 	l.append("сервер говорит что и где, как это выглядит — дело рендерера.[/i]")
 	l.append("[i]где растёт лес и какой породы — прислано; МЕШ ели, куста и пучка,")
 	l.append("плотность рассева, небо, свет и дымка — клиентские, как и цвет класса.[/i]")
-	# ЛОКОМОТИВ НАЗВАН ТОЧНО, А НЕ ОДНИМ СЛОВОМ. Строка «сервер не отдаёт вовсе»
-	# была неполной, и владелец поймал её 2026-08-12: файл vl80.glb на сервере
-	# ЕСТЬ (server/assets/, приехал туда коммитом 7f26f49 по решению «ассеты
-	# скачиваются с сервера»). Дыры две и они разной природы, поэтому и названы
-	# порознь: ручки, которая отдаёт ассет, в httpapi нет; и — важнее — в модели
-	# мира нет сущности «локомотив стоит здесь», то есть подвижного состава не
-	# существует в контракте вовсе. Вторая дыра делает первую бессмысленной:
-	# скачанный меш некуда поставить.
-	l.append("[i]не рисуется: локомотив — ассет на сервере есть, ручки нет, и")
-	l.append("подвижного состава нет в модели мира; решётка стрелки (переводные")
-	l.append("брусья) — не отдаётся вовсе.[/i]")
+	# ПОДВИЖНОЙ СОСТАВ. Прежде здесь стояла строка «локомотив не рисуется: ассет
+	# есть, ручки нет, и подвижного состава нет в модели мира» — обе дыры
+	# закрыты 2026-08-13, и запись об этом оставлена там, где её прочтут: в HUD
+	# видно, ЧТО именно приехало с сервера, а что клиент показал сам.
+	if int(stats.get("stock_units", 0)) > 0:
+		l.append("[b]подвижной состав[/b]: единиц %d, партия %s (место, тип и габарит — с сервера)" % [
+			stats.get("stock_units", 0), stats.get("match", "?")])
+		var shown: int = int(stats.get("stock_meshes", 0))
+		var total: int = int(stats.get("stock_units", 0))
+		if shown >= total:
+			l.append("  вид: меш из ассета, %.1f МБ, хеш сверен с адресом" % [
+				float(stats.get("stock_asset_bytes", 0)) / 1e6])
+		else:
+			l.append("  [color=#ffc060]вид: габаритной коробкой у %d из %d — ассет не доехал[/color]" % [
+				total - shown, total])
+		l.append("  [i]ни скорости, ни времени в состоянии нет: тика не существует,")
+		l.append("  машина стоит. Появятся вместе с тем, что их считает.[/i]")
+	else:
+		l.append("[i]подвижного состава в партии нет — это законный мир, а не отказ[/i]")
+	l.append("[i]не рисуется: решётка стрелки (переводные брусья) — не отдаётся вовсе.[/i]")
 	l.append("[i]русло врезано в ВЫСОТЫ: берег и долина приехали отсчётами чанка и")
 	l.append("не стоили ни одного лишнего байта. Лентой рисуется только гладь.[/i]")
 	l.append("[i]круги уровней вложены, и в точке ПОКАЗАН ровно один: узлы связаны")
@@ -1940,6 +2079,7 @@ func _print_report() -> void:
 			"elements_with_width", "elements_without_width", "elements_without_width_ids",
 			"axis_points", "axis_bbox", "view",
 			"solid_bodies", "solid_triangles", "solid_ms", "driver_stand", "driver",
+			"stock_types", "stock_assets", "stock_units", "stock_meshes", "stock_asset_bytes", "match",
 			"structures_received", "features_received", "runs_received", "track_types_received",
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",

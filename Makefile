@@ -50,6 +50,21 @@ DEV_BIN ?= /tmp/clearahead-dev
 DB          ?= $(CURDIR)/world.db
 MAP         ?= $(CURDIR)/server/maps/st_a.json
 
+# НАБОР КОНТЕНТА и РАССТАНОВКА — третий и четвёртый файлы мира, и они разной
+# природы, поэтому это две переменные, а не одна.
+#
+# CONTENT — какие машины БЫВАЮТ: паспорта и ассеты. Общий на сервер и к карте
+# отношения не имеет (решение владельца: «ВЛ80 — общий контент»). Положи его в
+# карту — и вторая карта повторила бы габарит и тяговую характеристику у себя.
+#
+# PLACEMENT — что где СТОИТ. Состояние партии, а не карты: иначе переставить
+# локомотив на соседний путь можно было бы только новой ревизией региона, то
+# есть обесценив клиентам кэш всей сети.
+#
+# Пустой PLACEMENT — законный мир без подвижного состава, а не поломка.
+CONTENT     ?= $(CURDIR)/server/assets
+PLACEMENT   ?= $(CURDIR)/server/maps/st_a_placement.json
+
 # MAP_SMALL СНЕСЕНА 2026-08-12 вечером, и запись оставлена, чтобы её не завели
 # заново. Это был второй файл карты — та же станция охватом 1024 м вместо
 # 8192 м — ради быстрого цикла разработки: `make dev MAP=…/st_a_small.json`.
@@ -116,7 +131,7 @@ REACH_ARG := $(if $(REACH),--reach=$(REACH))
 # position '-9000'». Снимок не делался вовсе, а виноватым выглядел клиент.
 COMMA := ,
 
-.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe
+.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe stock-probe
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -134,17 +149,20 @@ help:
 	@echo '  make client-check       ЧИСТЫЕ проверки: фикстуры, без сервера'
 	@echo '  make client-check-live  договор с сервером (сервер должен работать)'
 	@echo '  make walk-probe         ходит ли человек: стоит, идёт, вертит головой, всходит на путь'
+	@echo '  make stock-probe        стоит ли машина на рельсах: пять чисел против присланных'
 	@echo '  make client-fixtures    переснять снимок сети с живого сервера'
 	@echo '  make client-shot        снимок экрана в $(SHOT), окно за экраном'
 	@echo
-	@echo 'Переменные: MAP, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH'
+	@echo 'Переменные: MAP, CONTENT, PLACEMENT, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH'
+	@echo 'CONTENT — набор: какие машины бывают. PLACEMENT — расстановка партии: что где стоит.'
 	@echo 'MAP — авторская карта мира файлом; нет файла — сервер не поднимется.'
 	@echo 'REACH — ДАЛЬНОСТЬ ВЗГЛЯДА клиента, метры либо all. Мир от неё не меняется:'
 	@echo 'клиент просит меньше уровней, сервер объявляет потолок. make dev REACH=500'
 	@echo 'вместо снесённой малой карты — быстрый цикл на настоящем мире.'
 	@echo 'Цели dev* сносят базу перед стартом (DEV_RESEED=-reseed); serve — нет.'
 	@echo 'ROLE: builder (орто под углом), dsp (почти сверху, шире), driver (с оси, горизонтально).'
-	@echo 'FRAME: network (вся сеть), throat (только устройства), terrain (весь приехавший рельеф).'
+	@echo 'FRAME: network (вся сеть), throat (только устройства), terrain (весь приехавший рельеф),'
+	@echo '       stock (поставленный подвижной состав).'
 	@echo 'Горловина наводится по габаритам элементов с role.turnout, а не по числу.'
 	@echo
 	@echo 'Примеры:'
@@ -201,7 +219,7 @@ define with_server
 		echo 'Кто держит порт:  lsof -nP -iTCP:$(SERVER_PORT) -sTCP:LISTEN'; \
 		exit 1; \
 	fi
-	@$(DEV_BIN) -db $(DB) -map $(MAP) -addr $(SERVER_ADDR) $(DEV_RESEED) & \
+	@$(DEV_BIN) -db $(DB) -map $(MAP) -content $(CONTENT) -placement $(PLACEMENT) -addr $(SERVER_ADDR) $(DEV_RESEED) & \
 	srv=$$!; \
 	trap 'kill $$srv 2>/dev/null || true' EXIT INT TERM; \
 	for i in $$(seq 1 100); do \
@@ -242,7 +260,7 @@ dev-shot: dev-bin client-import
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
 ## go.mod лежит в server/, а не в корне: без cd команда не собирается вовсе.
 serve:
-	cd server && $(GO) run ./cmd/clearahead -db $(DB) -map $(MAP) -addr $(SERVER_ADDR)
+	cd server && $(GO) run ./cmd/clearahead -db $(DB) -map $(MAP) -content $(CONTENT) -placement $(PLACEMENT) -addr $(SERVER_ADDR)
 
 test-go:
 	cd server && $(GO) build ./... && $(GO) vet ./... && $(GO) test ./...
@@ -330,6 +348,26 @@ walk-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/walk_probe.gd -- \
 		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(REACH_ARG) $(WALK_ARGS)
+
+
+## stock-probe — СТОИТ ЛИ МАШИНА НА РЕЛЬСАХ. Сервер должен быть уже поднят.
+##
+## Зачем зонд, а не снимок: на кадре из кабины видно, что «локомотив чуть
+## сдвинут», а насколько и в какую сторону — не видно, и спорить об этом можно
+## долго. Этим заходом так и вышло: глаз назвал сдвиг поперечным, а зонд
+## показал, что поперёк машина стоит ровно (0.000 м), зато вдоль хода уехала на
+## 0.31 м — клиент домножал на масштаб сдвиг, уже сосчитанный в метрах мира.
+##
+## Меряется пять чисел против ПРИСЛАННЫХ сервером: центр меша поперёк оси и
+## вдоль хода, низ от головки рельса, длина меша против паспорта и наружная
+## грань колеса против наружной грани головки.
+##
+## --headless НЕВОЗМОЖЕН по той же причине, что у walk-probe: мир строится
+## сценой, а сцене нужен вьюпорт. Окно настоящее, но уведено за экран.
+stock-probe: client-import
+	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
+		--script res://tools/stock_probe.gd -- \
+		--server=$(SERVER_URL) --region=$(REGION) --role=builder $(REACH_ARG)
 
 
 ## client-fixtures — переснять снимок сети с живого сервера.

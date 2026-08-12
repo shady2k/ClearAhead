@@ -1,0 +1,11 @@
+{
+  "format_version": 1,
+  "region": "ST_A",
+  "units": [
+    {
+      "id": "LOCO_1",
+      "type": "VL80",
+      "at": { "element": "E_MAIN", "u": 150.0, "direction": "forward" }
+    }
+  ]
+}

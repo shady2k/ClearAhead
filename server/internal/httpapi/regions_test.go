@@ -9,6 +9,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
+	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
@@ -36,6 +37,10 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		NewNetworkHandler(maps),
 		NewChunksHandler(world, nil),
 		NewObjectsHandler(maps),
+		// Живое состояние: партия ПУСТА, и это не заглушка ради компиляции.
+		// Роутер проверяется на развод адресов, а не на содержимое партии, и
+		// пустая партия — законный мир (станция без единой машины).
+		NewLiveHandler(&match.Match{ID: "M1", Region: st.Manifest.MapID}),
 	)
 	return h, st, world
 }

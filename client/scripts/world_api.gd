@@ -389,3 +389,92 @@ func terrain(region: String, addresses: Array) -> Array:
 ## и два способа её назвать развели бы её тождество надвое.
 func _chunk_path(region: String, level: int, cx: int, cz: int) -> String:
 	return "/regions/%s/chunks/%d/%d/%d" % [region, level, cx, cz]
+
+
+## --- НАБОР КОНТЕНТА И ЖИВОЕ СОСТОЯНИЕ ----------------------------------------
+##
+## Три ресурса разной природы, и путать их сроки жизни нельзя:
+##
+##   /content                   какие машины БЫВАЮТ. Перепроверяется по ETag.
+##   /assets/{alg}-{hex}        байты вида. Кэш навсегда: адрес есть содержимое.
+##   /regions/{region}/live     что где СТОИТ. Не кэшируется вовсе.
+##
+## Первое — контент, второе — байты контента, третье — состояние партии. Первые
+## два общие на сервер (ВЛ80 к карте отношения не имеет), третье принадлежит
+## партии, идущей на этом регионе.
+
+
+## Content — набор: паспорта подвижного состава и записи ассетов.
+class Content extends Answer:
+	var data: Dictionary = {}
+
+
+## Live — живое состояние партии. Сегодня в нём только положения стоящих единиц:
+## ни времени, ни скорости в ответе нет, потому что ничего не движется.
+class Live extends Answer:
+	var data: Dictionary = {}
+
+
+## AssetBlob — байты одного ассета, СВЕРЕННЫЕ с адресом.
+class AssetBlob extends Answer:
+	var bytes := PackedByteArray()
+	## digest — что насчитал клиент. Хранится рядом с причиной, чтобы отказ
+	## показывал оба хеша, а не только слово «не совпал».
+	var digest := ""
+
+
+## content — набор контента сервера.
+func content() -> Content:
+	var a := Content.new()
+	var r: Dictionary = await net.fetch_json("/content")
+	if not r["ok"]:
+		a.reason = String(r["error"])
+		return a
+	a.data = r["data"] as Dictionary
+	return a
+
+
+## live — живое состояние партии в регионе.
+func live(region: String) -> Live:
+	var a := Live.new()
+	var r: Dictionary = await net.fetch_json("/regions/%s/live" % region)
+	if not r["ok"]:
+		a.reason = String(r["error"])
+		return a
+	a.data = r["data"] as Dictionary
+	return a
+
+
+## asset — байты ассета по адресу вида "sha256-<hex>".
+##
+## ХЕШ СВЕРЯЕТСЯ ВСЕГДА, и это не перестраховка. Адрес ассета ЕСТЬ хеш его
+## содержимого, поэтому проверка стоит одного прохода по буферу и ловит то, чего
+## иначе не поймать ничем: испорченный кэш, оборванную докачку, подменённый
+## прокси. Замер на боевом файле (21.4 МБ, машина владельца): sha256 считается
+## 12 мс — против секунд самой загрузки это ничто.
+##
+## Несовпадение — ОТКАЗ, а не «нарисуем что доехало»: меш, собранный из битых
+## байт, выглядит как ошибка отрисовки, и искать её будут не там.
+func asset(address: String) -> AssetBlob:
+	var a := AssetBlob.new()
+	if not address.begins_with("sha256-"):
+		a.reason = "адрес ассета %s: клиент умеет только sha256" % address
+		return a
+	var r: Dictionary = await net.fetch("/assets/" + address)
+	if not r["ok"]:
+		a.reason = String(r["error"])
+		return a
+	var code: int = int(r["code"])
+	if code != CODE_OK:
+		a.reason = "ассет %s: код %d" % [address, code]
+		return a
+	var body: PackedByteArray = r["body"]
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(body)
+	a.digest = "sha256-" + ctx.finish().hex_encode()
+	if a.digest != address:
+		a.reason = "ассет приехал битым: адрес %s, у байт %s (%d Б)" % [address, a.digest, body.size()]
+		return a
+	a.bytes = body
+	return a

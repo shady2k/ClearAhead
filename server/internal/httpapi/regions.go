@@ -30,6 +30,7 @@ type regionsRouter struct {
 	network  http.Handler
 	chunks   http.Handler
 	objects  http.Handler
+	live     http.Handler
 }
 
 // NewRegionsHandler собирает корень /regions/ из готовых подручек.
@@ -42,13 +43,20 @@ type regionsRouter struct {
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}         — рельеф, высоты
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/cover   — покров той же клетки
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/forest  — лес, только уровень 0
+//	GET /regions/{region}/live                             — живое состояние партии
+//
+// Ревизии в адресе live НЕТ, и это не забывчивость: ревизия называет карту, а
+// живое состояние к карте не относится — оно принадлежит партии, идущей на этой
+// карте. Поставь туда ревизию — и получилось бы, что положение локомотива есть
+// свойство ревизии региона, то есть переставить машину можно только перерисовав
+// мир.
 //
 // Корень один, и это регион. До биды ClearAhead-8kx их было два: сеть на
 // /maps/{id}/revisions/{n}/geometry, рельеф на /regions/{id}/chunks/…, а
 // связывало их соглашение `region := m.MapID` из одной строки
 // worldgen.Bootstrap — то есть знание, которого у клиента нет и быть не должно.
-func NewRegionsHandler(manifest, network, chunks, objects http.Handler) http.Handler {
-	return &regionsRouter{manifest: manifest, network: network, chunks: chunks, objects: objects}
+func NewRegionsHandler(manifest, network, chunks, objects, live http.Handler) http.Handler {
+	return &regionsRouter{manifest: manifest, network: network, chunks: chunks, objects: objects, live: live}
 }
 
 func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -66,6 +74,8 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.network.ServeHTTP(w, r)
 	case len(parts) == 5 && parts[2] == "revisions" && parts[4] == "objects":
 		h.objects.ServeHTTP(w, r)
+	case len(parts) == 3 && parts[2] == "live":
+		h.live.ServeHTTP(w, r)
 	case len(parts) == 6 && parts[2] == "chunks":
 		h.chunks.ServeHTTP(w, r)
 	// Покров — ХВОСТ адреса чанка, а не свой ресурс: клетка одна, и два пути к
