@@ -39,7 +39,7 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 		rg.TrackTypes = append(rg.TrackTypes, RenderTrackType{
 			ID:    t.ID,
 			Gauge: t.Gauge,
-			Rail:  RenderRail{Height: t.Rail.Height},
+			Rail:  RenderRail{Height: t.Rail.Height, HeadWidth: t.Rail.HeadWidth},
 			Sleeper: RenderSleeper{
 				Pitch:  t.Sleeper.Pitch,
 				Length: t.Sleeper.Length,

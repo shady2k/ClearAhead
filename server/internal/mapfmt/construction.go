@@ -230,6 +230,9 @@ func checkTrackType(prefix string, t *TrackType) error {
 	if !(t.Rail.Height >= MinRailHeight && t.Rail.Height <= MaxRailHeight) {
 		return bad("rail.height", t.Rail.Height, MinRailHeight, MaxRailHeight)
 	}
+	if !(t.Rail.HeadWidth >= MinRailHeadWidth && t.Rail.HeadWidth <= MaxRailHeadWidth) {
+		return bad("rail.head_width", t.Rail.HeadWidth, MinRailHeadWidth, MaxRailHeadWidth)
+	}
 	if !(t.Sleeper.Height >= MinSleeperHeight && t.Sleeper.Height <= MaxSleeperHeight) {
 		return bad("sleeper.height", t.Sleeper.Height, MinSleeperHeight, MaxSleeperHeight)
 	}

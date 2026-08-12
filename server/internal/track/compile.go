@@ -247,6 +247,10 @@ type RenderTrackType struct {
 // ширины головки дало колею 1.335 вместо 1.435.
 type RenderRail struct {
 	Height float64 `json:"height"`
+	// HeadWidth — ширина головки поверху. Единственное число профиля, которое
+	// заведено, и заведено по условию: gauge задан между внутренними рабочими
+	// гранями, и без ширины головки рельс нельзя поставить, не выдумав её.
+	HeadWidth float64 `json:"head_width"`
 }
 
 type RenderSleeper struct {

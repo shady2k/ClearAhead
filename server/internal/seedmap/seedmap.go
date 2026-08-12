@@ -310,7 +310,7 @@ func construction(runs []mapfmt.ConstructionRun) *mapfmt.Construction {
 		Types: []mapfmt.TrackType{{
 			ID:      TrackTypeID,
 			Gauge:   1.435,
-			Rail:    mapfmt.TrackRail{Height: 0.18},
+			Rail:    mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075},
 			Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
 			Ballast: mapfmt.TrackBallast{
 				HalfWidth: 1.75,

@@ -57,7 +57,8 @@ type wireTrackType struct {
 }
 
 type wireRail struct {
-	Height float64 `json:"height"`
+	Height    float64 `json:"height"`
+	HeadWidth float64 `json:"head_width"`
 }
 
 type wireSleeper struct {

@@ -60,6 +60,7 @@ const (
 // высоты), и проверяется она согласованностью, а не диапазоном.
 const (
 	MinRailHeight, MaxRailHeight             = 0.10, 0.30 // Р50 — 0.152, Р65 — 0.180, Р75 — 0.192
+	MinRailHeadWidth, MaxRailHeadWidth       = 0.03, 0.12 // Р50 — 0.072, Р65 — 0.075
 	MinSleeperHeight, MaxSleeperHeight       = 0.10, 0.40 // деревянная около 0.18, железобетонная около 0.20
 	MinBallastDepth, MaxBallastDepth         = 0.10, 1.00 // станционные пути от 0.20, главные до 0.50 с подушкой
 	MinBallastSideSlope, MaxBallastSideSlope = 0.5, 4.0   // 1:1,5 обычен; вне этого — не откос призмы

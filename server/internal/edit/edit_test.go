@@ -52,7 +52,7 @@ func testBaseMap() *mapfmt.Map {
 			Types: []mapfmt.TrackType{{
 				ID:      "TRACK_MAIN_1435",
 				Gauge:   1.435,
-				Rail:    mapfmt.TrackRail{Height: 0.18},
+				Rail:    mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075},
 				Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
 				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
 			}},
@@ -700,7 +700,7 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 		},
 		Construction: &mapfmt.Construction{
 			DefaultType: "TRACK_MAIN_1435",
-			Types:       []mapfmt.TrackType{{ID: "TRACK_MAIN_1435", Gauge: 1.435, Rail: mapfmt.TrackRail{Height: 0.18}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}}},
+			Types:       []mapfmt.TrackType{{ID: "TRACK_MAIN_1435", Gauge: 1.435, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: "E5", From: 0, To: 100, Direction: "forward"},
