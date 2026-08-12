@@ -9,6 +9,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
+	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -27,13 +28,13 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		t.Fatalf("новая карта: %v", err)
 	}
 	world := newChunksTestStore(t)
-	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	h := NewRegionsHandler(
 		NewRegionManifestHandler(world, maps),
 		NewNetworkHandler(maps),
-		NewChunksHandler(world),
+		NewChunksHandler(world, nil),
 		NewObjectsHandler(maps),
 	)
 	return h, st, world
@@ -76,19 +77,32 @@ func TestRegionManifestCarriesDetailRuleNumbers(t *testing.T) {
 		t.Fatalf("хеши манифеста региона разошлись с манифестом карты: %+v", got)
 	}
 	want := chunkRule{
-		SideM:         chunk.SideM0,
-		StepM:         chunk.StepM0,
-		Samples:       chunk.Samples,
-		Level0RadiusM: chunk.Level0RadiusM,
-		MaxLevel:      chunk.MaxLevel,
+		SideM:   chunk.SideM0,
+		StepM:   chunk.StepM0,
+		Samples: chunk.Samples,
+		// Охват сверяется с ПРАВИЛОМ РЕГИОНА, а не с константой пакета: с
+		// 2026-08-12 он приезжает картой и лежит в записи региона, и манифест
+		// обязан называть то, чем засеяна база.
+		Level0RadiusM: testRule.Level0RadiusM,
+		MaxLevel:      testRule.MaxLevel,
+		// Шаг выборки оси приходит не из chunk, а из terrain: там ось выбирают
+		// на самом деле. Сверка идёт с тем же источником — иначе тест
+		// подтверждал бы копию (ClearAhead-cue).
+		AxisStepM: terrain.AxisStepM,
 	}
 	if got.Chunks != want {
-		t.Fatalf("правило подробности %+v, в пакете chunk %+v", got.Chunks, want)
+		t.Fatalf("правило подробности %+v, у региона и пакета chunk %+v", got.Chunks, want)
+	}
+	// Без шага выборки оси правило невыводимо: расстояние меряется до ТОЧЕК
+	// оси, а не до её линии, и клиент, выбравший ось иначе, назовёт у границы
+	// круга другой уровень. Поле обязано быть непустым, а не просто присутствовать.
+	if got.Chunks.AxisStepM <= 0 {
+		t.Fatalf("шаг выборки оси %v — клиенту нечем повторить расстояние до оси", got.Chunks.AxisStepM)
 	}
 	// Числа обязаны быть теми же, по которым сервер сам порождает чанки: не
-	// «похожими», а буквально из пакета chunk. Отдельно проверяется, что клиент
+	// «похожими», а буквально теми, что записаны у региона. Отдельно проверяется, что клиент
 	// с ними досчитает до того же уровня, что и сервер.
-	if lvl, ok := chunk.LevelFor(got.Chunks.Level0RadiusM - 1); !ok || lvl != 0 {
+	if lvl, ok := testRule.LevelFor(got.Chunks.Level0RadiusM - 1); !ok || lvl != 0 {
 		t.Fatalf("уровень внутри радиуса нулевого уровня: %d, ok=%v", lvl, ok)
 	}
 
@@ -209,7 +223,7 @@ func TestRegionGeoreferenceArrivesAsIs(t *testing.T) {
 	}
 
 	const frame = `{"datum":"WGS84","origin":{"lat":45.03,"lon":38.97,"h":25}}`
-	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: frame, Epoch: 7}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: frame, Epoch: 7, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	var with map[string]json.RawMessage

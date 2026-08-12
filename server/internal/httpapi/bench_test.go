@@ -22,7 +22,7 @@ func benchStore(tb testing.TB) *worldstore.Store {
 		tb.Fatalf("база мира: %v", err)
 	}
 	tb.Cleanup(func() { s.Close() })
-	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1}); err != nil {
+	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1, Rule: testRule}); err != nil {
 		tb.Fatalf("регион: %v", err)
 	}
 	if err := s.PutChunk(worldstore.Chunk{
@@ -38,7 +38,7 @@ func benchStore(tb testing.TB) *worldstore.Store {
 
 func BenchmarkServeChunk(b *testing.B) {
 	s := benchStore(b)
-	h := NewChunksHandler(s)
+	h := NewChunksHandler(s, nil)
 
 	// ETag берётся из самой ручки, а не собирается здесь: 304 обязан отвечать
 	// на тот хеш, который сервер и выдал.
@@ -87,7 +87,7 @@ func BenchmarkServeChunk(b *testing.B) {
 // httptest.Server: к цене ручки прибавляется цена HTTP-стека и петли.
 func BenchmarkServeChunkOverNetwork(b *testing.B) {
 	s := benchStore(b)
-	srv := httptest.NewServer(NewChunksHandler(s))
+	srv := httptest.NewServer(NewChunksHandler(s, nil))
 	defer srv.Close()
 	cl := srv.Client()
 

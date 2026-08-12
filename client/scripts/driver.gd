@@ -1,0 +1,777 @@
+## Driver — ЧЕЛОВЕК В МИРЕ и три вида на него: обзор, от первого лица, от третьего.
+##
+## Перенос из спайка-однодневки №3 «машинист» (`client/scripts/spike_fpv.gd`,
+## 809280f^), а не сочинение заново. Спайк отвечал на один вопрос владельца: как
+## выглядит наш путь не с четырёхсот метров, а с полутора — оттуда, откуда на него
+## смотрит человек.
+##
+## # Зачем здесь человек, а не просто камера на высоте глаза
+##
+## Он нужен НЕ ДЛЯ КРАСОТЫ, А КАК ЛИНЕЙКА, и это довод спайка дословно: пока в
+## кадре нет человека, ошибка масштаба в пути, платформе и постройках ничем не
+## проверяется. Летающая камера на высоте 1.75 м выглядит так же и не проверяет
+## ничего: у неё нет ни размера, ни тени, ни походки, с которыми глаз мог бы
+## сверить шпалу.
+##
+## Отсюда и требование к тверди: человек стоит на ТОЙ ЖЕ поверхности, которую
+## видит, — не на копии поля высот и не на подобранной константе. Саму твердь
+## строит мир (world.gd::_build_solid) из присланных мешей; здесь только ходят по
+## ней и спрашивают её лучом.
+##
+## # Чей это код по границе владения (ClearAhead-sjq)
+##
+## ЦЕЛИКОМ КЛИЕНТСКИЙ. Персонаж отвечает на вопрос «откуда смотрят» — тот же
+## вопрос, на который отвечают углы камеры роли и её проекция. Сервер о человеке
+## не знает и знать не должен: ни роста, ни походки, ни высоты глаз в контракте
+## нет и не предвидится.
+##
+## Но выдумывать факты о мире ему по-прежнему нельзя. Под ноги идёт ПРИСЛАННАЯ
+## поверхность, а начальная точка выражена в КООРДИНАТАХ ПУТИ, который тоже
+## прислан, — а не парой x, z, взятой ниоткуда.
+##
+## # ИЗВЕСТНЫЕ ГРАНИЦЫ, записанные спайком, чтобы их не открывали заново
+##
+##   * лес, кусты и трава ПРОХОДИМЫ НАСКВОЗЬ — они MultiMesh, а у него коллизий
+##     нет вовсе; ставить сорок тысяч капсул на деревья незачем;
+##   * на платформу с земли не взойти: шаг берёт ступень STEP_UP, а лестниц нет
+##     ни в геометрии, ни в контракте — их там нет и у сервера;
+##   * по реке ходят посуху: вода нарочно исключена из тверди (world.gd).
+##
+## Чего здесь НЕТ и не будет сегодня: ни физики поезда, ни кабины, ни управления
+## локомотивом. Направление проекта держит ядро дискретным, и «машинист — мечта,
+## а не цель»: человек ХОДИТ по станции, а не ведёт состав. Подвижного состава в
+## модели мира не существует вовсе, и это сказано на экране, а не обойдено.
+class_name Driver
+extends CharacterBody3D
+
+## --- откуда начинает человек -------------------------------------------------
+## Точка задаётся В КООРДИНАТАХ ПУТИ (элемент, u вдоль него, латераль от оси), а
+## не в метрах мира: мир не имеет единого начала координат, и любая зашитая пара
+## x, z развалится от первой же правки фикстуры. Довод спайка перенесён вместе с
+## числами, и он же объясняет, почему тут нет имени элемента: спайк адресовался к
+## «E_MAIN», потому что сам его и породил, а нам элементы приезжают с сервера —
+## имя, зашитое в клиент, было бы фактом о мире.
+##
+## САМЫЙ ДЛИННЫЙ ЭЛЕМЕНТ — то же правило, по которому прежняя камера машиниста
+## выбирала, с какой оси смотреть. Оно не выдумывает данных: элемент берётся из
+## присланных, и на затравке ST_A им оказывается тот же E_MAIN.
+##
+## Латераль ОТРИЦАТЕЛЬНАЯ — вправо от хода оси (левая нормаль положительна,
+## TrackGeom.AxisPoint.left). На затравке это сторона платформы: PLAT_MAIN лежит
+## side = "right", 1.745…4.745 м от оси, то есть человек встаёт за её дальней
+## кромкой, на земле, а не на плите.
+const START_U_M := 62.0          # м вдоль элемента: середина платформы (спаны 40…100)
+const START_LAT_M := -6.0        # м от оси: за дальней кромкой платформы (4.745)
+const START_YAW_DEG := 0.0       # градусы от направления пути: 0 — вдоль него
+const START_PITCH_DEG := -3.0    # градусы: чуть вниз, чтобы в кадр вошли ноги пути
+
+## --- сложение человека -------------------------------------------------------
+## Числа — с натуры: рост 1.80, глаза на 6-7 см ниже темени, плечи 0.44, шаг
+## (полный цикл, две ноги) 1.5 м. Всё это ЛИНЕЙКА для остального кадра, поэтому
+## подгонять их под картинку нельзя — подгонять надо картинку.
+const BODY_H := 1.80             # м — рост с кепкой
+const EYE_H := 1.66              # м — высота глаз над подошвой
+const HIP_H := 0.90              # м — тазобедренный сустав
+const SHOULDER_H := 1.42         # м — плечевой сустав
+const NECK_H := 1.46             # м — верх кузова
+const HEAD_R := 0.098            # м — полуширина головы
+const BODY_HALF_W := 0.22        # м — полуширина плеч
+const BODY_HALF_D := 0.13        # м — полутолщина кузова
+const CAPSULE_R := 0.30          # м — радиус капсулы: по плечам, а не по животу
+const STRIDE := 1.50             # м — путь за полный цикл маха
+
+## --- ход ---------------------------------------------------------------------
+## Скорости человека, а не игрового персонажа: 1.45 м/с — обычный шаг по путям
+## (5.2 км/ч), 3.9 м/с — бег трусцой. Быстрее нельзя: на станции длиной сотни
+## метров завышенная скорость мгновенно врёт про размер — а размер здесь и
+## проверяется.
+const WALK_SPEED := 1.45         # м/с
+const RUN_SPEED := 3.90          # м/с
+const ACCEL := 14.0              # м/с² — разгон и торможение до целевой скорости
+const JUMP_V := 3.10             # м/с — прыжок примерно на полметра
+const AIR_CONTROL := 0.35        # доля разгона, доступная в воздухе
+
+## СТУПЕНЬ, КОТОРУЮ БЕРЁТ ШАГ. Не косметика: без неё человек упирается в первую
+## же шпалу. Отметки, ради которых число именно такое (все от подошвы балласта):
+## шпала около 0.20, головка рельса около 0.36, борт откоса призмы — наклонный и
+## берётся обычным ходом. Платформа сюда не входит нарочно: человек не
+## запрыгивает на неё с земли, он идёт к торцу — которого в геометрии нет.
+const STEP_UP := 0.42            # м
+const STEP_PROGRESS := 0.35      # доля намеченного пути, ниже которой считаем «упёрся»
+
+## --- взгляд ------------------------------------------------------------------
+const MOUSE_SENS := 0.11         # градусов на пиксель движения мыши
+const PITCH_LIMIT := 87.0        # градусы — предел наклона, чтобы не переворачиваться
+const EYE_FOV := 72.0            # градусы — поле зрения от первого лица
+const TP_DIST := 3.6             # м — камера от третьего лица позади человека
+const TP_HEIGHT := 1.70          # м — и на этой высоте
+const BOB_AMP := 0.020           # м — качание головы при шаге; не больше, иначе укачивает
+
+## ОБЗОРНЫЙ ВИД — ЭТО ОРБИТА ВОКРУГ ЧЕЛОВЕКА, а не вокруг станции. У спайка им
+## была родительская камера мира, наведённая на точку под ногами; у нас это та же
+## OrbitCamera, что у строителя и ДСП, но фокус ей даёт человек. Углы и ширина
+## кадра — свойства ВЗГЛЯДА и потому законно здесь.
+##
+## Перспектива, а не ортография: вокруг человека орто читается макетом — у
+## предметов в двух метрах и в двухстах одинаковый размер, и рост фигуры, ради
+## которого она и заведена, перестаёт что-либо мерить.
+##
+## ШИРИНА КАДРА ВЫБРАНА СЧЁТОМ, А НЕ НА ГЛАЗ: в обзоре человек обязан оставаться
+## видимым — иначе это обзор станции, а не его. Кадр 60 м на окне 900 пикселей
+## даёт 15 пикселей на метр, то есть фигуру ростом 27 пикселей: силуэт с руками и
+## ногами ещё читается человеком. При 90 м их 18, и он становится точкой.
+const ORBIT_FRAME_M := 60.0      # м — что видно в обзорном кадре
+const ORBIT_AZIMUTH_DEG := 205.0
+const ORBIT_ELEV_DEG := 24.0
+
+## --- палитра фигуры ----------------------------------------------------------
+## Сигнальный жилет — единственное яркое пятно на человеке, и это правда: по
+## путям иначе не ходят. Остальное тёмное и матовое, как форменная одежда.
+const C_VEST := Color(0.82, 0.34, 0.04)      # сигнальный жилет
+const C_VEST_TAPE := Color(0.74, 0.75, 0.77) # светоотражающая лента
+const C_CLOTH := Color(0.15, 0.18, 0.25)     # куртка и брюки
+const C_BOOT := Color(0.10, 0.10, 0.11)      # ботинки
+const C_SKIN := Color(0.63, 0.46, 0.36)      # лицо и кисти
+const C_CAP := Color(0.11, 0.13, 0.18)       # форменная кепка
+
+const MODE_ORBIT := 0
+const MODE_EYE := 1
+const MODE_THIRD := 2
+const MODE_NAMES := ["обзор", "от первого лица", "от третьего лица"]
+## Имена видов для ключа запуска. Те же три, что переключает V.
+const MODE_BY_NAME := {"orbit": MODE_ORBIT, "eye": MODE_EYE, "third": MODE_THIRD}
+
+## ПОСТАНОВКА ЛУЧОМ, А НЕ ПАДЕНИЕМ. Падение выглядит тем же самым, но снимать
+## снимок пришлось бы «через сколько-нибудь кадров, наверное, хватит» — а это
+## гадание, которое ломается от первого же места, где падать выше. Луч даёт
+## точную отметку за один шаг физики.
+##
+## В stand() луч пустить нельзя: тела тверди созданы в этом же кадре, и
+## физический сервер о них ещё не знает — луч уходит в пустоту.
+const SETTLE_LIFT := 2.4         # м — насколько человек ставится выше головки рельса
+const SETTLE_DROP := 12.0        # м — докуда ищется твердь под ним
+
+## Человек встал на твердь. Мир слушает, чтобы поправить панель: до этого мига
+## отметка под ногами неизвестна никому, и число в панели было бы гаданием.
+signal settled(note: String)
+
+## Упёрся в край мира (или отошёл от него). Тот же сигнал и тот же смысл, что у
+## камеры: упор обязан назвать причину, иначе невидимая стена посреди поля
+## неотличима от поломки физики.
+signal limit_changed(note: String)
+
+var _camera: OrbitCamera
+## Элемент пути, в координатах которого выражено место человека. Держится, а не
+## выбрасывается после постановки: зонд адресуется теми же координатами.
+var _element: TrackGeom.Element = null
+var _rig: Node3D                 # всё тело: его вращает рыскание
+var _head: Node3D                # голова: её наклоняет тангаж
+var _eye: Node3D                 # точка глаза, куда садится камера
+var _leg_l: Node3D
+var _leg_r: Node3D
+var _arm_l: Node3D
+var _arm_r: Node3D
+var _head_meshes: Array[MeshInstance3D] = []   # что прячется от собственных глаз
+var _mode := MODE_EYE
+var _yaw := 0.0                  # градусы — рыскание тела
+var _pitch := 0.0                # градусы — тангаж головы
+var _gait := 0.0                 # м — накопленный путь, по нему считается мах
+var _home := Vector3.ZERO        # куда возвращает F
+var _home_yaw := 0.0             # градусы — и каким курсом
+var _rail_top_y := 0.0           # м — отметка головки рельса в точке появления
+var _settle_pending := false     # человек ещё не поставлен лучом на твердь
+var _active := true
+## Край мира. Тот же самый, что у камеры, и это не совпадение: правило одно —
+## ВЕСЬ КАДР остаётся внутри засеянного, а кадр человека сидит у него в голове.
+var _bounds: WorldBounds = null
+var _limit_note := ""
+
+
+## stand — поставить человека В КООРДИНАТАХ ПУТИ и отдать ему камеру роли.
+##
+## Отметка берётся С ЗАПАСОМ ВВЕРХ от присланной отметки головки рельса, а точную
+## находит луч на первом же шаге физики (_settle).
+##
+## Ставить по отметке оси напрямую нельзя, и это не мелочь: z элемента — это
+## ПОВЕРХНОСТЬ КАТАНИЯ (контракт отрисовки, редакция 6), а земля рядом лежит на
+## formation_to_rail_top ниже, под призмой ещё ниже, а на платформе выше. Человек,
+## поставленный по оси, оказался бы то по пояс в насыпи, то в полуметре над
+## плитой. Спрашивать надо ту же твердь, по которой он потом пойдёт.
+func stand(elements: Array[TrackGeom.Element], cam: OrbitCamera, view: String) -> Dictionary:
+	if not MODE_BY_NAME.has(view):
+		return {"ok": false, "reason": "вид «%s» неизвестен — знаю %s"
+			% [view, ", ".join(MODE_BY_NAME.keys())]}
+	var el: TrackGeom.Element = null
+	for e in elements:
+		if el == null or e.length_m > el.length_m:
+			el = e
+	if el == null:
+		return {"ok": false, "reason": "ни одного элемента не приехало — вставать некуда"}
+
+	_camera = cam
+	_mode = int(MODE_BY_NAME[view])
+
+	# Пол наклонный почти всюду: откос призмы 1:1.5 — это 34°, и с обычными 45°
+	# человек по нему ходит, а не съезжает. Прилипание нужно на спуске: без него
+	# каждая шпала подбрасывает и ход превращается в скачки.
+	floor_max_angle = deg_to_rad(52.0)
+	floor_snap_length = 0.6
+	up_direction = Vector3.UP
+
+	var shape := CollisionShape3D.new()
+	var cap := CapsuleShape3D.new()
+	cap.radius = CAPSULE_R
+	cap.height = BODY_H - 0.06        # темя чуть выше капсулы: кепка не упирается в притолоку
+	shape.shape = cap
+	shape.position = Vector3(0.0, cap.height * 0.5, 0.0)
+	add_child(shape)
+
+	_build_rig()
+
+	_element = el
+	var u: float = clampf(START_U_M, 0.0, el.length_m)
+	var tp := track_point(u, START_LAT_M)
+	_rail_top_y = (tp["pos"] as Vector3).y
+	# Рыскание отсчитывается ОТ НАПРАВЛЕНИЯ ПУТИ, а не от оси X мира: путь на
+	# кривой, и «смотреть вдоль» на языке мировых углов — разное число в каждой
+	# точке.
+	put((tp["pos"] as Vector3) + Vector3.UP * SETTLE_LIFT,
+		yaw_for(tp["dir"] as Vector3) + START_YAW_DEG, START_PITCH_DEG)
+	_home_yaw = _yaw
+
+	# Обзорная камера настраивается ОДИН РАЗ: дальше её азимут, наклон и зум
+	# принадлежат игроку, и переключение вида не вправе их сбрасывать. Меняется
+	# только фокус — он всегда там, где стоит человек.
+	if _camera != null:
+		_camera.configure(global_position, ORBIT_FRAME_M,
+			ORBIT_AZIMUTH_DEG, ORBIT_ELEV_DEG, false)
+	_apply_mode(_mode, false)
+	return {"ok": true, "element": el.id, "u": u, "lat": START_LAT_M,
+		"rail_top_m": el.pose_at(u).z, "length_m": el.length_m}
+
+
+## track_point — точка В КООРДИНАТАХ ПУТИ на элементе, где стоит человек: u вдоль
+## него и латераль от оси. Отдаёт место (на отметке ГОЛОВКИ РЕЛЬСА, а не земли:
+## где земля, знает только твердь) и обе оси пути в осях Godot.
+##
+## Публичный метод, потому что этими же координатами адресуется зонд ходьбы:
+## проба перехода через путь обязана ставить человека там, где путь ЕСТЬ, а не по
+## зашитой паре x, z, которая развалится от первой же правки фикстуры.
+func track_point(u: float, lat_m: float) -> Dictionary:
+	if _element == null:
+		return {}
+	var p := _element.pose_at(clampf(u, 0.0, _element.length_m))
+	var lat := p.left()
+	var fwd := p.forward()
+	# Плановые координаты сервера переводит в оси Godot ОДНА функция и в одном
+	# месте — та же, которой строятся все меши. Своя копия перевода означала бы
+	# человека, стоящего не там, где нарисована земля под ним. Направления идут
+	# тем же отображением (x, y) → (x, −z), поэтому у них знак z обратный.
+	return {
+		"pos": TerrainMesh.to_godot(p.x + lat.x * lat_m, p.y + lat.y * lat_m, p.z),
+		"dir": Vector3(fwd.x, 0.0, -fwd.y),
+		"lat_dir": Vector3(lat.x, 0.0, -lat.y),
+	}
+
+
+## yaw_for — рыскание, при котором человек смотрит по направлению dir.
+##
+## Формула живёт в ОДНОМ месте: Godot держит вперёд по −Z, поэтому азимут
+## считается от −Z против часовой. Вторая её копия у зонда разошлась бы с этой на
+## первой же правке знака, и разошлась бы молча.
+func yaw_for(dir: Vector3) -> float:
+	return rad_to_deg(atan2(-dir.x, -dir.z))
+
+
+## put — переставить человека и пустить луч заново.
+##
+## Отметку не задают: её ищет тот же луч, что и при появлении. Публичный метод
+## ради зонда — проба перехода начинается не там, где человек появился.
+func put(at: Vector3, yaw_deg: float, pitch_deg: float) -> void:
+	velocity = Vector3.ZERO
+	global_position = at
+	_home = at
+	_yaw = yaw_deg
+	_pitch = pitch_deg
+	_apply_look()
+	_settle_pending = true
+
+
+## set_active — отдать или отобрать человеку и его камере ввод. Зовёт мир, когда
+## поверх него появляется меню.
+##
+## Курсор здесь ОБЯЗАН отпускаться: захваченный курсор, из-под которого выехало
+## меню, — это меню, по которому нельзя щёлкнуть, и снаружи это неотличимо от
+## зависшего клиента.
+func set_active(on: bool) -> void:
+	_active = on
+	if _camera != null:
+		# Камера слушает жесты ТОЛЬКО в обзоре: в видах от лица те же WASD ведут
+		# человека, а панорама орбиты уводила бы фокус из-под него.
+		_camera.set_active(on and _mode == MODE_ORBIT)
+	if not on:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		return
+	resume_input()
+
+
+## resume_input — вернуть курсор после паузы оболочки.
+##
+## Публичный метод, потому что решение «захватывать или отпустить» принадлежит
+## ВИДУ, а вид знает только мир: в обзоре курсор свободен, в двух других
+## захвачен. Оболочка, угадывающая это за мир, разошлась бы с ним при первом же
+## новом виде.
+func resume_input() -> void:
+	if _mode == MODE_ORBIT:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	else:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+
+
+func mode_name() -> String:
+	return String(MODE_NAMES[_mode])
+
+
+## is_settled — нашёл ли человек под собой твердь. Спрашивает зонд: мерить ходьбу
+## раньше, чем он встал, значит мерить падение.
+func is_settled() -> bool:
+	return not _settle_pending
+
+
+## set_bounds — объявить край региона и СРАЗУ его применить: мир мог быть
+## перестроен другой настройкой, и граница сместилась под самим стоящим.
+func set_bounds(b: WorldBounds) -> void:
+	_bounds = b
+	_clamp_to_world()
+
+
+## _clamp_to_world — за край засеянного не уходят.
+##
+## Скорость гасится ПОПЕРЁК, а не целиком: упершийся в край обязан свободно идти
+## вдоль него. Обнулять её всю значило бы приклеивать человека к стене, из
+## которой он выбирается только задним ходом.
+func _clamp_to_world() -> void:
+	var note := ""
+	if _bounds != null and _bounds.outside(global_position) > 0.0:
+		var before := global_position
+		global_position = _bounds.pull_in(before)
+		# Куда его втянули — то и есть «наружу»: втягивание идёт по прямой к оси,
+		# и второго способа узнать нормаль к краю заводить незачем.
+		var back := before - global_position
+		back.y = 0.0
+		if back.length() > 1e-6:
+			var out_dir := back.normalized()
+			var flat := Vector3(velocity.x, 0.0, velocity.z)
+			var outward := flat.dot(out_dir)
+			if outward > 0.0:
+				flat -= out_dir * outward
+				velocity.x = flat.x
+				velocity.z = flat.z
+		note = "дальше идти некуда: за %.0f м от оси регион кончается — там мира нет ни у кого" % [
+			_bounds.max_offset_m]
+	if note != _limit_note:
+		_limit_note = note
+		limit_changed.emit(note)
+
+
+## --- фигура ------------------------------------------------------------------
+
+## Фигура: узлы суставов + меши на них. Отдельные узлы нужны не ради анимации как
+## таковой — стоящий столбиком человек читается манекеном, и как линейка работает
+## хуже: глаз не верит масштабу, которому не верит поза.
+func _build_rig() -> void:
+	_rig = Node3D.new()
+	_rig.name = "Rig"
+	add_child(_rig)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(1, 1, 1)
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.82
+
+	# Кузов с жилетом — неподвижная часть.
+	var torso := SurfaceTool.new()
+	torso.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_torso(torso)
+	_rig.add_child(_mesh_node(torso, mat, "Torso"))
+
+	# Голова на своём узле: тангаж наклоняет её вместе с камерой.
+	_head = Node3D.new()
+	_head.name = "Head"
+	_head.position = Vector3(0.0, NECK_H, 0.0)
+	_rig.add_child(_head)
+	var head := SurfaceTool.new()
+	head.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_add_head(head)
+	var head_mi := _mesh_node(head, mat, "HeadMesh")
+	_head.add_child(head_mi)
+	_head_meshes.append(head_mi)
+
+	# ГЛАЗ — НЕ РЕБЁНОК ГОЛОВЫ, А СВОЙ УЗЕЛ. Разница не косметическая: если камера
+	# висит на голове, то наклон взгляда ПОВОРАЧИВАЕТ ЕЁ ВОКРУГ ШЕИ, и взгляд под
+	# ноги уносит точку зрения на двадцать сантиметров вперёд и вниз. Наружу это
+	# выходит так, что мир при взгляде вниз «подъезжает» — тошнотворно и ни на что
+	# не похоже. Глаз вращается НА МЕСТЕ, а голова наклоняется отдельно, ради
+	# правильной тени и вида со стороны.
+	_eye = Node3D.new()
+	_eye.name = "Eye"
+	_eye.position = Vector3(0.0, EYE_H, -HEAD_R * 0.55)
+	_rig.add_child(_eye)
+
+	_leg_l = _limb_node("LegL", Vector3(-0.105, HIP_H, 0.0), _make_leg(mat))
+	_leg_r = _limb_node("LegR", Vector3(0.105, HIP_H, 0.0), _make_leg(mat))
+	_arm_l = _limb_node("ArmL", Vector3(-BODY_HALF_W - 0.03, SHOULDER_H, 0.0), _make_arm(mat))
+	_arm_r = _limb_node("ArmR", Vector3(BODY_HALF_W + 0.03, SHOULDER_H, 0.0), _make_arm(mat))
+
+
+func _limb_node(name_v: String, at: Vector3, mesh_node: MeshInstance3D) -> Node3D:
+	var n := Node3D.new()
+	n.name = name_v
+	n.position = at
+	n.add_child(mesh_node)
+	_rig.add_child(n)
+	return n
+
+
+func _mesh_node(tool: SurfaceTool, mat: Material, name_v: String) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.mesh = tool.commit()
+	mi.material_override = mat
+	mi.name = name_v
+	return mi
+
+
+## Кузов: куртка, поверх неё жилет с двумя лентами. Жилет чуть шире куртки —
+## иначе две коробки в одной плоскости дерутся за пиксели (тот же дефект, что был
+## у жёлтой кромки платформы в спайке).
+func _add_torso(tool: SurfaceTool) -> void:
+	_body_box(tool, Vector3(0.0, (HIP_H + NECK_H) * 0.5, 0.0),
+		Vector3(BODY_HALF_W, (NECK_H - HIP_H) * 0.5, BODY_HALF_D), C_CLOTH)
+	var vest_y0 := HIP_H + 0.06
+	var vest_y1 := SHOULDER_H - 0.02
+	var hw := BODY_HALF_W + 0.012
+	var hd := BODY_HALF_D + 0.012
+	_body_box(tool, Vector3(0.0, (vest_y0 + vest_y1) * 0.5, 0.0),
+		Vector3(hw, (vest_y1 - vest_y0) * 0.5, hd), C_VEST)
+	for y in [vest_y0 + 0.10, vest_y1 - 0.13]:
+		_body_box(tool, Vector3(0.0, y, 0.0),
+			Vector3(hw + 0.006, 0.032, hd + 0.006), C_VEST_TAPE)
+	# Шея — иначе голова висит над плечами отдельным кубиком.
+	_body_box(tool, Vector3(0.0, NECK_H + 0.03, 0.0), Vector3(0.055, 0.045, 0.055), C_SKIN)
+
+
+## Голова строится ОТ УЗЛА ШЕИ (локальный ноль — на NECK_H), поэтому все отметки
+## здесь относительные.
+func _add_head(tool: SurfaceTool) -> void:
+	var top := BODY_H - 0.08 - NECK_H          # темя без кепки
+	_body_box(tool, Vector3(0.0, top * 0.5 + 0.04, 0.0),
+		Vector3(HEAD_R, top * 0.5 - 0.02, HEAD_R * 1.06), C_SKIN)
+	# Кепка: тулья и козырёк вперёд (-Z).
+	_body_box(tool, Vector3(0.0, top + 0.03, 0.0),
+		Vector3(HEAD_R + 0.008, 0.045, HEAD_R * 1.07), C_CAP)
+	_body_box(tool, Vector3(0.0, top - 0.005, -HEAD_R * 1.06 - 0.035),
+		Vector3(HEAD_R * 0.92, 0.012, 0.038), C_CAP)
+
+
+## Нога от бедра вниз: локальный ноль в суставе, всё вниз по -Y.
+func _make_leg(mat: Material) -> MeshInstance3D:
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_body_box(tool, Vector3(0.0, -HIP_H * 0.5 + 0.04, 0.0),
+		Vector3(0.078, HIP_H * 0.5 - 0.04, 0.085), C_CLOTH)
+	_body_box(tool, Vector3(0.0, -HIP_H + 0.055, -0.025),
+		Vector3(0.075, 0.055, 0.125), C_BOOT)
+	return _mesh_node(tool, mat, "Leg")
+
+
+## Рука от плеча вниз: рукав и кисть.
+func _make_arm(mat: Material) -> MeshInstance3D:
+	var tool := SurfaceTool.new()
+	tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var len_v := SHOULDER_H - HIP_H + 0.22
+	_body_box(tool, Vector3(0.0, -len_v * 0.5 + 0.05, 0.0),
+		Vector3(0.055, len_v * 0.5 - 0.05, 0.06), C_CLOTH)
+	_body_box(tool, Vector3(0.0, -len_v + 0.05, 0.0),
+		Vector3(0.05, 0.055, 0.055), C_SKIN)
+	return _mesh_node(tool, mat, "Arm")
+
+
+## Коробка с ЯВНЫМИ наружными нормалями и всеми шестью гранями. TrackView.box_into
+## для фигуры не годится: он строит коробку по оси ПУТИ (плановые координаты,
+## курс, отметки от и до) и красит грани по правилу домов, а человек — это
+## локальные оси узла и взгляд снизу вверх, когда он стоит на платформе.
+##
+## Обмотка подгоняется ПРОВЕРКОЙ, а не на глаз: у Godot лицевой считается грань,
+## обход которой на экране по часовой, то есть правая нормаль обхода
+## (p1−p0)×(p2−p0) смотрит ВНУТРЬ тела. Разбор этого стоил проекту дня — он
+## записан у TrackView._box («прозрачные шпалы»), и здесь применяется то же
+## правило. Ошибиться значит получить человека-невидимку, у которого видно только
+## изнанку спины.
+func _body_box(tool: SurfaceTool, c: Vector3, h: Vector3, col: Color) -> void:
+	var x := Vector3(h.x, 0.0, 0.0)
+	var y := Vector3(0.0, h.y, 0.0)
+	var z := Vector3(0.0, 0.0, h.z)
+	_body_face(tool, c + y, x, z, Vector3.UP, col)
+	_body_face(tool, c - y, x, z, Vector3.DOWN, col)
+	_body_face(tool, c + z, x, y, Vector3.BACK, col)
+	_body_face(tool, c - z, x, y, Vector3.FORWARD, col)
+	_body_face(tool, c + x, y, z, Vector3.RIGHT, col)
+	_body_face(tool, c - x, y, z, Vector3.LEFT, col)
+
+
+func _body_face(tool: SurfaceTool, c: Vector3, a: Vector3, b: Vector3,
+		outward: Vector3, col: Color) -> void:
+	var p0 := c + a + b
+	var p1 := c - a + b
+	var p2 := c - a - b
+	var p3 := c + a - b
+	if (p1 - p0).cross(p2 - p0).dot(outward) > 0.0:
+		var t := p1
+		p1 = p3
+		p3 = t
+	# ЦВЕТ КЛАДЁТСЯ ЛИНЕЙНЫМ, а константы записаны в sRGB — в нём их читает
+	# человек. Правило проекта записано один раз (bd recall
+	# godot-vertex-color-linear) и теряется ровно тем, что живёт в одном месте.
+	var lin := col.srgb_to_linear()
+	for p in [p0, p1, p2, p0, p2, p3]:
+		tool.set_normal(outward)
+		tool.set_color(lin)
+		tool.add_vertex(p)
+
+
+## --- ход ---------------------------------------------------------------------
+
+func _physics_process(delta: float) -> void:
+	# Пока stand() не позвали, человека нет: ни капсулы, ни фигуры, ни точки.
+	# Шагать телом без формы — значит двигать пустоту и печатать про неё числа.
+	if not _active or _rig == null:
+		return
+	if _settle_pending:
+		_settle()
+		return
+	if _mode == MODE_ORBIT:
+		return
+	var want := Vector2.ZERO
+	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
+		want.y -= 1.0
+	if Input.is_key_pressed(KEY_S) or Input.is_key_pressed(KEY_DOWN):
+		want.y += 1.0
+	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
+		want.x += 1.0
+	if Input.is_key_pressed(KEY_A) or Input.is_key_pressed(KEY_LEFT):
+		want.x -= 1.0
+	var speed := RUN_SPEED if Input.is_key_pressed(KEY_SHIFT) else WALK_SPEED
+	var dir := (global_transform.basis * Vector3(want.x, 0.0, want.y))
+	dir.y = 0.0
+	if dir.length() > 0.001:
+		dir = dir.normalized()
+	var target := dir * speed
+	var rate := ACCEL * delta * (1.0 if is_on_floor() else AIR_CONTROL)
+	velocity.x = move_toward(velocity.x, target.x, rate)
+	velocity.z = move_toward(velocity.z, target.z, rate)
+	if is_on_floor():
+		if Input.is_key_pressed(KEY_SPACE):
+			velocity.y = JUMP_V
+		elif velocity.y < 0.0:
+			velocity.y = 0.0
+	else:
+		velocity.y -= float(ProjectSettings.get_setting("physics/3d/default_gravity", 9.8)) * delta
+	_move_with_step(delta)
+	_clamp_to_world()
+	# Мах ног считается по ПРОЙДЕННОМУ ПУТИ, а не по времени: тогда шаг остаётся
+	# шагом и при разгоне, и на бегу, и ноги не скользят по земле.
+	var ground_v := Vector2(velocity.x, velocity.z).length()
+	_gait += ground_v * delta
+	_animate(ground_v)
+
+
+## _settle — поставить человека на твердь лучом.
+##
+## Отказ здесь НЕ ЧИНИТСЯ подстановкой: «под ногами нет тверди» значит, что
+## рельеф в этом месте не приехал, и человек, тихо поставленный на выдуманную
+## отметку, показал бы исправный кадр над дырой.
+func _settle() -> void:
+	_settle_pending = false
+	var from := global_position + Vector3.UP * 0.2
+	var q := PhysicsRayQueryParameters3D.create(from, from + Vector3.DOWN * SETTLE_DROP)
+	q.exclude = [get_rid()]
+	var hit := get_world_3d().direct_space_state.intersect_ray(q)
+	if hit.is_empty():
+		settled.emit("под машинистом нет тверди на %.0f м вниз — оставлен где стоял" % SETTLE_DROP)
+		return
+	var p: Vector3 = hit.position
+	global_position = p + Vector3.UP * 0.01
+	velocity = Vector3.ZERO
+	_home = global_position
+	settled.emit("стоит на %.1f, %.1f, подошва на %.2f м (головка рельса рядом %.2f м)"
+		% [p.x, p.z, p.y, _rail_top_y])
+
+
+## ХОД СО СТУПЕНЬКОЙ. У CharacterBody3D её нет: он либо въезжает на наклон, либо
+## упирается в вертикальную стенку — а шпала, головка рельса и борт плиты это
+## ровно вертикальные стенки высотой 20-36 см. Без этого человек не переходит
+## через путь вовсе, и весь перенос теряет смысл.
+##
+## Приём стандартный: сходили обычным ходом; если упёрлись (прошли меньше трети
+## намеченного), откатились, поднялись на STEP_UP, сходили ещё раз и прилипли к
+## полу. Проверка «упёрлись» по ПРОЙДЕННОМУ, а не по is_on_wall(): скольжение
+## вдоль стены — тоже касание стены, но человек при этом идёт, и поднимать его
+## там незачем.
+func _move_with_step(delta: float) -> void:
+	var from := global_position
+	var vel := velocity
+	var want := Vector2(vel.x, vel.z).length() * delta
+	move_and_slide()
+	if want < 0.001 or not is_on_floor():
+		return
+	var gone := Vector2(global_position.x - from.x, global_position.z - from.z).length()
+	if gone >= want * STEP_PROGRESS:
+		return
+	var lifted := global_transform
+	lifted.origin = from + Vector3.UP * STEP_UP
+	if test_move(lifted, Vector3.ZERO):
+		return                      # на ступеньке занято — это стена, а не ступень
+	global_position = lifted.origin
+	velocity = vel
+	move_and_slide()
+	apply_floor_snap()
+
+
+## Мах конечностей: синус от пройденного пути. Руки в противофазе ногам — иначе
+## получается не ходьба, а строевой шаг.
+func _animate(ground_v: float) -> void:
+	var swing: float = clampf(ground_v / WALK_SPEED, 0.0, 2.2)
+	var a := sin(_gait * TAU / STRIDE) * deg_to_rad(30.0) * swing
+	_leg_l.rotation.x = a
+	_leg_r.rotation.x = -a
+	_arm_l.rotation.x = -a * 0.62
+	_arm_r.rotation.x = a * 0.62
+
+
+## --- камера и виды -----------------------------------------------------------
+
+func _process(_delta: float) -> void:
+	if _mode == MODE_ORBIT or _camera == null:
+		return
+	place_camera()
+
+
+## place_camera — посадить камеру роли туда, куда смотрит человек.
+##
+## Публичный метод: его зовёт зонд ходьбы, которому надо проверить поворот
+## взгляда, не дожидаясь кадра.
+func place_camera() -> void:
+	if _camera == null:
+		return
+	_camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+	_camera.fov = EYE_FOV
+	_camera.near = 0.05
+	_camera.far = 4000.0
+	_camera.current = true
+	if _mode == MODE_EYE:
+		var xf := _eye.global_transform
+		# Качание при шаге. Амплитуда мала нарочно: это подсказка о движении, а не
+		# аттракцион — на большой человека укачивает быстрее, чем он дойдёт до
+		# горловины.
+		xf.origin += Vector3.UP * (sin(_gait * TAU / (STRIDE * 0.5)) * BOB_AMP)
+		_camera.global_transform = xf
+		return
+	# Третье лицо: камера позади и выше, смотрит человеку в затылок.
+	var back := global_transform.basis.z
+	_camera.global_position = global_position + Vector3.UP * TP_HEIGHT + back * TP_DIST
+	_camera.look_at(global_position + Vector3.UP * (EYE_H - 0.15), Vector3.UP)
+
+
+func _apply_look() -> void:
+	rotation.y = deg_to_rad(_yaw)
+	# Фигуры может ещё не быть: до stand() человек — пустое тело без суставов.
+	# Такое состояние законно и проверяется им нарочно (checks/pure/
+	# 00_camera_input.gd гоняет клавишу вида без мира), а ошибка в логе — та самая
+	# беда, из-за которой проверки клиента нельзя грепать по логу.
+	if _eye == null:
+		return
+	_eye.rotation.x = deg_to_rad(_pitch)
+	# Голова идёт за взглядом, но не складывается пополам: шея у человека берёт
+	# около шестидесяти градусов, а глаз — все восемьдесят семь.
+	_head.rotation.x = deg_to_rad(clampf(_pitch, -60.0, 60.0))
+
+
+## Смена вида. Мышь захватывается только в видах от лица: захваченный курсор, из
+## которого нельзя выйти, — ловушка, а выход в меню обязан работать всегда.
+func _apply_mode(mode: int, say: bool = true) -> void:
+	_mode = mode
+	for mi in _head_meshes:
+		# Своя голова из своих глаз не видна, но ТЕНЬ от неё видна и нужна: без
+		# головы тень на балласте читается обезглавленной.
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY \
+			if mode == MODE_EYE else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	if _rig != null:
+		_rig.visible = true
+	if _camera != null:
+		_camera.set_active(_active and mode == MODE_ORBIT)
+	if mode == MODE_ORBIT:
+		Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+		if _camera != null:
+			# Фокус всегда на человеке: обзор — это взгляд НА него, а не на
+			# станцию вообще. Углы и зум остаются те, что игрок выкрутил сам.
+			_camera.focus = global_position
+			_camera.apply()
+	else:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+		_apply_look()
+		place_camera()
+	if say:
+		print("МАШИНИСТ: вид — %s" % MODE_NAMES[mode])
+
+
+## Ввод человека. Esc здесь НЕ СЛУШАЕТСЯ нарочно: им оболочка открывает паузу
+## (app.gd::_input перехватывает его раньше мира), и второй смысл у той же
+## клавиши означал бы, что подсказка врёт одному из двух.
+func _unhandled_input(event: InputEvent) -> void:
+	if not _active:
+		return
+	if event is InputEventKey and (event as InputEventKey).pressed and not (event as InputEventKey).echo:
+		match (event as InputEventKey).keycode:
+			KEY_V:
+				_apply_mode((_mode + 1) % MODE_NAMES.size())
+				get_viewport().set_input_as_handled()
+				return
+			KEY_F:
+				if _mode != MODE_ORBIT:
+					_go_home()
+					get_viewport().set_input_as_handled()
+					return
+	if _mode == MODE_ORBIT:
+		return
+	# ВЗГЛЯД МЫШЬЮ ЖИВЁТ ТОЛЬКО ПРИ ЗАХВАЧЕННОМ КУРСОРЕ. Проверка не формальность:
+	# при отпущенном курсоре относительное движение приходит рывками на границе
+	# окна, и вид дёргается сам по себе — тот же класс бага, что зум на трекпаде.
+	if event is InputEventMouseMotion and Input.get_mouse_mode() == Input.MOUSE_MODE_CAPTURED:
+		look_by((event as InputEventMouseMotion).relative)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventMouseButton and (event as InputEventMouseButton).pressed \
+			and Input.get_mouse_mode() != Input.MOUSE_MODE_CAPTURED:
+		Input.set_mouse_mode(Input.MOUSE_MODE_CAPTURED)
+		get_viewport().set_input_as_handled()
+
+
+## look_by — поворот взгляда. Вынесен отдельным методом, чтобы его звал зонд:
+## подать мыши «настоящее» относительное движение через parse_input_event нельзя
+## так же надёжно, как клавишу, а проверять поворот всё равно надо.
+func look_by(rel: Vector2) -> void:
+	_yaw -= rel.x * MOUSE_SENS
+	_pitch = clampf(_pitch - rel.y * MOUSE_SENS, -PITCH_LIMIT, PITCH_LIMIT)
+	_apply_look()
+
+
+## Обратный билет: F возвращает человека туда, где он встал. На станции в сотни
+## метров пешком теряются за минуту, а начальная точка — единственная, про
+## которую известно, что под ней есть твердь.
+func _go_home() -> void:
+	velocity = Vector3.ZERO
+	global_position = _home
+	_yaw = _home_yaw
+	_pitch = START_PITCH_DEG
+	_apply_look()
+	print("МАШИНИСТ: вернулся в точку появления")

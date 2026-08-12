@@ -58,7 +58,9 @@ CREATE TABLE IF NOT EXISTS regions (
     frame           TEXT NOT NULL,
     provenance      TEXT NOT NULL DEFAULT '',
     redistributable INTEGER NOT NULL DEFAULT 0,
-    epoch           INTEGER NOT NULL DEFAULT 1
+    epoch           INTEGER NOT NULL DEFAULT 1,
+    level0_radius_m REAL NOT NULL DEFAULT 0,
+    max_level       INTEGER NOT NULL DEFAULT -1
 ) STRICT;
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -89,25 +91,69 @@ CREATE TABLE IF NOT EXISTS chunks (
 // Покров ДОПУСКАЕТ NULL намеренно: карта без рецепта покрова законна, и
 // столбец обязан отличать «покрова нет» от «покров пустой». NOT NULL DEFAULT
 // x” сделал бы их неразличимыми.
+//
+// Умолчания правила подробности выбраны НЕВОЗМОЖНЫМИ (радиус 0, уровень −1)
+// нарочно: база, засеянная сборкой без этих столбцов, обязана быть узнана как
+// «правило неизвестно» и отвергнута (chunk.Rule.Known, worldgen.sameRule).
+// Правдоподобное умолчание — прежние 512 и 4 — выдало бы чанки неизвестного
+// происхождения за исправный мир.
 var migrations = []string{
 	`ALTER TABLE chunks ADD COLUMN cover BLOB`,
 	`ALTER TABLE chunks ADD COLUMN forest BLOB`,
+	`ALTER TABLE regions ADD COLUMN level0_radius_m REAL NOT NULL DEFAULT 0`,
+	`ALTER TABLE regions ADD COLUMN max_level INTEGER NOT NULL DEFAULT -1`,
 }
 
 // Store — открытая база мира.
 type Store struct{ db *sql.DB }
 
+// dsnPragmas — настройки соединения, без которых база ведёт себя не так, как
+// от неё ждут. Едут В СТРОКЕ ПОДКЛЮЧЕНИЯ, а не отдельным `db.Exec("PRAGMA …")`,
+// и это не косметика: database/sql держит ПУЛ соединений и открывает новые по
+// мере надобности, а PRAGMA действует на одно соединение. Настройка, поданная
+// через Exec, достаётся тому соединению, которое пул выдал в тот момент, а
+// следующее приходит с умолчаниями — то есть работает ровно до первого
+// одновременного запроса и ломается тогда, когда её отсутствие труднее всего
+// заметить. Строка подключения применяется к КАЖДОМУ соединению пула.
+//
+//	foreign_keys   — выключены в SQLite по умолчанию, и ссылка чанка на
+//	                 несуществующий регион прошла бы молча. Здесь эта настройка
+//	                 и стояла Exec'ом; переезд в DSN — исправление, а не стиль.
+//	busy_timeout   — сколько ждать снятия блокировки, прежде чем отказать.
+//	journal_mode   — WAL: читатели не ждут писателя, писатель не ждёт читателей.
+//	synchronous    — NORMAL: fsync на контрольной точке, а не на каждой записи.
+//
+// # Замер, ради которого это появилось
+//
+// 64 горутины по 8 записей и чтений в один файл (M2 Pro, -race):
+//
+//	было (умолчания, журнал отката): 63 отказа из 512 — `database is locked
+//	                                 (SQLITE_BUSY)`;
+//	busy_timeout:                    0 отказов, 4.75 с;
+//	+ WAL:                           0 отказов, 2.17 с;
+//	+ synchronous=NORMAL:            0 отказов, 1.16 с.
+//
+// До порождения чанка по требованию писал ОДИН поток на старте, и умолчаний
+// хватало. Как только чанк считается по запросу, писателей столько же, сколько
+// запросов, и первый же залп клиента упирался бы в SQLITE_BUSY.
+//
+// # Чем оплачено synchronous=NORMAL
+//
+// При WAL+NORMAL внезапное выключение питания может стоить последних
+// транзакций (повреждения базы — нет, это гарантия WAL). Для яруса чанков это
+// приемлемо ИМЕННО ПОТОМУ, что база стала кэшем: потерянный чанк выводится из
+// рецепта заново и байт в байт. Для таблицы, которую нельзя пересчитать, такой
+// размен был бы неправомерен, и вводить его пришлось бы отдельно.
+const dsnPragmas = "?_pragma=foreign_keys(1)" +
+	"&_pragma=busy_timeout(5000)" +
+	"&_pragma=journal_mode(WAL)" +
+	"&_pragma=synchronous(NORMAL)"
+
 // Open открывает или создаёт базу по пути.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", path+dsnPragmas)
 	if err != nil {
 		return nil, fmt.Errorf("worldstore: открытие %s: %w", path, err)
-	}
-	// Внешние ключи в SQLite выключены по умолчанию, и ссылка чанка на
-	// несуществующий регион прошла бы молча.
-	if _, err := db.Exec("PRAGMA foreign_keys = ON"); err != nil {
-		db.Close()
-		return nil, fmt.Errorf("worldstore: включение внешних ключей: %w", err)
 	}
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
@@ -138,22 +184,44 @@ type Region struct {
 	Provenance      string
 	Redistributable bool
 	Epoch           int64
+	// Rule — правило подробности, КОТОРЫМ ЭТОТ РЕГИОН ЗАСЕЯН.
+	//
+	// Хранится, а не выводится из карты при каждом чтении, потому что карта на
+	// диске сменится, а чанки в базе останутся прежними. Спросить «каким
+	// правилом порождено то, что лежит здесь» больше негде: у чанка записаны
+	// уровень и координаты, но не радиус, по которому он был отобран.
+	//
+	// Отсюда же манифест региона берёт числа для клиента — то есть клиент
+	// получает правило ХРАНИЛИЩА, а не правило файла карты. Разойтись им не
+	// дают на старте (worldgen.sameRule): сервер отказывается подниматься с
+	// картой, чей охват не тот, которым засеяна база.
+	Rule chunk.Rule
 }
 
 // PutRegion записывает или обновляет регион.
+//
+// Регион без правила подробности не записывается: он был бы регионом, про
+// чанки которого нельзя сказать, откуда они взялись.
 func (s *Store) PutRegion(r Region) error {
 	if err := validRegionID(r.ID); err != nil {
 		return err
 	}
+	if !r.Rule.Known() {
+		return fmt.Errorf("worldstore: регион %s: не задано правило подробности (радиус уровня 0 %v, последний уровень %d)",
+			r.ID, r.Rule.Level0RadiusM, r.Rule.MaxLevel)
+	}
 	_, err := s.db.Exec(`
-		INSERT INTO regions (id, frame, provenance, redistributable, epoch)
-		VALUES (?, ?, ?, ?, ?)
+		INSERT INTO regions (id, frame, provenance, redistributable, epoch, level0_radius_m, max_level)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			frame = excluded.frame,
 			provenance = excluded.provenance,
 			redistributable = excluded.redistributable,
-			epoch = excluded.epoch`,
-		r.ID, r.Frame, r.Provenance, boolToInt(r.Redistributable), r.Epoch)
+			epoch = excluded.epoch,
+			level0_radius_m = excluded.level0_radius_m,
+			max_level = excluded.max_level`,
+		r.ID, r.Frame, r.Provenance, boolToInt(r.Redistributable), r.Epoch,
+		r.Rule.Level0RadiusM, r.Rule.MaxLevel)
 	if err != nil {
 		return fmt.Errorf("worldstore: запись региона %s: %w", r.ID, err)
 	}
@@ -161,12 +229,18 @@ func (s *Store) PutRegion(r Region) error {
 }
 
 // GetRegion читает регион. Отсутствие — не ошибка.
+//
+// Регион с НЕИЗВЕСТНЫМ правилом (база прежней сборки) читается как есть и
+// ошибкой здесь не считается: хранилище сообщает, что записано, а решает по
+// этому тот, кто собирается мир отдавать (worldgen.sameRule). Отказ отсюда
+// сделал бы неоткрываемой и ту базу, которую как раз собираются пересоздать.
 func (s *Store) GetRegion(id string) (Region, bool, error) {
 	var r Region
 	var redist int
 	err := s.db.QueryRow(
-		`SELECT id, frame, provenance, redistributable, epoch FROM regions WHERE id = ?`, id,
-	).Scan(&r.ID, &r.Frame, &r.Provenance, &redist, &r.Epoch)
+		`SELECT id, frame, provenance, redistributable, epoch, level0_radius_m, max_level
+		 FROM regions WHERE id = ?`, id,
+	).Scan(&r.ID, &r.Frame, &r.Provenance, &redist, &r.Epoch, &r.Rule.Level0RadiusM, &r.Rule.MaxLevel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Region{}, false, nil
 	}
@@ -187,7 +261,8 @@ func (s *Store) GetRegion(id string) (Region, bool, error) {
 // сегодня единицы, и страницы понадобятся вместе с тем, кто их заведёт тысячами.
 func (s *Store) ListRegions() ([]Region, error) {
 	rows, err := s.db.Query(
-		`SELECT id, frame, provenance, redistributable, epoch FROM regions ORDER BY id`)
+		`SELECT id, frame, provenance, redistributable, epoch, level0_radius_m, max_level
+		 FROM regions ORDER BY id`)
 	if err != nil {
 		return nil, fmt.Errorf("worldstore: перечисление регионов: %w", err)
 	}
@@ -196,7 +271,8 @@ func (s *Store) ListRegions() ([]Region, error) {
 	for rows.Next() {
 		var r Region
 		var redist int
-		if err := rows.Scan(&r.ID, &r.Frame, &r.Provenance, &redist, &r.Epoch); err != nil {
+		if err := rows.Scan(&r.ID, &r.Frame, &r.Provenance, &redist, &r.Epoch,
+			&r.Rule.Level0RadiusM, &r.Rule.MaxLevel); err != nil {
 			return nil, fmt.Errorf("worldstore: перечисление регионов: %w", err)
 		}
 		r.Redistributable = redist != 0

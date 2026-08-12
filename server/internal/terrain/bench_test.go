@@ -72,7 +72,7 @@ func BenchmarkChunkGenerationStation(b *testing.B) {
 	m := seedmap.Station(seedmap.WithTerrain())
 	f := benchField(b, m)
 	b.Logf("точек оси: %d", len(f.axis))
-	for level := 0; level <= chunk.MaxLevel; level++ {
+	for level := 0; level <= f.rule.MaxLevel; level++ {
 		b.Run(fmt.Sprintf("уровень%d", level), func(b *testing.B) {
 			a := chunk.Address{Region: "ST_A", Level: level, CX: 0, CZ: 0}
 			b.ReportAllocs()
@@ -107,6 +107,54 @@ func BenchmarkChunkGenerationFarFromAxis(b *testing.B) {
 				if _, err := f.ChunkHeights(a); err != nil {
 					b.Fatal(err)
 				}
+			}
+		})
+	}
+}
+
+// BenchmarkChunkLayers — ПОЛНАЯ стоимость чанка по слоям.
+//
+// Замеры выше меряют только высоты, и на этом основании про порождение по
+// требованию говорили «2.7 мс на чанк». Это было неправдой: чанк несёт три
+// слоя, и покров спрашивается в 64 × 64 = 4096 клетках, каждая из которых
+// трогает индекс оси. Ошибка нашлась не рассуждением, а живым замером ручки:
+// первый запрос чанка в шести километрах от оси стоил 39 мс при обещанных 2.7.
+//
+// Точки выбраны по расстоянию до оси, потому что от него зависит цена поиска в
+// индексе: рядом ответ находится в первом же кольце, вдали приходится обойти
+// столько колец, сколько уложилось в предел поиска.
+func BenchmarkChunkLayers(b *testing.B) {
+	f := benchField(b, seedmap.Station(seedmap.WithTerrain()))
+	for _, c := range []struct {
+		name string
+		cx   int
+	}{
+		{"у_оси", 0},
+		{"в_километре", 4},
+		{"в_шести_километрах", 24},
+	} {
+		a := chunk.Address{Region: "ST_A", Level: 0, CX: c.cx, CZ: 0}
+		b.Run(c.name+"/высоты", func(b *testing.B) {
+			for b.Loop() {
+				if _, err := f.ChunkHeights(a); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run(c.name+"/покров", func(b *testing.B) {
+			for b.Loop() {
+				if _, err := f.ChunkCover(a); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		cover, err := f.ChunkCover(a)
+		if err != nil {
+			b.Fatal(err)
+		}
+		b.Run(c.name+"/лес", func(b *testing.B) {
+			for b.Loop() {
+				f.ChunkForest(a, cover)
 			}
 		})
 	}
@@ -280,7 +328,7 @@ func BenchmarkIndexConstruction(b *testing.B) {
 		b.Run(lengthName(length)+"/грубый", func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				newPointGrid(chunk.Level0RadiusM, f.axis)
+				newPointGrid(f.rule.Level0RadiusM, f.axis)
 			}
 		})
 	}

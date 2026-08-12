@@ -186,35 +186,83 @@ static func rail_body_mesh(span: TrackBuild.Span) -> ArrayMesh:
 	var n := span.axis.size()
 	var inner := span.gauge_m * 0.5
 	var outer := inner + span.rail_head_width_m
+	var band := span.rail_head_width_m * RAILHEAD_WIDTH
+	var head_i := inner + (span.rail_head_width_m - band) * 0.5
+	var head_o := head_i + band
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var idx := PackedInt32Array()
 
 	var sides: Array[float] = [1.0, -1.0]
 	for sgn in sides:
-		var top_i := PackedVector3Array(); top_i.resize(n)
-		var top_o := PackedVector3Array(); top_o.resize(n)
-		var bot_i := PackedVector3Array(); bot_i.resize(n)
-		var bot_o := PackedVector3Array(); bot_o.resize(n)
-		for k in n:
-			var p: TrackGeom.AxisPoint = span.axis[k]
-			var nl := p.left()
-			var z_bot := p.z - span.rail_height_m
-			top_i[k] = TerrainMesh.to_godot(p.x + nl.x * inner * sgn, p.y + nl.y * inner * sgn, p.z)
-			top_o[k] = TerrainMesh.to_godot(p.x + nl.x * outer * sgn, p.y + nl.y * outer * sgn, p.z)
-			bot_i[k] = TerrainMesh.to_godot(p.x + nl.x * inner * sgn, p.y + nl.y * inner * sgn, z_bot)
-			bot_o[k] = TerrainMesh.to_godot(p.x + nl.x * outer * sgn, p.y + nl.y * outer * sgn, z_bot)
+		var top_i := _rail_chain(span, sgn, inner, true)
+		var top_hi := _rail_chain(span, sgn, head_i, true)
+		var top_ho := _rail_chain(span, sgn, head_o, true)
+		var top_o := _rail_chain(span, sgn, outer, true)
+		var bot_i := _rail_chain(span, sgn, inner, false)
+		var bot_o := _rail_chain(span, sgn, outer, false)
+		# Верх режется на три полосы: две ржавые кромки и середина, которую
+		# забирает накат. Полосы стыкуются, а не накладываются, поэтому за
+		# z-буфер здесь драться нечему.
 		if sgn > 0.0:
-			_quad_strip(verts, norms, idx, top_i, top_o)
+			_quad_strip(verts, norms, idx, top_i, top_hi)
+			_quad_strip(verts, norms, idx, top_ho, top_o)
 			_quad_strip(verts, norms, idx, top_o, bot_o)
 			_quad_strip(verts, norms, idx, bot_i, top_i)
 		else:
-			_quad_strip(verts, norms, idx, top_o, top_i)
+			_quad_strip(verts, norms, idx, top_hi, top_i)
+			_quad_strip(verts, norms, idx, top_o, top_ho)
 			_quad_strip(verts, norms, idx, bot_o, top_o)
 			_quad_strip(verts, norms, idx, top_i, bot_i)
 	if idx.is_empty():
 		return null
 	return _mesh(verts, norms, idx)
+
+
+## railhead_mesh — НАКАТ: полоса посреди головки, по которой идёт колесо.
+##
+## Отдельным мешем, а не вторым материалом на том же: у наката другая физика
+## поверхности целиком (полированная сталь против ржавчины), и одним материалом
+## это не выражается. У спайка это были отдельный SurfaceTool `_railhead` и
+## отдельный коммит `_mat_railhead` — здесь ровно то же, только полосой в верхней
+## грани, а не накладкой поверх неё. Почему не накладкой — ниже, у RAILHEAD_WIDTH.
+static func railhead_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if not span.has_rail_body() or span.axis.size() < 2:
+		return null
+	var inner := span.gauge_m * 0.5
+	var band := span.rail_head_width_m * RAILHEAD_WIDTH
+	var head_i := inner + (span.rail_head_width_m - band) * 0.5
+	var head_o := head_i + band
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var sides: Array[float] = [1.0, -1.0]
+	for sgn in sides:
+		var a := _rail_chain(span, sgn, head_i, true)
+		var b := _rail_chain(span, sgn, head_o, true)
+		if sgn > 0.0:
+			_quad_strip(verts, norms, idx, a, b)
+		else:
+			_quad_strip(verts, norms, idx, b, a)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## _rail_chain — направляющая нитки на боковом выносе `offset` от оси, поверху
+## (`at_top`) или по подошве. Вынесена затем, что тело и накат обязаны считать
+## одни и те же точки: разойдись они на округлении, и между ними откроется щель
+## во всю длину пути.
+static func _rail_chain(span: TrackBuild.Span, sgn: float, offset: float, at_top: bool) -> PackedVector3Array:
+	var n := span.axis.size()
+	var out := PackedVector3Array()
+	out.resize(n)
+	for k in n:
+		var p: TrackGeom.AxisPoint = span.axis[k]
+		var nl := p.left()
+		var z := p.z if at_top else p.z - span.rail_height_m
+		out[k] = TerrainMesh.to_godot(p.x + nl.x * offset * sgn, p.y + nl.y * offset * sgn, z)
+	return out
 
 
 ## slab_mesh — плита платформы: верх, торец у пути и дальний торец.
@@ -240,12 +288,43 @@ static func slab_mesh(strip: TrackBuild.PlatformStrip) -> ArrayMesh:
 		top_f[k] = TerrainMesh.to_godot(b.x, b.y, b.z)
 		bot_n[k] = TerrainMesh.to_godot(a.x, a.y, a.z - t)
 		bot_f[k] = TerrainMesh.to_godot(b.x, b.y, b.z - t)
+	# ОБХОД ЗАВИСИТ ОТ СТОРОНЫ ПЛАТФОРМЫ, И БЕЗ ЭТОЙ ПРОВЕРКИ ПРАВАЯ ИСЧЕЗАЛА.
+	#
+	# `_quad_strip` берёт нормаль как (p2−p0)×(p1−p0), то есть направление грани
+	# задаёт ПОРЯДОК двух краёв. Для платформы слева от оси пара «ближний,
+	# дальний» даёт нормаль верхней грани вверх, а для платформы справа — ВНИЗ:
+	# грань становится задней, отсекается при cull_back, и плиты на экране нет
+	# вовсе. У затравки ST_A платформа объявлена `side: "right"`, поэтому она не
+	# рисовалась ни разу, хотя HUD честно писал «платформ 1 (плитой 1)» — меш
+	# строился, просто был вывернут наизнанку.
+	#
+	# Поймано владельцем на кадре 2026-08-12. Это тот же класс ошибки, что нашли
+	# в тот же день у `_box` (коробки домов и упоров стояли изнанкой наружу), и
+	# лечится он тем же способом: не подгонкой материала, а ОРИЕНТАЦИЕЙ ОБХОДА.
+	# `cull_disabled` здесь отвергнут — он прячет вывернутый меш, а не правит его,
+	# и стоит вдвое по граням.
+	#
+	# Перестановка краёв геометрию не меняет: плита в сечении симметрична, и
+	# «ближний» с «дальним» — только имена концов. Зато один разворот выправляет
+	# ВСЕ ТРИ ленты разом: верх, торец у пути и дальний торец обходятся согласованно.
+	var a_edge := top_n
+	var b_edge := top_f
+	var a_bot := bot_n
+	var b_bot := bot_f
+	var tangent := top_n[1] - top_n[0]
+	var across := top_f[0] - top_n[0]
+	if tangent.cross(across).y < 0.0:
+		a_edge = top_f
+		b_edge = top_n
+		a_bot = bot_f
+		b_bot = bot_n
+
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var idx := PackedInt32Array()
-	_quad_strip(verts, norms, idx, top_n, top_f)
-	_quad_strip(verts, norms, idx, bot_n, top_n)
-	_quad_strip(verts, norms, idx, top_f, bot_f)
+	_quad_strip(verts, norms, idx, a_edge, b_edge)
+	_quad_strip(verts, norms, idx, a_bot, a_edge)
+	_quad_strip(verts, norms, idx, b_edge, b_bot)
 	return _mesh(verts, norms, idx)
 
 
@@ -387,6 +466,41 @@ static func box_into(verts: PackedVector3Array, norms: PackedVector3Array, cols:
 		cols.append(lin)
 
 
+## ОБХОД ГРАНЕЙ КОРОБКИ БЫЛ ВЫВЕРНУТ, и «прозрачные шпалы» — это он.
+##
+## Замер, а не рассуждение (2026-08-12, роль driver, 1600×900, ближний план):
+##
+##  1. Шпала на экране — полоса 21 px. Расчёт по геометрии кадра даёт 19 px для
+##     ОДНОЙ вертикальной стенки, торчащей из балласта на 0.10 м, и 32 px для
+##     верхней грани. Верхней грани на экране нет вовсе.
+##  2. Временный шейдер, красящий грань её мировой нормалью, показал в этой
+##     полосе нормаль (1, 0, 0) — стенку, отвёрнутую ОТ камеры (машинист смотрит
+##     вдоль +x). То есть рисуется изнанка дальней стенки, а ближняя отброшена.
+##  3. Тот же шейдер с `cull_disabled` дал в той же точке нормаль (0, −1, 0):
+##     верхняя грань появилась, и движок перевернул ей нормаль как ИЗНАНКЕ
+##     (godot-cull-disabled-flips-normal). Значит верх был отброшен CULL_BACK.
+##
+## Отсюда картинка: сверху шпала не имеет верха, сквозь неё виден балласт на
+## 0.10 м ниже, а тёмная полоса — изнанка дальней стенки. Снаружи это и читается
+## «шпалы прозрачные».
+##
+## ПРИЧИНА НЕ В `to_godot`. Он отображает (x, y, z) в (x, z, −y), и это ПОВОРОТ:
+## определитель +1, ориентация сохраняется, обход не разворачивается. Проверять
+## это гипотезой про зеркало — тупик: зеркала здесь нет.
+##
+## Причина в том, что у Godot лицевой считается грань, обход которой на экране
+## ПО ЧАСОВОЙ, то есть правая нормаль обхода смотрит ОТ зрителя. `_quad_strip` в
+## этом же файле так и намотан — он берёт нормаль как `(p2−p0)×(p1−p0)`, обратную
+## правой нормали своего обхода, и призма рисуется лицом наружу. `_box` считал
+## нормаль как `(p1−p0)×(p2−p0)`, то есть СОГЛАСНО обходу, — и оттого выворачивал
+## каждую свою коробку наизнанку.
+##
+## Цена ошибки была не только у шпал: `box_into` строит ею же дома и упоры, и они
+## всё это время стояли изнанкой наружу. На коробке это незаметно — силуэт тот
+## же, а свет правдоподобен, потому что нормали остались наружными.
+##
+## Лечение — порядок вершин, а не `cull_mode = CULL_DISABLED`: тот прячет дефект
+## и стоит вдвое по граням.
 static func _box(verts: PackedVector3Array, norms: PackedVector3Array, idx: PackedInt32Array,
 		cx: float, cy: float, fwd: Vector2, half_len: float, half_wid: float,
 		z_bot: float, z_top: float) -> void:
@@ -425,7 +539,9 @@ static func _box(verts: PackedVector3Array, norms: PackedVector3Array, idx: Pack
 		verts.append(p0); verts.append(p1); verts.append(p2); verts.append(p3)
 		for c in 4:
 			norms.append(nrm)
-		idx.append_array([base, base + 1, base + 2, base, base + 2, base + 3])
+		# Обход ПРОТИВ нормали: правая нормаль обхода p0→p2→p1 равна −nrm, и
+		# именно так Godot узнаёт лицевую грань (разбор в шапке функции).
+		idx.append_array([base, base + 2, base + 1, base, base + 3, base + 2])
 
 
 static func _strip(verts: PackedVector3Array, norms: PackedVector3Array) -> ArrayMesh:
@@ -496,6 +612,35 @@ const C_SLEEPER := Color(0.22, 0.17, 0.13)  # пропитанная шпала
 const SLEEPER_GRAIN := 0.045   # м — период волокна ПОПЕРЁК бруса
 const SLEEPER_RUN := 2.2       # м — период рисунка ВДОЛЬ бруса
 
+## РЕЛЬС — ДВА МАТЕРИАЛА И ДВЕ ПОВЕРХНОСТИ. Порт из спайка вместе с доводом:
+## тело рельса ржавое, а ржавчина — ДИЭЛЕКТРИК (metallic 0, шероховатость
+## высокая). Металлом остаётся только накат, по которому идёт колесо. Прежние
+## 0.55/0.35 спайк назвал «полуметаллом, какого не бывает», и до 2026-08-12
+## здесь стоял ещё худший случай: ОДИН плоский solid_material(0.42, 0.40, 0.40) —
+## albedo и больше ничего. Комментарий рядом при этом описывал два материала:
+## он пережил код, который объяснял.
+const C_RAIL := Color(0.24, 0.19, 0.16)      # бок и подошва: ржавчина
+const C_RAILHEAD := Color(0.62, 0.63, 0.66)  # накат: полированная колесом сталь
+
+## ШИРИНА НАКАТА — ДОЛЯ ГОЛОВКИ, А НЕ СВОИ МЕТРЫ, и это решение надо назвать.
+##
+## У спайка накат был выдуман целиком: RAILHEAD_W = 0.062 м рядом с его же
+## выдуманной головкой 0.071 м. У нас ширина головки ПРИСЛАНА (`rail.head_width`,
+## на затравке 0.075 м), и повторять сюда спайковы 0.062 значило бы завести в
+## клиенте второе число про размер рельса — ровно то, ради отсутствия чего
+## head_width и появился в контракте. Поэтому от спайка берётся не число, а его
+## ОТНОШЕНИЕ: 0.062 / 0.071 = 0.87 ширины головки. Пришлёт сервер другой рельс —
+## накат поедет вместе с ним.
+const RAILHEAD_WIDTH := 0.87   # доля ширины головки, которую занимает накат
+
+## ВЫСТУП В 4 ММ ОТВЕРГНУТ. У спайка накат стоял НА головке и торчал над ней на
+## RAILHEAD_T = 0.004 м — у него верх рельса был его собственной выдумкой, и
+## поднять над ним ещё миллиметры ничего не нарушало. У нас `z` элемента объявлен
+## ПОВЕРХНОСТЬЮ КАТАНИЯ (контракт редакции 6 §2), и накат, поднятый над ней, был
+## бы поверхностью катания на 4 мм выше той, которую назвал сервер. Поэтому накат
+## лежит В уровне головки полосой, а не накладкой поверх неё. Цена названа: с
+## выступом кромка наката ловила бы ещё и блик по ребру, здесь его нет.
+
 
 static func ballast_material() -> StandardMaterial3D:
 	var period := BALLAST_STONE * (float(BALLAST_TILE) / BALLAST_CELL_PX)
@@ -549,6 +694,94 @@ static func sleeper_material() -> StandardMaterial3D:
 	m.normal_scale = 0.7
 	m.uv1_triplanar = true
 	m.uv1_scale = Vector3(1.0 / SLEEPER_GRAIN, 1.0 / SLEEPER_RUN, 1.0 / SLEEPER_RUN)
+	return m
+
+
+## rail_material — ТЕЛО рельса: ржавчина, а не металл.
+static func rail_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = C_RAIL
+	m.roughness = 0.85
+	m.metallic = 0.0
+	return m
+
+
+## railhead_material — НАКАТ: сталь.
+##
+## metallic 1.0, а не 0.85: полуметалла не бывает. Это от спайка остаётся.
+##
+## # ШЕРОХОВАТОСТЬ ВЕРНУЛАСЬ К СПАЙКОВЫМ 0.22, И РАЗБОР НИЖЕ ОСТАВЛЕН КАК ОШИБКА
+##
+## Ниже лежит разбор, по которому шероховатость подняли до 0.85. Он ВЕРЕН в
+## каждом замере и НЕВЕРЕН в выводе; оставлен целиком нарочно, потому что цена
+## его — полдня, и повторять эту дорогу не надо.
+##
+## Что было упущено: синева наката — не болезнь, а ФОН, на котором виден блик.
+## Владелец сличил два окна рядом — наш клиент и запущенный спайк — и увидел
+## главное, чего не показывает пипетка по одной точке: у спайка вдоль наката идёт
+## ЯРКАЯ БЕЛАЯ НИТЬ бликового отражения СОЛНЦА, и именно она читается сталью.
+## Накат при этом синеватый и у него.
+##
+## Пипетка мерила усреднённый цвет полосы и потому видела только фон. Подъём
+## шероховатости фон и выправил — b/r с 2.00 до 1.31, — а нить размазал: та самая
+## «цена», названная в конце разбора строкой «блик по нити становится плоским»,
+## и оказалась единственным, что имело значение. Правка лечила измеренное и
+## убивала неизмеренное.
+##
+## Урок общий, и он дороже числа: замер по одной точке не заменяет сличения с
+## эталоном. У нас эталон запускается — им и надо проверять.
+##
+## Жалоба владельца 2026-08-12: «конечно они не должны быть синими». Накат и
+## правда был синим, и вот замером (пипетка по снимку роли driver, 1600×900,
+## отношение синего канала к красному; у балласта рядом, серого и матового, оно
+## ровно 1.00):
+##
+##     шероховатость 0.22 → rgb (70, 96, 140), b/r 2.00   ← было
+##     шероховатость 0.55 → rgb (82, 99, 133), b/r 1.62
+##     шероховатость 0.85 → rgb (112, 123, 147), b/r 1.31 ← стало
+##     шероховатость 1.00 → rgb (123, 131, 153), b/r 1.24
+##
+## ПРИЧИНА СИНЕВЫ — НЕ ОСВЕЩЁННОСТЬ, А ТО, ЧТО ОТРАЖАТЬ НЕЧЕГО. У металла
+## диффузной составляющей нет вовсе: весь его цвет — отражение карты излучения, а
+## в ней у нас нет ничего, кроме процедурного неба. Настоящий накат серебрится
+## потому, что зеркалит ВЕСЬ мир — балласт, шпалы, траву, состав; наш зеркалит
+## один участок неба, и при зените (0.30, 0.50, 0.78) отражение обязано выйти
+## синим. Проверено подстановкой: небо с красным зенитом даёт накат (160, 62, 70)
+## — то есть цвет наката это цвет неба и ничего больше.
+##
+## Шероховатость здесь — не «сталь на самом деле матовая», а единственный
+## доступный способ заставить отражение УСРЕДНИТЬ полусферу вместо одного луча:
+## с ростом шероховатости в него входит и бледный горизонт, и нижняя половина
+## неба (ground_horizon/ground_bottom, они серо-зелёные), и цвет сходится к
+## нейтральному — к тому же, что даёт балласту его диффузное усреднение.
+##
+## ЧТО ОТВЕРГНУТО, И ПОЧЕМУ:
+##   * ambient_light_energy (0.38 у спайка против 1.0 у нас) — НЕ РАБОТАЕТ ВОВСЕ.
+##     Замер: 0.0 и 1.0 дают ПОБАЙТНО ОДИНАКОВЫЙ кадр. Так и задокументировано у
+##     Godot: параметр действует, только если ambient_light_sky_contribution < 1,
+##     а у нас (и у спайка) он равен единице. Плюс ambient — заливка ДИФФУЗНАЯ, а
+##     у металла диффузной части нет: даже будь параметр жив, наката он бы не
+##     коснулся.
+##   * ssr_enabled — отражение экранного пространства подставило бы в накат
+##     настоящее окружение. Замер: кадр не изменился ни на пиксель.
+##   * sky_curve пошире (бледный горизонт выше по небу) — вылечило бы и накат, и
+##     небо, но это правка НЕБА ради шестисантиметровой полосы: цвет всего кадра
+##     ради одной детали.
+##
+## ЦЕНА НАЗВАНА: блик по нити становится плоским. При 0.22 накат менялся от
+## (83, 108, 148) вдали до (60, 88, 135) вблизи — это и был «отблеск»; при 0.85
+## разброс 115 → 111, то есть нить ровная по всей длине. Взамен исчезает бликовый
+## алиасинг, ради которого спайк и поднимал шероховатость с «научных» 0.08–0.18:
+## его довод («у матового наката нить идеально ровная, у зеркального рвётся»)
+## работает в ту же сторону, что и эта правка, — просто спайк остановился на
+## полпути, потому что смотрел на накат сверху, где он мельче пикселя и цвета не
+## имеет. У машиниста та же полоса занимает 14 пикселей поперёк.
+static func railhead_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = C_RAILHEAD
+	# 0.22 — спайково. Оно и даёт бликовую нить; всё, что выше, её размазывает.
+	m.roughness = 0.22
+	m.metallic = 1.0
 	return m
 
 

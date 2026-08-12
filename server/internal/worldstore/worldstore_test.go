@@ -1,7 +1,9 @@
 package worldstore
 
 import (
+	"fmt"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
@@ -21,10 +23,36 @@ func openStore(t *testing.T) *Store {
 	return s
 }
 
+// testRule — правило подробности тестового региона: то же, что у фикстуры
+// seedmap. Регион без правила хранилище не принимает — про его чанки нельзя
+// было бы сказать, каким охватом они порождены.
+var testRule = chunk.Rule{Level0RadiusM: 512, MaxLevel: 4}
+
 func putRegion(t *testing.T, s *Store) {
 	t.Helper()
-	if err := s.PutRegion(Region{ID: "ST_A", Frame: `{"datum":"WGS84"}`, Epoch: 1}); err != nil {
+	if err := s.PutRegion(Region{ID: "ST_A", Frame: `{"datum":"WGS84"}`, Epoch: 1, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
+	}
+}
+
+// Правило подробности переживает запись и чтение. Проверяется отдельно от
+// прочих полей затем, что по нему клиент выбирает, какой уровень спрашивать:
+// потерянное при чтении, оно стало бы «правилом неизвестно» и остановило бы
+// сервер на старте.
+func TestRegionRuleSurvivesRoundTrip(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
+	got, ok, err := s.GetRegion("ST_A")
+	if err != nil || !ok {
+		t.Fatalf("чтение региона: ok=%v, err=%v", ok, err)
+	}
+	if got.Rule != testRule {
+		t.Fatalf("правило %+v, записано %+v", got.Rule, testRule)
+	}
+	// Регион без правила — отказ, а не запись с нулями: молча записанный ноль
+	// стал бы миром радиусом ноль, неотличимым от исправного.
+	if err := s.PutRegion(Region{ID: "ST_B", Frame: "{}", Epoch: 1}); err == nil {
+		t.Fatal("регион без правила подробности записан — отказа не было")
 	}
 }
 
@@ -192,5 +220,87 @@ func TestChunkWithoutRegionIsRejected(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("чанк без региона записан")
+	}
+}
+
+// TestConcurrentWritersDoNotCollide — база выдерживает столько писателей,
+// сколько к серверу пришло запросов.
+//
+// # Почему это появилось только теперь
+//
+// До порождения чанков по требованию писал ОДИН поток на старте, и умолчаний
+// SQLite хватало с запасом. Как только чанк считается по запросу, писателей
+// становится столько же, сколько одновременных запросов, и первый же залп
+// клиента упирался в `database is locked (SQLITE_BUSY)`: замер на этой самой
+// проверке до настройки соединения давал 63 отказа из 512.
+//
+// # Что именно проверяется
+//
+// Не «нет гонок» — это дело -race, — а то, что настройки доехали до КАЖДОГО
+// соединения пула. database/sql открывает соединения по мере надобности, и
+// PRAGMA, выполненная разово через Exec, достаётся ровно одному из них;
+// остальные приходят с умолчаниями. Одна горутина такого не покажет никогда:
+// ей хватает первого соединения.
+func TestConcurrentWritersDoNotCollide(t *testing.T) {
+	s := openStore(t)
+	putRegion(t, s)
+	h := make([]int16, chunk.Samples*chunk.Samples)
+
+	const writers, each = 32, 8
+	errs := make(chan error, writers*each*2)
+	var wg sync.WaitGroup
+	for w := range writers {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := range each {
+				a := chunk.Address{Region: "ST_A", Level: 0, CX: w, CZ: n}
+				if err := s.PutChunk(Chunk{Address: a, Revision: 1, BaseZmm: 1000, Heights: h}); err != nil {
+					errs <- err
+					return
+				}
+				if _, ok, err := s.GetChunk(a); err != nil {
+					errs <- err
+					return
+				} else if !ok {
+					errs <- fmt.Errorf("чанк %v записан и не прочитан", a)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	failed := 0
+	for err := range errs {
+		if failed == 0 {
+			t.Errorf("первый отказ: %v", err)
+		}
+		failed++
+	}
+	if failed != 0 {
+		t.Fatalf("отказов %d из %d записей", failed, writers*each)
+	}
+
+	// Внешние ключи обязаны действовать на ВСЕХ соединениях, а не только на
+	// первом: пул к этой минуте уже разросся, и запись мимо региона, прошедшая
+	// на одном из соединений, завела бы чанк-сироту.
+	var wg2 sync.WaitGroup
+	slipped := make(chan struct{}, writers)
+	for range writers {
+		wg2.Add(1)
+		go func() {
+			defer wg2.Done()
+			err := s.PutChunk(Chunk{Address: chunk.Address{Region: "НЕТ_ТАКОГО", Level: 0}, Heights: h})
+			if err == nil {
+				slipped <- struct{}{}
+			}
+		}()
+	}
+	wg2.Wait()
+	close(slipped)
+	if n := len(slipped); n != 0 {
+		t.Fatalf("чанк без региона прошёл %d раз: внешние ключи достались не каждому соединению", n)
 	}
 }

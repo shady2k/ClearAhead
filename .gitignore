@@ -2,6 +2,13 @@
 # Beads / Dolt files (added by bd init)
 .dolt/
 *.db
+# Спутники SQLite в режиме WAL. База мира с 2026-08-12 открывается журналом
+# WAL (worldstore.dsnPragmas), и рядом с world.db появляются два файла, которых
+# прежде не было: `*.db` их шаблоном не ловит — точка перед суффиксом там
+# отсутствует.
+*.db-wal
+*.db-shm
+*.db-journal
 .beads-credential-key
 .beads/proxieddb/
 

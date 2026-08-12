@@ -12,7 +12,7 @@ config_version=5
 
 config/name="ClearAhead"
 run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.4", "Mobile")
+config/features=PackedStringArray("4.4", "Forward Plus")
 
 [display]
 
@@ -21,5 +21,21 @@ window/size/viewport_height=900
 
 [rendering]
 
-renderer/rendering_method="mobile"
-renderer/rendering_method.mobile="mobile"
+; FORWARD+, а не mobile. Абзац перенесён от снесённого спайка (его project.godot
+; жив в истории: git show 809280f^:client/project.godot) и обновлён под сегодня.
+;
+; Довод спайка был и остаётся простым: игра одна — настройка одна, а мир
+; рассчитывает на тени, дымку и SSAO, которых в gl_compatibility нет. У mobile
+; своя недостача, и она ровно та же по последствию: SSAO там не существует,
+; движок отвечает предупреждением и молча его игнорирует.
+;
+; Мобильным клиент стал 2026-08-12 (коммит cf47ccb) МОЛЧА — ни строки о том,
+; зачем. Это не решение, а потеря: снимок владельца показал плоскую зелёную
+; заливку вместо земли спайка, и половина разницы держалась здесь.
+;
+; На машине без ускорителя метод по-прежнему перебивается флагом запуска:
+;   godot --rendering-method gl_compatibility --path client
+; и той же строкой .mobile ниже — она отвечает не за «мобильный рендерер», а за
+; сборки под мобильную платформу, где Forward+ не поднимается.
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="gl_compatibility"

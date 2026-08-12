@@ -120,18 +120,35 @@ const BROAD_SCALE := 0.85
 ##
 ## Отметка берётся из уже присланных высот билинейно по четырём отсчётам ячейки:
 ## дерево стоит на земле, и её отметка — не новые данные, а уже приехавшие.
+##
+## i0, j0, span — ЯЧЕЙКИ, КОТОРЫМИ ВЛАДЕЕТ ЭТОТ УЗЕЛ ПОКАЗА.
+##
+## С 2026-08-12 (вечер) чанк лежит в сцене целиком, а показывается один узел из
+## нескольких накрывающих место (visibility ranges, world.gd::_load_terrain).
+## Сажает тот, у кого нет порога, — якорь; на дальних уровнях это ЧЕТВЕРТЬ
+## клетки. Площади якорей покрывают плоскость ровно один раз, поэтому дерево не
+## двоится и не пропадает. Прежде здесь стояла маска квадов, и обязанность была
+## та же: ячейка покрова и квад меша — ОДИН индекс, сетка у них общая.
+##
+## span < 0 значит «вся клетка» и оставлено для проверок, где чанк берут в отрыве
+## от устройства показа.
 static func trees(forest: PackedByteArray, cover: PackedByteArray, heights: PackedFloat32Array,
-		base_z_m: float, samples: int, cx: int, cz: int, side_m: float) -> Dictionary:
+		base_z_m: float, samples: int, cx: int, cz: int, side_m: float,
+		i0: int = 0, j0: int = 0, span: int = -1) -> Dictionary:
 	var cells := samples - 1
 	var out: Array[Stem] = []
 	var mismatched := 0
 	if forest.size() != cells * cells / 8 or cover.size() != cells * cells:
 		return {"list": out, "mismatched": 0}
+	if span < 0:
+		i0 = 0
+		j0 = 0
+		span = cells
 	var step := side_m / float(cells)
 	var ox := float(cx) * side_m
 	var oz := float(cz) * side_m
-	for j in cells:
-		for i in cells:
+	for j in range(j0, j0 + span):
+		for i in range(i0, i0 + span):
 			var k := j * cells + i
 			# Скобки обязательны: в GDScript сравнение связывает КРЕПЧЕ битового
 			# И, поэтому `a & b == 0` разобралось бы как `a & (b == 0)`.

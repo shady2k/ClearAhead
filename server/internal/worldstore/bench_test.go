@@ -20,7 +20,10 @@ func benchStore(tb testing.TB) *Store {
 		tb.Fatalf("открытие: %v", err)
 	}
 	tb.Cleanup(func() { s.Close() })
-	if err := s.PutRegion(Region{ID: "ST_A", Frame: "{}", Epoch: 1}); err != nil {
+	// Правило подробности обязательно с тех пор, как охват приезжает картой:
+	// регион без него хранилище отвергает. Замеры про это не знали и падали на
+	// подготовке — то есть не снимались вовсе.
+	if err := s.PutRegion(Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: testRule}); err != nil {
 		tb.Fatalf("регион: %v", err)
 	}
 	return s

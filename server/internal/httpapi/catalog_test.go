@@ -48,7 +48,7 @@ func TestRegionCatalogNamesPlayableRegion(t *testing.T) {
 		t.Fatalf("новая карта: %v", err)
 	}
 	world := newEmptyWorld(t)
-	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	h := NewRegionCatalogHandler(world, maps)
@@ -87,7 +87,7 @@ func TestRegionCatalogNamesPlayableRegion(t *testing.T) {
 func TestRegionCatalogMarksRegionWithoutNetworkUnplayable(t *testing.T) {
 	maps := mapstore.Open()
 	world := newEmptyWorld(t)
-	if err := world.PutRegion(worldstore.Region{ID: "ST_ORPHAN", Frame: "{}", Epoch: 3}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: "ST_ORPHAN", Frame: "{}", Epoch: 3, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	h := NewRegionCatalogHandler(world, maps)
@@ -128,7 +128,7 @@ func TestEmptyRegionCatalogIsNotAnError(t *testing.T) {
 func TestRegionCatalogIsOrderedByID(t *testing.T) {
 	world := newEmptyWorld(t)
 	for _, id := range []string{"ST_C", "ST_A", "ST_B"} {
-		if err := world.PutRegion(worldstore.Region{ID: id, Frame: "{}", Epoch: 1}); err != nil {
+		if err := world.PutRegion(worldstore.Region{ID: id, Frame: "{}", Epoch: 1, Rule: testRule}); err != nil {
 			t.Fatalf("регион %s: %v", id, err)
 		}
 	}

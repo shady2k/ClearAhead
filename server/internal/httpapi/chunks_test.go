@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"bytes"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -20,6 +22,14 @@ const testRegion = "kuban"
 // заведомо не круглое и не нулевое: нулевая база прошла бы и при потерянном
 // заголовке.
 const testBaseZmm = 143_720
+
+// testRule — правило подробности тестового региона.
+//
+// Числа те же, что у боевой карты репозитория, но взяты они ЗДЕСЬ, а не из
+// пакета chunk: с 2026-08-12 охват — свойство карты, и константы, на которую
+// можно сослаться, больше не существует. Регион без правила не записывается
+// вовсе (worldstore.PutRegion), поэтому его называет каждая проверка.
+var testRule = chunk.Rule{Level0RadiusM: 512, MaxLevel: 4}
 
 // testHeights — отсчёты тестового чанка.
 //
@@ -49,7 +59,7 @@ func newChunksTestStore(t *testing.T) *worldstore.Store {
 		t.Fatalf("база мира: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1}); err != nil {
+	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1, Rule: testRule}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	if err := s.PutChunk(worldstore.Chunk{
@@ -65,9 +75,15 @@ func newChunksTestStore(t *testing.T) *worldstore.Store {
 
 // newChunksTestHandler — ручка над такой базой для проверок, которым само
 // хранилище не нужно.
+//
+// БЕЗ СЧЁТЧИКА (nil): здесь проверяется отдача — коды, заголовки, кэш, форма
+// адреса, — и она обязана оставаться той же независимо от того, откуда взялись
+// байты. Порождение по требованию проверяется отдельно и явно, ручками, которые
+// счётчик получают: иначе «204 на пустом месте» перестал бы что-либо значить,
+// потому что пустого места у ручки со счётчиком почти не остаётся.
 func newChunksTestHandler(t *testing.T) http.Handler {
 	t.Helper()
-	return NewChunksHandler(newChunksTestStore(t))
+	return NewChunksHandler(newChunksTestStore(t), nil)
 }
 
 // requireRevalidation проверяет СМЫСЛ Cache-Control, а не его букву: «клиент
@@ -181,6 +197,11 @@ func TestChunkBodyDecodesToStoredSamples(t *testing.T) {
 	}
 }
 
+// TestMissingChunkIsServed204 — пустота при базе как ЕДИНСТВЕННОМ источнике.
+//
+// Ручка здесь без счётчика: с ним часть этих адресов законно превратилась бы в
+// посчитанную землю, и проверка говорила бы уже о другом. Что остаётся пустотой
+// при включённом порождении — предмет TestEmptinessBeyondTheWorldStays204.
 func TestMissingChunkIsServed204(t *testing.T) {
 	h := newChunksTestHandler(t)
 	// Регион существует, чанка в нём нет: разреженность — свойство хранилища,
@@ -222,9 +243,11 @@ func TestBadAddressIsServed404(t *testing.T) {
 
 func TestLevelOutOfRangeIsServed404(t *testing.T) {
 	h := newChunksTestHandler(t)
-	// Уровня подробности вне [0, MaxLevel] не существует ни у одного региона:
-	// это неверный адрес, а не пустое место, где чанк мог бы появиться.
-	for _, level := range []string{"-1", strconv.Itoa(chunk.MaxLevel + 1), "99"} {
+	// Уровня подробности вне [0, MaxLevel] у этого региона не существует: это
+	// неверный адрес, а не пустое место, где чанк мог бы появиться. Последний
+	// уровень свой у каждого региона (охват приезжает картой), поэтому граница
+	// берётся у правила региона, а не у пакета.
+	for _, level := range []string{"-1", strconv.Itoa(testRule.MaxLevel + 1), "99"} {
 		url := "/regions/" + testRegion + "/chunks/" + level + "/0/0"
 		rec := do(t, h, http.MethodGet, url, nil)
 		if rec.Code != http.StatusNotFound {
@@ -233,7 +256,7 @@ func TestLevelOutOfRangeIsServed404(t *testing.T) {
 	}
 	// Границы диапазона при этом обязаны быть адресуемы — иначе проверка выше
 	// прошла бы и при сплошном 404.
-	for _, level := range []int{0, chunk.MaxLevel} {
+	for _, level := range []int{0, testRule.MaxLevel} {
 		rec := do(t, h, http.MethodGet, chunkURL(testRegion, level, 0, 0), nil)
 		if rec.Code == http.StatusNotFound {
 			t.Fatalf("уровень %d: 404, а он в диапазоне", level)
@@ -279,7 +302,7 @@ func TestRepeatedRequestWithIfNoneMatchIsServed304(t *testing.T) {
 // при этом не видно ниоткуда, поэтому ловить такое обязан тест.
 func TestChangedChunkReachesClientThatCachedIt(t *testing.T) {
 	s := newChunksTestStore(t)
-	h := NewChunksHandler(s)
+	h := NewChunksHandler(s, nil)
 	url := chunkURL(testRegion, 0, 0, 0)
 
 	first := do(t, h, http.MethodGet, url, nil)
@@ -328,6 +351,168 @@ func TestChangedChunkReachesClientThatCachedIt(t *testing.T) {
 	third := do(t, h, http.MethodGet, url, map[string]string{"If-None-Match": second.Header().Get("ETag")})
 	if third.Code != http.StatusNotModified || third.Body.Len() != 0 {
 		t.Fatalf("новый ETag: код %d, тело %d байт, ожидался 304 без тела", third.Code, third.Body.Len())
+	}
+}
+
+// makerFunc — ChunkMaker из замыкания.
+//
+// Настоящий счётчик (worldgen.Lazy) сюда не тянется нарочно: он требует карты,
+// распространения поз и рельефа, и проверка отдачи начала бы падать от правки
+// формата карты. Ручке нужен ровно один вопрос — «посчитай этот адрес», — и
+// проверять её надо на том, что этот вопрос задаёт, а не на том, кто на него
+// отвечает по-настоящему. Байт в байт совпадение посчитанного с прогретым
+// проверяется там, где оно живёт, — в worldgen.
+type makerFunc func(a chunk.Address) (worldstore.Chunk, bool, error)
+
+func (f makerFunc) MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error) { return f(a) }
+
+// TestMissingChunkIsComputedAndCached — база стала кэшем.
+//
+// Промах базы перестал быть ответом: чанк считается, отдаётся и ложится в базу.
+// Проверяется всё звено целиком, потому что порознь каждая половина ничего не
+// стоит: посчитать и не положить — значит платить счётом на каждом запросе;
+// положить и отдать другое — значит развести первый ответ со вторым.
+func TestMissingChunkIsComputedAndCached(t *testing.T) {
+	s := newChunksTestStore(t)
+	// Адрес, которого в базе нет: та самая клетка, на которую до сих пор
+	// отвечали 204.
+	addr := chunk.Address{Region: testRegion, Level: 0, CX: 17, CZ: -42}
+	made := testHeights()
+	for k := range made {
+		made[k] -= 3 // не те же байты, что у лежащего в базе чанка
+	}
+
+	calls := 0
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+		calls++
+		if a != addr {
+			return worldstore.Chunk{}, false, nil
+		}
+		// Ровно то, что делает настоящий счётчик: пишет и отдаёт прочитанное.
+		if err := s.PutChunk(worldstore.Chunk{
+			Address: a, Revision: 1, BaseZmm: testBaseZmm, Heights: made,
+		}); err != nil {
+			return worldstore.Chunk{}, false, err
+		}
+		c, ok, err := s.GetChunk(a)
+		return c, ok, err
+	}))
+
+	url := chunkURL(testRegion, addr.Level, addr.CX, addr.CZ)
+	first := do(t, h, http.MethodGet, url, nil)
+	if first.Code != http.StatusOK {
+		t.Fatalf("первый запрос: код %d, ожидался 200 — чанк не посчитан", first.Code)
+	}
+	if got := first.Body.Len(); got != chunk.HeightsBytes {
+		t.Fatalf("первый запрос: тело %d байт, ожидалось %d", got, chunk.HeightsBytes)
+	}
+	// Посчитанный чанк неотличим от лежавшего: те же заголовки, тот же смысл.
+	if got := first.Header().Get(HeaderChunkBaseZ); got != strconv.Itoa(testBaseZmm) {
+		t.Fatalf("первый запрос: %s = %q", HeaderChunkBaseZ, got)
+	}
+	etag := first.Header().Get("ETag")
+	if etag == "" || etag == `""` {
+		t.Fatalf("первый запрос: ETag %q — посчитанный чанк приехал без хеша", etag)
+	}
+	requireRevalidation(t, first.Header().Get("Cache-Control"))
+
+	// Второй запрос обязан прийти ИЗ БАЗЫ: счётчик больше не зовут.
+	second := do(t, h, http.MethodGet, url, nil)
+	if second.Code != http.StatusOK {
+		t.Fatalf("второй запрос: код %d", second.Code)
+	}
+	if calls != 1 {
+		t.Fatalf("счётчик позван %d раза: посчитанное не легло в базу, и платить придётся каждый раз", calls)
+	}
+	if !bytes.Equal(second.Body.Bytes(), first.Body.Bytes()) {
+		t.Fatal("второй ответ отличается от первого — посчитанное и закэшированное разошлись")
+	}
+	if got := second.Header().Get("ETag"); got != etag {
+		t.Fatalf("второй ответ с другим ETag: %q против %q", got, etag)
+	}
+}
+
+// TestEmptinessBeyondTheWorldStays204 — граница мира пережила ленивое
+// порождение.
+//
+// Счётчик, сказавший «земли здесь нет ни для кого», обязан дать тот же 204, что
+// давала пустая база: за охватом карты мир не появляется от того, что его
+// спросили.
+func TestEmptinessBeyondTheWorldStays204(t *testing.T) {
+	s := newChunksTestStore(t)
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+		return worldstore.Chunk{}, false, nil
+	}))
+	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 1_000_000, 0), nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("код %d, ожидался 204", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("204 с телом в %d байт", rec.Body.Len())
+	}
+}
+
+// TestChunkThatCannotBeComputedIsServed500 — сбой остаётся сбоем.
+//
+// Отличие от проверки выше — в одном возвращаемом значении счётчика, и в этом
+// вся суть: «здесь пусто» и «посчитать не смогли» обязаны быть различимы
+// снаружи. Ответь сервер пустотой на сломанный рецепт — клиент нарисовал бы
+// базовую поверхность и никогда не переспросил, а поломка выглядела бы краем
+// мира.
+func TestChunkThatCannotBeComputedIsServed500(t *testing.T) {
+	s := newChunksTestStore(t)
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+		return worldstore.Chunk{}, false, errors.New("рецепт не посчитан")
+	}))
+	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 5, 5), nil)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("код %d, ожидался 500", rec.Code)
+	}
+}
+
+// TestStoredChunkIsNotRecomputed — попадание в базу счётчика не тревожит.
+//
+// Иначе кэш перестал бы быть кэшем: 2.7 мс счёта на каждый запрос к уже
+// лежащему чанку, и тем больше, чем лучше прогрет мир.
+func TestStoredChunkIsNotRecomputed(t *testing.T) {
+	s := newChunksTestStore(t)
+	calls := 0
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+		calls++
+		return worldstore.Chunk{}, false, nil
+	}))
+	if rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 0, 0), nil); rec.Code != http.StatusOK {
+		t.Fatalf("код %d", rec.Code)
+	}
+	if calls != 0 {
+		t.Fatalf("лежащий в базе чанк пересчитан %d раз", calls)
+	}
+}
+
+// TestNothingIsComputedForBadAddress — счётчик не зовут на адрес, который и так
+// отвергнут.
+//
+// Порядок проверок здесь не украшение: неизвестный регион и уровень выше
+// объявленного — это 404, и посчитать их значило бы завести землю там, где
+// карта её не обещала, да ещё и записать в базу.
+func TestNothingIsComputedForBadAddress(t *testing.T) {
+	s := newChunksTestStore(t)
+	calls := 0
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+		calls++
+		return worldstore.Chunk{}, false, nil
+	}))
+	for name, url := range map[string]string{
+		"несуществующий регион":     chunkURL("нетакого", 0, 0, 0),
+		"уровень выше объявленного": chunkURL(testRegion, testRule.MaxLevel+1, 0, 0),
+		"кривой путь":               "/regions/" + testRegion + "/chunks/0/0",
+	} {
+		if rec := do(t, h, http.MethodGet, url, nil); rec.Code != http.StatusNotFound {
+			t.Fatalf("%s: код %d, ожидался 404", name, rec.Code)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("на заведомо неверный адрес счётчик позван %d раз", calls)
 	}
 }
 

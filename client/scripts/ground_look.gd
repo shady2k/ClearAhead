@@ -13,6 +13,25 @@
 ## правка нормали, гашение по дали — осталось как было: это техника показа, и по
 ## границе владения она клиентская целиком.
 ##
+## # Что было потеряно при переносе и вернулось 2026-08-12
+##
+## Шапка выше утверждала, что «всё остальное осталось как было». Это оказалось
+## неправдой: порт ужал шейдер вчетверо, и вместе с угодьями выпали четыре
+## приёма, заведённых у спайка каждый против своего симптома. Владелец сличил
+## снимки и увидел итог — плоскую зелёную заливку с бурыми кляксами.
+##
+##  1. МАКРО-МАСШТАБ ТОГО ЖЕ ТАЙЛА (MACRO_SCALE) — против того, что мип
+##     усредняет полутораметровый тайл в его среднее уже с полусотни метров.
+##  2. ПОЛОСА ПЯТЕН 5–30 М (CLUMP_M) — масштаб плешин и куртин, то самое, чем
+##     земля перестаёт быть заливкой на средней дистанции.
+##  3. ИСКРИВЛЕНИЕ КООРДИНАТЫ (WARP_M) — против округлых клякс гладкого шума.
+##  4. АНТИТАЙЛИНГ СО СМЕШИВАНИЕМ ПО ГЛУБИНЕ (depth_blend2) — порт смешивал
+##     mix(), а спайк писал прямо, почему альфа не годится.
+##
+## Пятым вернулась правка нормали В МИРОВЫХ ОСЯХ вместо NORMAL_MAP: у меша земли
+## нет ни UV, ни касательных, и NORMAL_MAP не работал вовсе — подробности во
+## fragment().
+##
 ## # Три ошибки спайка, перенесённые вместе с кодом
 ##
 ##  1. АМПЛИТУДА ПОЛЯ ТОНА В ТАЙЛЕ МАЛА, А ЧАСТОТА НЕ НИЖЕ ПРЯДЕЙ. Первый заход
@@ -38,70 +57,325 @@ const TURF_COMB := 3         # целых волн на тайл в поле н�
 const TURF_JITTER := 0.95    # рад — разброс листа вокруг направления пряди
 const TURF_BG := 0.14        # провал между листьями: тень, а не почва
 
-const SOIL_TEX := 256
+## Сторона тайла грунта — та же, что у спайкового GRAIN_TILE. Было 256, и это
+## меняло масштаб комьев вдвое при неизменном SOIL_CELL_PX: 22 px на тайле 2.1 м
+## дают комок 18 см при 256 и 9 см при 512. Девять — то, что подбиралось глазом
+## у спайка, восемнадцать — побочный итог смены стороны.
+const SOIL_TEX := 512
 const SOIL_TILE_M := 2.1
 const SOIL_CELL_PX := 22.0
 
 ## Дальше DETAIL_FAR зерно не считается вовсе: с такой дали тайл мельче пикселя,
-## и выборка его — трата вместе с алиасингом.
+## и выборка его — трата вместе с алиасингом. DETAIL_FAR отодвинут спайком с 90
+## до 150 по прямому наблюдению: вид строителя смотрит на землю с полутора сотен
+## метров, и при 90 дернина гасла ровно там, где на неё и смотрят.
 const DETAIL_FAR := 150.0
 const DETAIL_FADE := 90.0
 const NORMAL_AMP := 2.4
+
+## РАЗМАХ ЯРКОСТИ ЗЕРНА: сырое 0…1 переводится в GRAIN_LO…GRAIN_HI, то есть
+## ±29 % вокруг единицы. Это ПРАВИЛО, ДОБЫТОЕ СНИМКАМИ, а не подгонка под кадр,
+## и оно перенесено сюда вместе с ценой первого захода.
+##
+## Первый заход спайка выкрутил размах до 0.40…1.72 — и вблизи земля покрылась
+## тёмными кляксами: у клеточного шума низкие значения это ПРОМЕЖУТКИ между
+## ячейками, и в тёмном конце они читаются не травой, а грязью. Хуже того, эти
+## качели перемножались с макро-масштабом, полосой 5–30 м и тоном вершины —
+## пять слоёв модуляции яркости подряд давали суммарный размах за ±60 %, отсюда
+## пятна на ЛЮБОЙ дистанции.
+##
+## Работает обратная расстановка: РАЗМАХ АЛЬБЕДО ДЕРЖАТЬ УМЕРЕННЫМ, А
+## ПОВЕРХНОСТЬ ДЕЛАТЬ РЕЛЬЕФОМ НОРМАЛИ. Свет, отработавший по неровности, даёт
+## поверхность, которой веришь, и при этом не пачкает цвет — потому NORMAL_AMP
+## и стоит 2.4, а не 0.5.
+##
+## Середина 0.62…1.42 не единица, и это не описка: среднее у клеточного шума
+## около 0.45 (замер спайка, tools/tex_check.gd), и lo/hi подобраны так, чтобы
+## СРЕДНЯЯ яркость зерна вышла единицей. Иначе зерно не текстурирует землю, а
+## просто её притемняет.
 const GRAIN_LO := 0.62
 const GRAIN_HI := 1.42
+## Потолок фактуры грунта: даже на голом месте зерно грунта не вытесняет зерно
+## дернины целиком. Число спайково; разбор — у soil_w во fragment().
+const SOIL_MAX := 0.6
+
+## ПОЛОСА 5–30 М — вытоптанные плешины и куртины. Между зерном (полтора метра) и
+## общим планом (сотни метров) у шейдера не было НИЧЕГО, а это ровно тот
+## масштаб, на котором земля перестаёт быть заливкой на средней дистанции.
+const CLUMP_M := 6.0
+const CLUMP_AMP := 0.14
+
+## ВТОРОЙ МАСШТАБ ТОГО ЖЕ ТАЙЛА. Мелкое зерно живёт только вблизи: при периоде
+## полтора метра уже с полусотни метров тексель мельче пикселя, мип усредняет
+## тайл в его среднее, и земля снова становится ровной заливкой. Ровно это
+## владелец и увидел на снимке. Тот же тайл, растянутый в семь раз, мипами не
+## съедается и держит пятнистость там, где мелкое зерно уже сдалось. Стоит одну
+## выборку и не требует ни второй текстуры, ни ветвления.
+const MACRO_SCALE := 7.0
+const MACRO_AMP := 0.16
+
+## ИСКРИВЛЕНИЕ КООРДИНАТЫ (domain warp) — против округлых клякс. Гладкий шум
+## низкой частоты даёт только округлые формы: полоса плешин без него читается
+## горошком. Сдвиг координаты вторым шумом ломает их в заливы и мысы. Стоит две
+## лишние выборки шума на пиксель.
+const WARP_M := 34.0
+const WARP_AMP := 26.0
+
+## ОСТАТОЧНАЯ ИГРА ТОНА ВНУТРИ ЗАЛИВКИ. Последний из спайковых слоёв, потерянных
+## при переносе: одна низкая частота (период 260 м) с размахом ±5 % поверх цвета
+## вершины. Много она не даёт и не должна — крупные пятна несёт вершина, средние
+## CLUMP_M, мелкие зерно; этот слой закрывает щель между вершинной сеткой 4 м и
+## теми сотнями метров, на которых меняется класс покрова. Без него однородный
+## класс на полкилометра выходит ОДНИМ числом на весь склон.
+##
+## У спайка на этой же частоте рисовались УГОДЬЯ — покос и пашня порогом по
+## тому же шуму. Они УДАЛЕНЫ ИМ ЖЕ, по решению владельца, и здесь не заводятся:
+## контур из fbm округлый по построению, а у пашни прямая межа, и на средней
+## дистанции угодья читались бурыми разводами. Две попытки (снизить контраст,
+## починить ширину межи) дали лучше, но не другое. Находка про правильный
+## перевод ширины порога в метры сохранена отдельно: bd recall
+## noise-threshold-edge-width — она понадобится, если парцеллы будут делаться
+## настоящим генератором.
+const FIELD_M := 260.0
+const TONE_AMP := 0.05
 
 const SHADER := """
 shader_type spatial;
 render_mode cull_back, diffuse_burley, specular_schlick_ggx;
 
+// СВОИХ UV У СЕТКИ ЗЕМЛИ НЕТ (terrain_mesh кладёт вершину, нормаль, цвет и
+// индекс — и всё), и они не нужны: для почти горизонтальной поверхности
+// проекция по мировым XZ и есть правильная развёртка. Тот же приём у HTerrain.
+// Полноценный трипланар здесь лишний — уклоны земляных работ не выше 0.67.
 uniform sampler2D turf : filter_linear_mipmap, repeat_enable;
 uniform sampler2D turf_n : filter_linear_mipmap, repeat_enable;
 uniform sampler2D soil : filter_linear_mipmap, repeat_enable;
-uniform float turf_m;
-uniform float soil_m;
-uniform float detail_far;
-uniform float detail_fade;
-uniform float normal_amp;
-uniform float grain_lo;
+uniform sampler2D soil_n : filter_linear_mipmap, repeat_enable;
+uniform float turf_m;            // м — период тайла дернины
+uniform float soil_m;            // м — период тайла грунта
+uniform float detail_far;        // м — с какой дали зерно перестаёт считаться
+uniform float detail_fade;       // м — ширина полосы гашения
+uniform float normal_amp;        // насколько зерно правит нормаль
+uniform float grain_lo;          // размах яркости зерна: сырое 0..1 -> lo..hi
 uniform float grain_hi;
+uniform float soil_max;
+uniform float clump_m;           // м — средний масштаб пятен (провал 5-30 м)
+uniform float clump_amp;
+uniform float macro_scale;       // во сколько раз растянут тот же тайл
+uniform float macro_amp;         // сила второго, крупного масштаба зерна
+uniform float warp_m;            // м — масштаб искривления координаты
+uniform float warp_amp;          // м — насколько координата уводится в сторону
+uniform float field_m;           // м — крупное деление, поля через дорогу
+uniform float tone_amp;          // остаточная игра тона внутри заливки
 
 varying vec3 v_wpos;
+varying vec3 v_wnrm;
 varying float v_dist;
 varying vec4 v_col;
 
+// Шум пишем свой, а не берём NoiseTexture2D: полоса пятен нужна БЕЗ ПЕРИОДА, а
+// текстура по построению периодична, и её период стал бы новой решёткой.
+float hash12(vec2 p) {
+	vec3 q = fract(vec3(p.xyx) * 0.1031);
+	q += dot(q, q.yzx + 33.33);
+	return fract((q.x + q.y) * q.z);
+}
+
+float vnoise(vec2 p) {
+	vec2 i = floor(p);
+	vec2 f = fract(p);
+	vec2 u = f * f * (3.0 - 2.0 * f);
+	float a = hash12(i);
+	float b = hash12(i + vec2(1.0, 0.0));
+	float c = hash12(i + vec2(0.0, 1.0));
+	float d = hash12(i + vec2(1.0, 1.0));
+	return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+// Сдвиг координат между октавами — против решётчатости, которая иначе
+// накапливается по осям.
+float fbm(vec2 p, int oct) {
+	float s = 0.0;
+	float a = 0.5;
+	float n = 0.0;
+	for (int k = 0; k < oct; k++) {
+		s += a * vnoise(p);
+		n += a;
+		a *= 0.5;
+		p = p * 2.03 + vec2(17.1, 9.7);
+	}
+	return s / n;
+}
+
+vec2 rot2(vec2 v, float c, float s) {
+	return vec2(c * v.x - s * v.y, s * v.x + c * v.y);
+}
+
+// СМЕШИВАНИЕ ПО ГЛУБИНЕ вместо mix(). Приём Мишкиниса, взят из HTerrain
+// (shaders/simple4.gdshader). Обычный mix даёт мутную полосу перехода; здесь на
+// каждом пикселе выигрывает та поверхность, что физически ВЫШЕ, и граница
+// получается зубчатой и физичной: грунт затекает между кочками, а не
+// размазывается по ним. Высоту берём из яркости самого зерна — светлое это
+// поднятое.
+vec4 depth_blend2(vec4 a, float ah, vec4 b, float bh, float t) {
+	float d = 0.1;
+	float ma = max(ah + (1.0 - t), bh + t) - d;
+	float wa = max(ah + (1.0 - t) - ma, 0.0);
+	float wb = max(bh + t - ma, 0.0);
+	return (a * wa + b * wb) / (wa + wb);
+}
+
+// АНТИТАЙЛИНГ ДВОЙНОЙ ВЫБОРКОЙ, тоже из HTerrain (texture_antitile). Тайл
+// периодом полтора метра повторяется восемьдесят раз на сотне метров, и глаз
+// читает клетчатую скатерть раньше, чем траву. Та же текстура читается второй
+// раз ПОВЁРНУТОЙ и в другом масштабе, а переключение между вариантами делает
+// искривлённый шахматный узор из sin*cos.
+//
+// Смешивание — снова ПО ГЛУБИНЕ, а НЕ альфой, и это не мелочь: здесь стоял
+// обычный mix(), и он замыливал ровно ту деталь, ради которой всё и затевалось
+// (прямая цитата причины из HTerrain). Цена приёма — вторая выборка обеих карт,
+// то есть четыре текстурных чтения на покров вместо двух; дальний план от них
+// избавлен ветвлением по detail_far.
+void sample_grain(sampler2D atex, sampler2D ntex, vec2 uv, out float lum, out vec2 slope) {
+	float c = 0.8253;               // поворот на ~34 градуса
+	float s = 0.5646;
+	vec2 uv2 = rot2(uv, c, s) * 1.31;
+	vec4 a0 = texture(atex, uv);
+	vec4 a1 = texture(atex, uv2);
+	vec3 n0 = texture(ntex, uv).rgb * 2.0 - 1.0;
+	vec3 n1 = texture(ntex, uv2).rgb * 2.0 - 1.0;
+	n1.xy = rot2(n1.xy, c, -s);     // нормаль поворачивается вместе с текстурой
+	float t = 1.2 + sin(uv2.x * 2.0 + sin(uv.x) * 2.0)
+		* cos(uv2.y * 2.0 + sin(uv.y) * 2.0);
+	t = smoothstep(0.7, 1.3, t);
+	lum = depth_blend2(a0, a0.r, a1, a1.r, t).r;
+	slope = mix(n0.xy, n1.xy, t);
+}
+
 void vertex() {
 	v_wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	v_dist = length((VIEW_MATRIX * vec4(v_wpos, 1.0)).xyz);
+	v_wnrm = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	v_dist = distance(v_wpos, CAMERA_POSITION_WORLD);
 	v_col = COLOR;
 }
 
-// АНТИТАЙЛИНГ ДВОЙНОЙ ВЫБОРКОЙ. Тайл 1.5 м повторяется восемьдесят раз на сотне
-// метров, и глаз читает решётку раньше, чем траву. Вторая выборка со сдвигом и
-// иным масштабом, смешанная низкой частотой, ломает рисунок, не трогая масштаба.
-float grain(sampler2D t, vec2 p) {
-	vec2 a = p;
-	vec2 b = p * 0.83 + vec2(37.1, 11.7);
-	float m = 0.5 + 0.5 * sin(p.x * 0.11 + p.y * 0.07);
-	return mix(texture(t, a).r, texture(t, b).r, m);
-}
-
 void fragment() {
-	// Гашение по дали: за detail_far остаётся чистый цвет вершины.
-	float k = 1.0 - clamp((v_dist - detail_far + detail_fade) / detail_fade, 0.0, 1.0);
-	// ТРАВЯНИСТОСТЬ ИЗ ВЕРШИНЫ, а не из шума: её посчитал сервер покровом.
+	vec2 p = v_wpos.xz;
+	// ИСКРИВЛЕНИЕ КООРДИНАТЫ: полоса пятен ниже считается не по p, а по q.
+	vec2 warp = vec2(fbm(p / warp_m, 2), fbm(p / warp_m + vec2(31.4, 7.7), 2)) * warp_amp;
+	vec2 q = p + warp;
+
+	// ТРАВЯНИСТОСТЬ ИЗ ВЕРШИНЫ, а не из собственного шума: её посчитал СЕРВЕР
+	// покровом (класс и сомкнутость на ячейку), и это ЕДИНСТВЕННОЕ законное
+	// отличие от спайкового шейдера. Спайк решал сам, где луг, а где грунт,
+	// крупным шумом — здесь такого шума нет и быть не должно.
+	// Цвет вершины приходит УЖЕ ЛИНЕЙНЫМ (см. slope_colour): не трогаем.
 	float g = v_col.a;
-	float t = grain(turf, v_wpos.xz / turf_m);
-	float s = grain(soil, v_wpos.xz / soil_m);
-	float mixed = mix(s, t, g);
-	float lit = mix(1.0, mix(grain_lo, grain_hi, mixed), k);
-	ALBEDO = v_col.rgb * lit;
-	ROUGHNESS = 0.95;
-	if (k > 0.01) {
-		vec3 n = texture(turf_n, v_wpos.xz / turf_m).xyz * 2.0 - 1.0;
-		NORMAL_MAP = normalize(mix(vec3(0.0, 0.0, 1.0), n, k * g * normal_amp * 0.4)) * 0.5 + 0.5;
+	// Одна низкая частота поверх цвета вершины: ею играет ТОН заливки, а не
+	// отдельный покров (разбор — у FIELD_M на стороне GDScript).
+	float n_field = fbm(q / field_m + vec2(53.7, 11.3), 2);
+	vec3 base = v_col.rgb * (1.0 + tone_amp * n_field);
+
+	base *= 1.0 + clump_amp * fbm(q / clump_m, 2);
+	float macro = grain_lo + (grain_hi - grain_lo) * texture(turf, p / (turf_m * macro_scale)).r;
+	base *= mix(1.0, macro, macro_amp);
+
+	vec3 wn = v_wnrm;
+
+	// ДАЛЬНИЙ ПЛАН ЗЕРНО НЕ СЧИТАЕТ (приём HTerrain, globalmap_factor). За
+	// detail_far тайл мельче пикселя, и его выборка даёт уже не деталь, а
+	// мерцание; заодно это снимает восемь выборок текстур с каждого дальнего
+	// пикселя, а дальних пикселей в кадре строителя большинство.
+	float far = clamp((v_dist - detail_far) / detail_fade, 0.0, 1.0);
+	far *= far;
+	if (far < 1.0) {
+		float g_lum;
+		vec2 g_slope;
+		sample_grain(turf, turf_n, p / turf_m, g_lum, g_slope);
+		float s_lum;
+		vec2 s_slope;
+		sample_grain(soil, soil_n, p / soil_m, s_lum, s_slope);
+		// Где дернины нет — там зерно грунта, НО НЕ ЦЕЛИКОМ.
+		//
+		// Множитель 0.6 спайка здесь стоял, был снят 2026-08-12 и возвращён в тот
+		// же день. Снят он был по доводу о СМЫСЛЕ альфы: у спайка она означала
+		// «доля луга в биоме» и обнулялась на песке, крутизне и под лесом заодно,
+		// а у нас приезжает покровом и означает ровно сомкнутость низового яруса —
+		// значит гасить нечего. Довод верен, а следствие оказалось неверным.
+		//
+		// ЗАМЕР (независимый разбор, сличение с запущенным спайком): при одной и
+		// той же сомкнутости снятый множитель подаёт на смешивание грунта в 1.96
+		// раза больше. При closure 0.25 у нас soil_w = 0.75 против спайковых
+		// 0.383 — то есть земля читалась бурой не только цветом, но и ФАКТУРОЙ, и
+		// фактура била сильнее. «Травинки на голой земле» — это её режим.
+		//
+		// Правильное место довода — не здесь: 0.6 это не поправка к смыслу альфы,
+		// а ПОТОЛОК ПОКАЗА, такой же, как BARE_TINT 0.85 у цвета вершины
+		// (terrain_mesh.gd). Ни один класс не вытесняет дернину целиком — ни
+		// цветом, ни зерном.
+		float soil_w = clamp((1.0 - g) * soil_max, 0.0, 1.0);
+		vec4 det = depth_blend2(vec4(g_lum), g_lum, vec4(s_lum), s_lum, soil_w);
+		vec2 slope = mix(g_slope, s_slope, soil_w);
+		float k = 1.0 - far;
+		base *= mix(1.0, grain_lo + (grain_hi - grain_lo) * det.r, k);
+		// НОРМАЛЬ ПРАВИТСЯ В МИРОВЫХ ОСЯХ, БЕЗ NORMAL_MAP. Здесь стоял
+		// NORMAL_MAP, и он не работал вовсе: у сетки земли нет ни UV, ни
+		// касательных (terrain_mesh кладёт только VERTEX/NORMAL/COLOR/INDEX),
+		// а NORMAL_MAP разворачивается касательным базисом — строить его не на
+		// чем. Тот же приём у HTerrain: подмешать наклон зерна в X и Z, Y
+		// оставить.
+		wn = normalize(wn + vec3(slope.x, 0.0, -slope.y) * (normal_amp * k));
 	}
+
+	ALBEDO = base;
+	// NORMAL в фрагменте задаётся В ВИДОВЫХ КООРДИНАТАХ — отсюда VIEW_MATRIX.
+	NORMAL = (VIEW_MATRIX * vec4(wn, 0.0)).xyz;
+	// Матово и без блика: стилизация держится силуэтом и тоном, а глянец на
+	// земле только спорит с ними и ловит алиасинг на дальних скатах.
+	ROUGHNESS = 1.0;
+	SPECULAR = 0.0;
 }
 """
+
+
+## КРУПНЫЙ ТОН ЛУГА — ШУМ, КОТОРОГО НЕ ХВАТАЛО, И ЕГО МАСШТАБ НАЗВАН ЧИСЛОМ.
+##
+## Порт `_n_tone` из снесённого спайка. У него луг был ДВУХТОНАЛЬНЫМ: цвет
+## вершины считался как `C_MEADOW_B.lerp(C_MEADOW_A, tone)`, где tone — этот
+## шум с периодом около ста метров. Тем же шумом велась сухость травы, чтобы
+## трава и земля выгорали В ОДНИХ И ТЕХ ЖЕ местах, а не порознь.
+##
+## При переносе в клиент он выпал целиком: луг красился ОДНИМ цветом (светлым
+## концом пары), и вместе с ним пропал единственный масштаб между зерном
+## ближнего плана (полтора метра) и границами классов покрова (десятки метров).
+## На кадре строителя это ровная зелёная простыня, на которой видны только
+## бурые пятна чужих классов.
+##
+## МАСШТАБ ЗДЕСЬ КРУПНЫЙ НАРОЧНО. Цвет земли живёт в вершинах сетки чанка с
+## шагом 4 м, и всё мельче двух шагов там невыразимо — мелкий шум дал бы не
+## тон, а рябь на границе Найквиста. Это ровно та ошибка, которую спайк разобрал
+## у своего `_cover` и вычеркнул оттуда второй член с периодом 14 м.
+##
+## Это РИСУНОК, а не факт о мире: сервер называет класс покрова и сомкнутость,
+## а «внутри луга тон гуляет волной в сто метров» второй рендерер вправе
+## нарисовать иначе, и мир от этого не изменится. Поэтому шум остаётся здесь
+## навсегда, а не помечен как временный.
+const MEADOW_TONE_M := 100.0     # м — период волны тона луга
+static var _n_tone: FastNoiseLite = null
+
+
+## meadow_wave — сырое значение волны, −1…1. Им ведётся сухость травы.
+static func meadow_wave(x: float, y: float) -> float:
+	if _n_tone == null:
+		_n_tone = FastNoiseLite.new()
+		_n_tone.seed = 0x70E
+		_n_tone.frequency = 1.0 / MEADOW_TONE_M
+	return _n_tone.get_noise_2d(x, y)
+
+
+## meadow_tone — та же волна, разложенная в 0…1: 0 — тёмный тон луга, 1 — светлый.
+static func meadow_tone(x: float, y: float) -> float:
+	return clampf(0.5 + 0.5 * meadow_wave(x, y), 0.0, 1.0)
 
 
 static func _hash01(i: int, j: int, salt: int) -> float:
@@ -163,39 +437,59 @@ static func turf_image() -> Image:
 	return img
 
 
-## soil_texture — зерно грунта клеточным шумом. Тот же приём, что у щебня, но
+## soil_image — зерно грунта клеточным шумом. Тот же приём, что у щебня, но
 ## мельче и мягче: это комья, а не колотый камень.
-static func soil_texture() -> NoiseTexture2D:
+##
+## ТАЙЛ БЕСШОВНЫЙ, и это починка. Здесь стоял NoiseTexture2D с seamless = false,
+## а в шейдере — repeat_enable: тайл повторялся со ШВОМ, то есть с разрывом
+## яркости по обеим границам, и антитайлинг, задуманный против решётки, эту
+## решётку получал готовой. Noise.get_seamless_image стоит дороже (он сшивает
+## края смешиванием), но платится один раз на старте.
+##
+## Две октавы: крупная даёт кочку, вторая — крошку на ней. Одна октава читается
+## правильным горошком, которого в натуре не бывает.
+static func soil_image() -> Image:
 	var n := FastNoiseLite.new()
 	n.seed = 0x50117
 	n.noise_type = FastNoiseLite.TYPE_CELLULAR
 	n.cellular_return_type = FastNoiseLite.RETURN_DISTANCE2_SUB
+	n.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
 	n.cellular_jitter = 1.0
 	n.frequency = 1.0 / SOIL_CELL_PX
-	var nt := NoiseTexture2D.new()
-	nt.width = SOIL_TEX
-	nt.height = SOIL_TEX
-	nt.seamless = false
-	nt.noise = n
-	return nt
+	n.fractal_type = FastNoiseLite.FRACTAL_FBM
+	n.fractal_octaves = 2
+	var img := n.get_seamless_image(SOIL_TEX, SOIL_TEX)
+	img.convert(Image.FORMAT_RGB8)
+	return img
+
+
+## _pair — из одного рисунка две карты: яркость и нормаль.
+##
+## Нормаль строится ИЗ ТОЙ ЖЕ карты высот, что и яркость, и это приближение
+## честно названо: настоящий фотоскан несёт нормаль отдельным каналом, снятым с
+## реальной поверхности, а «яркое значит поднятое» верно не всегда. Для зерна
+## земли верно достаточно, а второй рисунок стоил бы вдвое дороже на старте.
+static func _pair(img: Image, strength: float) -> Array:
+	var nrm := img.duplicate(true) as Image
+	nrm.bump_map_to_normal_map(strength)
+	nrm.generate_mipmaps()
+	img.generate_mipmaps()
+	return [ImageTexture.create_from_image(img), ImageTexture.create_from_image(nrm)]
 
 
 static func material() -> ShaderMaterial:
-	var img := turf_image()
-	img.generate_mipmaps()
-	var albedo := ImageTexture.create_from_image(img)
-	var nimg := turf_image()
-	nimg.bump_map_to_normal_map(2.6)
-	nimg.generate_mipmaps()
-	var normal := ImageTexture.create_from_image(nimg)
+	# Тайл дернины рисуется ОДИН раз и копируется: сотни тысяч записей в буфер.
+	var turf := _pair(turf_image(), 2.6)
+	var dirt := _pair(soil_image(), 3.2)
 
 	var sh := Shader.new()
 	sh.code = SHADER
 	var m := ShaderMaterial.new()
 	m.shader = sh
-	m.set_shader_parameter("turf", albedo)
-	m.set_shader_parameter("turf_n", normal)
-	m.set_shader_parameter("soil", soil_texture())
+	m.set_shader_parameter("turf", turf[0])
+	m.set_shader_parameter("turf_n", turf[1])
+	m.set_shader_parameter("soil", dirt[0])
+	m.set_shader_parameter("soil_n", dirt[1])
 	m.set_shader_parameter("turf_m", TURF_TILE_M)
 	m.set_shader_parameter("soil_m", SOIL_TILE_M)
 	m.set_shader_parameter("detail_far", DETAIL_FAR)
@@ -203,4 +497,13 @@ static func material() -> ShaderMaterial:
 	m.set_shader_parameter("normal_amp", NORMAL_AMP)
 	m.set_shader_parameter("grain_lo", GRAIN_LO)
 	m.set_shader_parameter("grain_hi", GRAIN_HI)
+	m.set_shader_parameter("soil_max", SOIL_MAX)
+	m.set_shader_parameter("clump_m", CLUMP_M)
+	m.set_shader_parameter("clump_amp", CLUMP_AMP)
+	m.set_shader_parameter("macro_scale", MACRO_SCALE)
+	m.set_shader_parameter("macro_amp", MACRO_AMP)
+	m.set_shader_parameter("warp_m", WARP_M)
+	m.set_shader_parameter("warp_amp", WARP_AMP)
+	m.set_shader_parameter("field_m", FIELD_M)
+	m.set_shader_parameter("tone_amp", TONE_AMP)
 	return m

@@ -1,0 +1,472 @@
+{
+  "region": "ST_A",
+  "revision": 2.0,
+  "elements": [
+    {
+      "id": "E_APPROACH",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 0.0,
+          "y": 0.0,
+          "heading": 0.0
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 120.0
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 120.0
+        }
+      ]
+    },
+    {
+      "id": "E_CROSS",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 153.14221294597223,
+          "y": -1.8362971100542635,
+          "heading": -0.11069999999999958
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 20.0
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 20.0
+        }
+      ]
+    },
+    {
+      "id": "E_MAIN",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 153.5,
+          "y": 0.0,
+          "heading": 0.0
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 50.0
+        },
+        {
+          "kind": "arc",
+          "length": 100.0,
+          "radius": 500.0,
+          "angle": 0.2
+        },
+        {
+          "kind": "straight",
+          "length": 80.0
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 230.0
+        }
+      ]
+    },
+    {
+      "id": "E_SIDING",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 206.3147399613459,
+          "y": -7.74665841875262,
+          "heading": -0.11069999999999958
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 60.0
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 60.0
+        }
+      ]
+    },
+    {
+      "id": "E_STUB",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 205.75627975225092,
+          "y": -9.532189389439235,
+          "heading": -0.22139999999999915
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 30.0
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 30.0
+        }
+      ]
+    },
+    {
+      "id": "SW1:diverging",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 120.0,
+          "y": 0.0,
+          "heading": 0.0
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300.0,
+          "angle": -0.1107
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 33.21
+        }
+      ],
+      "role": {
+        "turnout": "SW1",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9",
+        "type": "TRACK_MAIN_1435"
+      }
+    },
+    {
+      "id": "SW1:straight",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 120.0,
+          "y": 0.0,
+          "heading": 0.0
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 33.5
+        }
+      ],
+      "role": {
+        "turnout": "SW1",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9",
+        "type": "TRACK_MAIN_1435"
+      }
+    },
+    {
+      "id": "SW2:diverging",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 173.0197931386353,
+          "y": -4.04577797311907,
+          "heading": -0.11069999999999958
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "arc",
+          "length": 33.21,
+          "radius": 300.0,
+          "angle": -0.1107
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 33.21
+        }
+      ],
+      "role": {
+        "turnout": "SW2",
+        "branch": "diverging",
+        "hand": "right",
+        "frog": "1/9",
+        "type": "TRACK_MAIN_1435"
+      }
+    },
+    {
+      "id": "SW2:straight",
+      "kind": "rail",
+      "start": {
+        "plan": {
+          "x": 173.0197931386353,
+          "y": -4.04577797311907,
+          "heading": -0.11069999999999958
+        },
+        "z": 142.0,
+        "slope": 0.0
+      },
+      "primitives": [
+        {
+          "kind": "straight",
+          "length": 33.5
+        }
+      ],
+      "profile": [
+        {
+          "kind": "grade",
+          "length": 33.5
+        }
+      ],
+      "role": {
+        "turnout": "SW2",
+        "branch": "straight",
+        "hand": "right",
+        "frog": "1/9",
+        "type": "TRACK_MAIN_1435"
+      }
+    }
+  ],
+  "structures": [
+    {
+      "id": "PLAT_MAIN",
+      "kind": "platform",
+      "side": "right",
+      "offset": 1.745,
+      "width": 3.0,
+      "height": 0.2,
+      "slab_thickness": 0.35,
+      "spans": [
+        {
+          "element": "E_MAIN",
+          "from": 40.0,
+          "to": 100.0
+        }
+      ]
+    },
+    {
+      "id": "BS_MAIN",
+      "kind": "buffer_stop",
+      "width": 1.8,
+      "height": 1.1,
+      "spans": [
+        {
+          "element": "E_MAIN",
+          "from": 230.0,
+          "to": 230.0
+        }
+      ]
+    },
+    {
+      "id": "BS_SIDING",
+      "kind": "buffer_stop",
+      "width": 1.8,
+      "height": 1.1,
+      "spans": [
+        {
+          "element": "E_SIDING",
+          "from": 60.0,
+          "to": 60.0
+        }
+      ]
+    },
+    {
+      "id": "BS_STUB",
+      "kind": "buffer_stop",
+      "width": 1.8,
+      "height": 1.1,
+      "spans": [
+        {
+          "element": "E_STUB",
+          "from": 30.0,
+          "to": 30.0
+        }
+      ]
+    }
+  ],
+  "track_types": [
+    {
+      "id": "TRACK_MAIN_1435",
+      "gauge": 1.435,
+      "rail": {
+        "height": 0.18,
+        "head_width": 0.075
+      },
+      "sleeper": {
+        "pitch": 0.6,
+        "length": 2.5,
+        "width": 0.28,
+        "height": 0.2
+      },
+      "ballast": {
+        "half_width": 1.75,
+        "depth": 0.3,
+        "crib_depth": 0.1,
+        "side_slope": 1.5
+      },
+      "formation_to_rail_top": 0.6799999999999999
+    }
+  ],
+  "construction_runs": [
+    {
+      "id": "RUN_APPROACH_CROSS",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0.0,
+      "spans": [
+        {
+          "element": "E_APPROACH",
+          "from": 0.0,
+          "to": 120.0,
+          "direction": "forward"
+        },
+        {
+          "element": "E_CROSS",
+          "from": 0.0,
+          "to": 20.0,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_MAIN",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0.0,
+      "spans": [
+        {
+          "element": "E_MAIN",
+          "from": 0.0,
+          "to": 230.0,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_SIDING",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0.0,
+      "spans": [
+        {
+          "element": "E_SIDING",
+          "from": 0.0,
+          "to": 60.0,
+          "direction": "forward"
+        }
+      ]
+    },
+    {
+      "id": "RUN_STUB",
+      "type": "TRACK_MAIN_1435",
+      "coordinate": "u",
+      "phase": 0.0,
+      "spans": [
+        {
+          "element": "E_STUB",
+          "from": 0.0,
+          "to": 30.0,
+          "direction": "forward"
+        }
+      ]
+    }
+  ],
+  "features": [
+    {
+      "owner": "SW1",
+      "kind": "frog",
+      "point": {
+        "x": 149.34280150224174,
+        "y": -0.7175
+      },
+      "addresses": [
+        {
+          "element": "SW1:straight",
+          "u": 29.34280150224175,
+          "tangent": {
+            "x": 1.0,
+            "y": 0.0
+          }
+        },
+        {
+          "element": "SW1:diverging",
+          "u": 29.31944228015453,
+          "tangent": {
+            "x": 0.9952280796009604,
+            "y": -0.0975759682185349
+          }
+        }
+      ]
+    },
+    {
+      "owner": "SW2",
+      "kind": "frog",
+      "point": {
+        "x": 202.10372250958355,
+        "y": -8.000504081926533
+      },
+      "addresses": [
+        {
+          "element": "SW2:straight",
+          "u": 29.34280150224225,
+          "tangent": {
+            "x": 0.9938790096331525,
+            "y": -0.11047404315324032
+          }
+        },
+        {
+          "element": "SW2:diverging",
+          "u": 29.319442280154995,
+          "tangent": {
+            "x": 0.9783566863892132,
+            "y": -0.2069255764701864
+          }
+        }
+      ]
+    }
+  ],
+  "placement_algorithm": "placement-v1"
+}

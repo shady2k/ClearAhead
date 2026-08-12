@@ -38,7 +38,7 @@ func BenchmarkBootstrap(b *testing.B) {
 		s := benchStore(b)
 		b.StartTimer()
 
-		r, seeded, err := Bootstrap(s, m, 1)
+		r, seeded, err := Bootstrap(s, m, 1, `{"source":"seedmap","kind":"fixture"}`)
 		if err != nil || !seeded {
 			b.Fatalf("бутстрап: %v, сделан=%v", err, seeded)
 		}
@@ -104,7 +104,9 @@ func selectorFor(f *terrain.Field) (selector, bool) {
 	if !ok {
 		return selector{}, false
 	}
-	return selector{field: f, minX: minX, minY: minY, maxX: maxX, maxY: maxY}, true
+	// Правило берётся У ПОЛЯ — там же, где его берёт Generate: охват приезжает
+	// картой, и второй его источник в проверках мерил бы не тот мир.
+	return selector{field: f, rule: f.Rule(), minX: minX, minY: minY, maxX: maxX, maxY: maxY}, true
 }
 
 func seedField(tb testing.TB) *terrain.Field {
@@ -240,7 +242,7 @@ func BenchmarkGenerateCorridor(b *testing.B) {
 			for b.Loop() {
 				b.StopTimer()
 				s := benchStore(b)
-				if err := s.PutRegion(worldstore.Region{ID: m.MapID, Frame: "{}", Epoch: 1}); err != nil {
+				if err := s.PutRegion(worldstore.Region{ID: m.MapID, Frame: "{}", Epoch: 1, Rule: ruleOf(b, m)}); err != nil {
 					b.Fatal(err)
 				}
 				b.StartTimer()
@@ -267,7 +269,7 @@ func BenchmarkGenerateRegion(b *testing.B) {
 	for b.Loop() {
 		b.StopTimer()
 		s := benchStore(b)
-		if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1}); err != nil {
+		if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: ruleOf(b, m)}); err != nil {
 			b.Fatal(err)
 		}
 		b.StartTimer()

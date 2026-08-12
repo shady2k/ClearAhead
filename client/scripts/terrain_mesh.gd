@@ -7,7 +7,11 @@
 ##   • samples × samples значений int16, little-endian;
 ##   • строками по возрастанию j, внутри строки по возрастанию i;
 ##   • высота отсчёта = base_z + значение / 100, метры;
-##   • base_z приезжает ЗАГОЛОВКОМ X-Chunk-Base-Z-Mm в целых миллиметрах;
+##   • base_z приезжает ОТДЕЛЬНО ОТ ТЕЛА и доходит сюда уже метрами: чем именно
+##     его привёз сервер, знает транспортный слой (WorldApi.Heights.base_z_m),
+##     он же переводит единицы и он же отказывает, когда база не приехала. До
+##     2026-08-12 эта строка называла заголовок по имени, и имя стояло в двух
+##     файлах сразу — здесь и в рендере, который его читал;
 ##   • последний ряд и столбец ОБЩИЕ с соседом — без них между чанками щель.
 ##
 ## Про int16: у PackedByteArray нет to_int16_array (есть to_int32_array и
@@ -33,8 +37,19 @@ extends RefCounted
 ## (медиана 0.087, 90-й процентиль 0.144, а откосы земляных работ сервера — 1:1.5,
 ## то есть ровно 0.667): полка ниже 0.20 остаётся ровной, а срез под путём
 ## наливается грунтом полностью.
-const SCARP_SLOPE_LO := 0.20
-const SCARP_SLOPE_HI := 0.50
+## ПОРОГИ ПОДНЯТЫ ДО СПАЙКОВЫХ 2026-08-12, после сличения с запущенным эталоном.
+## Стояло 0.20…0.50 — ВТРОЕ раньше, чем у спайка (`SCARP_SLOPE 0.62`, полнота на
+## 1.03). Прежний довод «полка ниже 0.20 остаётся ровной» опирался на замер
+## уклонов (медиана 0.087, 90-й процентиль 0.144) и потому казался безопасным:
+## числом покрашено и правда мало, 0.6 % вершин. Но красились при этом не откосы,
+## а ПОДЪЁМЫ ПРИРОДНОЙ ЗЕМЛИ, и на кадре это добавляло бурого там, где у эталона
+## ровный луг. Откосы земляных работ (1:1.5, то есть 0.667) в новый порог
+## по-прежнему попадают — ради них он и заведён.
+const SCARP_SLOPE_LO := 0.62
+const SCARP_SLOPE_HI := 1.03
+## Потолок подмешки грунта на крутизне: даже отвесный срез не вытесняет покров
+## целиком. Тот же приём и то же число, что у трёх подмешек класса ниже.
+const SCARP_TINT_MAX := 0.90
 const C_GROUND := Color(0.62, 0.62, 0.60)
 const C_SCARP := Color(0.44, 0.37, 0.26)
 
@@ -70,8 +85,34 @@ const COVER_COLOURS := {
 	SURFACE_SAND: Color(0.70, 0.65, 0.48),
 	SURFACE_BARE_SOIL: Color(0.50, 0.43, 0.31),
 }
+## ЛУГ ДВУХТОНАЛЕН, И ЭТО НЕ УКРАШЕНИЕ. У спайка цвет вершины на лугу считался
+## как `C_MEADOW_B.lerp(C_MEADOW_A, tone)`, где tone — крупный шум с периодом
+## около ста метров (GroundLook.meadow_tone). При переносе в клиент пара
+## схлопнулась в один цвет — светлый конец, — и вместе с ней пропал единственный
+## масштаб между зерном ближнего плана (полтора метра) и границами классов
+## покрова (десятки метров). На кадре строителя это ровная зелёная простыня.
+##
+## COVER_COLOURS[SURFACE_MEADOW] — светлый конец пары, C_MEADOW_DARK — тёмный.
+## Оба числа спайковы (C_MEADOW_A и C_MEADOW_B).
+const C_MEADOW_DARK := Color(0.29, 0.43, 0.18)
+
 ## Цвет ячейки нулевой сомкнутости: покров есть, а низового яруса нет.
-const C_NO_CLOSURE := Color(0.50, 0.43, 0.31)
+##
+## Это НЕ отдельный цвет и не совпадение: луг без единой травинки и есть
+## обнажённый грунт, поэтому значение БЕРЁТСЯ из палитры, а не пишется вторым
+## литералом рядом. До 2026-08-12 здесь стояли те же три числа, набранные
+## заново, — две копии, которые разошлись бы при первой же правке палитры и
+## разошлись бы молча.
+const C_NO_CLOSURE := COVER_COLOURS[SURFACE_BARE_SOIL]
+
+## КЛАССЫ БЕЗ НИЗОВОГО ЯРУСА. Сомкнутость — величина ТРАВЫ: доля площади,
+## закрытая низовым покровом. У песка и обнажённого грунта низового покрова нет
+## по определению класса, и сервер это говорит прямо — обе ветви возвращают
+## ноль константой, а не замером (server/internal/terrain/terrain.go:936-942:
+## `return chunk.SurfaceSand, 0`).
+##
+## Ноль здесь означает «вопрос неприменим», а не «травы нет совсем мало».
+const NO_UNDERSTORY := [SURFACE_SAND, SURFACE_BARE_SOIL]
 
 
 ## cover_colour — цвет по классу и сомкнутости.
@@ -81,11 +122,119 @@ const C_NO_CLOSURE := Color(0.50, 0.43, 0.31)
 ## не должно. Неизвестный класс НЕ подменяется лугом — он рисуется грунтом, и
 ## это видно: подстановка правдоподобного класса вместо неизвестного скрыла бы
 ## расхождение версий контракта.
-static func cover_colour(cover_class: int, closure: int) -> Color:
+##
+## КЛАССЫ ИЗ NO_UNDERSTORY КРАСЯТСЯ СВОИМ ЦВЕТОМ ЦЕЛИКОМ, и это починка
+## регрессии, найденной 2026-08-12 сличением снимков. Прежняя строка лерпила от
+## грунта по closure/15 для ВСЕХ классов подряд, а у песка сомкнутость всегда
+## ноль — значит cover_colour(SURFACE_SAND, 0) возвращал грунт, и песок был
+## неотличим от плешины. Коммит «вода: … песок наконец порождается» сервер
+## выполнил честно, а на экране пляжа не было ни пикселя.
+##
+## ЗАМЕР (уровень 0 региона ST_A, 31 чанк, 126 976 ячеек, счёт по телу
+## /chunks/0/{cx}/{cz}/cover): песок 7 860 ячеек (6.19 %), обнажённый грунт
+## 10 194 (8.03 %) — и у обоих сомкнутость ровно 0 во всех до единой. Те самые
+## 14 % площади, что на снимке владельца лежали одинаковыми бурыми кляксами.
+## ПОТОЛКИ ПОДМЕШКИ. Ни один класс не вытесняет зелень ЦЕЛИКОМ, и это не вкус, а
+## перенос устройства спайка (`_cover` в spike_world.gd): у него ни голая почва,
+## ни песок, ни подлесок не были отдельным цветом — все трое были ПОДМЕШКОЙ к
+## лугу с потолком, отчего земля оставалась связной, а пятна имели мягкий край.
+##
+## Разница вскрылась сличением с запущенным спайком 2026-08-12. Сервер отдаёт
+## ДИСКРЕТНЫЕ классы (`CoverAt` возвращает `SurfaceBareSoil` либо не возвращает),
+## спайк работал НЕПРЕРЫВНОЙ величиной `bare = (1 − density) · 0.85`. Клиент
+## красил класс его цветом на все сто, и 16.8 % площади (замер ниже) выходило
+## сплошной заливкой с резкой границей — «половина кадра бурая».
+##
+## Границу владения это не трогает: ГДЕ голая почва — по-прежнему говорит сервер,
+## а НАСКОЛЬКО СИЛЬНО она вытесняет зелень — решение рендерера, ровно как сам
+## цвет класса и как меш ели.
+##
+## Числа спайковы: BARE_TINT 0.85, FOREST_TINT 0.45. Второе стоит объяснения,
+## оно у спайка выстрадано: при 0.8 маска леса (период ~300 м, мягкая) красила
+## тёмным открытое поле на сотни метров вокруг массива, и с середины дистанции
+## это читалось «тенью от несуществующей тучи».
+const BARE_TINT := 0.85
+const SAND_TINT := 0.85
+const FOREST_TINT := 0.45
+
+
+## cover_colour — цвет по классу и сомкнутости.
+##
+## Считается ОТ ЛУГА и подмешками к нему, а не выбором из палитры: см. потолки
+## выше. Сомкнутость правит долю голой почвы непрерывно, поэтому внутри одного
+## класса ступеньки нет, а на границе классов она мягкая — обе стороны стоят на
+## общем основании.
+##
+## Неизвестный класс НЕ подменяется лугом — он рисуется грунтом целиком, и это
+## видно: подстановка правдоподобного класса вместо неизвестного скрыла бы
+## расхождение версий контракта.
+##
+## ЗАМЕР (уровень 0 ST_A, 16 чанков, 65 536 ячеек, счёт по телу
+## /chunks/0/{cx}/{cz}/cover): луг 48.3 %, хвойный 15.6 %, лиственный 19.3 %,
+## песок 8.5 %, голая почва 8.3 %. Сомкнутость луга при этом ЗДОРОВАЯ — в среднем
+## 13.35 из 15, полная у 79.3 % ячеек, — то есть бурость шла не от неё, а от
+## сплошной заливки двух классов и от земли под лесом.
+## tone — крупный тон луга, 0…1 (0 тёмный конец пары, 1 светлый). Умолчание —
+## светлый конец: он и стоял здесь одним числом до 2026-08-12, и проверки,
+## которым тон безразличен, зовут функцию по-прежнему двумя доводами.
+static func cover_colour(cover_class: int, closure: int, tone: float = 1.0) -> Color:
 	if not COVER_COLOURS.has(cover_class):
 		return C_NO_CLOSURE
-	var base: Color = COVER_COLOURS[cover_class]
-	return C_NO_CLOSURE.lerp(base, clampf(float(closure) / 15.0, 0.0, 1.0))
+	var c: Color = C_MEADOW_DARK.lerp(COVER_COLOURS[SURFACE_MEADOW], tone)
+	match cover_class:
+		SURFACE_FOREST_CONIFER, SURFACE_FOREST_BROAD:
+			# Под пологом — не «цвет леса», а ЗАТЕНЁННЫЙ ЛУГ: подстилка и подлесок.
+			c = c.lerp(COVER_COLOURS[cover_class], FOREST_TINT)
+		SURFACE_SAND:
+			c = c.lerp(COVER_COLOURS[SURFACE_SAND], SAND_TINT)
+		SURFACE_BARE_SOIL:
+			c = c.lerp(COVER_COLOURS[SURFACE_BARE_SOIL], BARE_TINT)
+	# Плешины низового покрова — поверх любого класса и с тем же потолком. У песка
+	# и голой почвы сомкнутость не определена (NO_UNDERSTORY), и второй раз
+	# подмешивать грунт им нечем: вопрос неприменим, а не «травы совсем мало».
+	if not (cover_class in NO_UNDERSTORY):
+		var bare := (1.0 - clampf(float(closure) / 15.0, 0.0, 1.0)) * BARE_TINT
+		c = c.lerp(COVER_COLOURS[SURFACE_BARE_SOIL], bare)
+	return c
+
+
+## cover_grassy — ДОЛЯ ЛУГА В ВЕРШИНЕ, она же альфа. Порт `c.a` из спайкового
+## `_cover`, и порт вместе с его устройством.
+##
+## У спайка альфа считалась ровно как «сколько от чистого луга осталось после
+## всех подмешек»:
+##
+##     c.a = (1 − max(forest·FOREST_TINT, scarp, wet·SAND_TINT)) · (1 − bare)
+##
+## То есть ОДНО И ТО ЖЕ число правит и цвет, и фактуру: чем сильнее класс увёл
+## цвет от луга, тем больше зерна ГРУНТА подмешает шейдер. Здесь до 2026-08-12
+## (вечер) альфа считалась отдельной строкой — `closure / 15`, погашенное уклоном
+## — и от цвета не зависела вовсе. Из-за этого под пологом леса лежала полная
+## ДЕРНИНА: цвет земли уходил в подлесок, а фактура оставалась газонной.
+##
+## Ноль для песка и обнажённого грунта тем самым получается САМ, из BARE_TINT и
+## SAND_TINT, а не отдельной проверкой класса: у обоих подмешка 0.85, значит луга
+## остаётся 0.15 — не ноль, и это правильнее прежнего нуля. Ни один класс не
+## вытесняет дернину целиком — тот же потолок показа, что у цвета.
+##
+## scarp — доля обнажённого грунта на крутизне, уже с потолком SCARP_TINT_MAX.
+static func cover_grassy(cover_class: int, closure: int, scarp: float) -> float:
+	if not COVER_COLOURS.has(cover_class):
+		return 0.0
+	var displaced := scarp
+	match cover_class:
+		SURFACE_FOREST_CONIFER, SURFACE_FOREST_BROAD:
+			displaced = maxf(displaced, FOREST_TINT)
+		SURFACE_SAND:
+			displaced = maxf(displaced, SAND_TINT)
+		SURFACE_BARE_SOIL:
+			displaced = maxf(displaced, BARE_TINT)
+	# Плешины низового покрова — поверх любого класса. У песка и голой почвы
+	# сомкнутость не определена (NO_UNDERSTORY), второй раз их гасить нечем.
+	var bare := 0.0
+	if not (cover_class in NO_UNDERSTORY):
+		bare = (1.0 - clampf(float(closure) / 15.0, 0.0, 1.0)) * BARE_TINT
+	return clampf((1.0 - displaced) * (1.0 - bare), 0.0, 1.0)
 
 
 ## slope_colour — цвет вершины по крутизне. Вынесена, чтобы правило было в одном
@@ -102,19 +251,137 @@ static func cover_colour(cover_class: int, closure: int) -> Color:
 ## по паспорту здесь луг.
 static func slope_colour(slope: float, base: Color = C_GROUND) -> Color:
 	var t := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO), 0.0, 1.0)
-	return base.lerp(C_SCARP, t)
+	return base.lerp(C_SCARP, t * SCARP_TINT_MAX)
 
 
-## build — меш одного чанка.
+## decode — ТЕЛО ЧАНКА В ОТСЧЁТЫ, и больше ничего.
 ##
-## Возвращает: mesh, vertices, z_min, z_max, decode_usec, build_usec.
-## Ошибка размера тела — это ошибка, а не повод дорисовать: пустой результат.
-static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, cz: int, rule: ChunkRule,
-		cover: PackedByteArray = PackedByteArray()) -> Dictionary:
+## Отделено от сборки меша 2026-08-12, и не ради порядка: юбка (см. build) должна
+## перекрыть ступеньку между уровнями, а величина ступеньки — свойство ПРИСЛАННЫХ
+## отсчётов, и меряется она до того, как собран хоть один меш. Пока разбор жил
+## внутри build, замер потребовал бы либо второго разбора тела, либо сборки меша
+## наугад и переделки.
+##
+## Отсчёты возвращаются СЫРЫМИ, в сантиметрах: перевод в метры и сложение с базой
+## делает build. Так и было — h[k] хранил сантиметры и до разделения.
+static func decode(blob: PackedByteArray, level: int, cx: int, cz: int, rule: ChunkRule) -> Dictionary:
 	var n := rule.samples
 	var want := n * n * 2
 	if blob.size() != want:
 		return {"ok": false, "error": "чанк %d/%d/%d: тело %d байт, ожидалось %d" % [level, cx, cz, blob.size(), want]}
+	var count := n * n
+	var h := PackedFloat32Array()
+	h.resize(count)
+	# ЗАМЕР: только цикл декодирования, без выделения буфера и без сборки меша.
+	var t_dec := Time.get_ticks_usec()
+	for k in count:
+		h[k] = float(blob.decode_s16(k * 2))
+	return {"ok": true, "heights": h, "decode_usec": Time.get_ticks_usec() - t_dec}
+
+
+## sag — НАСКОЛЬКО ЗЕМЛЯ ОТКЛОНЯЕТСЯ ОТ ПРЯМОЙ, ПРОВЕДЁННОЙ ЧЕРЕЗ ОТСЧЁТЫ ВТРОЕ
+## РЕЖЕ. Метры. Это и есть высота ТРЕЩИНЫ на стыке двух уровней подробности.
+##
+## Отсчёты грубой сетки совпадают в плане с каждым stride-м отсчётом подробной, и
+## значения в этих точках у сервера ОДНИ И ТЕ ЖЕ (замер швов 2026-08-12: на шве
+## 0/1 худшая ступенька 0.003 м, то есть ровно погрешность квантования). Значит
+## расходятся не отсчёты, а то, что МЕЖДУ ними: у грубой сетки там прямая, у
+## подробной — свой отсчёт. Разница и есть щель, в которую видно небо.
+##
+## Меряется по ВСЕМ линиям сетки, а не только по краю чанка: узлом показа стал
+## КВАДРАНТ клетки (world.gd), поэтому границей двух уровней вправе оказаться и
+## средняя линия чанка, а не только его край.
+##
+## stride 2 отвечает на разницу уровней в один, stride 4 — в два. Второе не
+## паранойя: ширина кольца уровня L равна radius_of(L) − radius_of(L−1) =
+## 256·2^L м, то есть РОВНО СТОРОНЕ клетки этого уровня, а расстояние движок
+## меряет до центра каждого узла отдельно — соседние столбцы вправе выбрать
+## уровни, отличающиеся на два. Замер этого — в live/90_coverage.
+static func sag(h: PackedFloat32Array, n: int, stride: int) -> float:
+	var worst := 0.0
+	for j in n:
+		var i := stride
+		while i < n:
+			var lo := h[j * n + i - stride]
+			var hi := h[j * n + i]
+			for t in range(1, stride):
+				var d := absf(h[j * n + i - stride + t] - lerpf(lo, hi, float(t) / float(stride)))
+				if d > worst:
+					worst = d
+			i += stride
+	for i in n:
+		var j := stride
+		while j < n:
+			var lo := h[(j - stride) * n + i]
+			var hi := h[j * n + i]
+			for t in range(1, stride):
+				var d := absf(h[(j - stride + t) * n + i] - lerpf(lo, hi, float(t) / float(stride)))
+				if d > worst:
+					worst = d
+			j += stride
+	return worst * 0.01
+
+
+## build — меш чанка ЦЕЛИКОМ либо одного его квадранта.
+##
+## Возвращает: mesh, vertices, triangles, skirt_triangles, z_min, z_max,
+## steep_vertices, build_usec.
+##
+## # ПОЧЕМУ БОЛЬШЕ НЕТ МАСКИ КВАДОВ
+##
+## До 2026-08-12 (вечер) строился не весь чанк, а те его квады, которые правило
+## отдало этому уровню: у сервера точку вблизи пути хранят до четырёх уровней
+## сразу (контракт чанков §2а), и чанк, построенный целиком, положил бы четыре
+## поверхности разной подробности в одно место. Маска это разбирала, была
+## замерена (0.00 % без земли, 0.00 % под двумя слоями) и стоила 288 мс отбора.
+##
+## Заменена она НЕ на «строить всё и надеяться», а на выбор уровня движком:
+## visibility_range_begin + visibility_parent (world.gd::_load_terrain). Наложение
+## осталось законным ровно потому, что из накрывающих одну точку узлов движок
+## показывает РОВНО ОДИН, и доказывается это цепочкой узлов, а не арифметикой
+## расстояний.
+##
+## # КВАДРАНТ — ЕДИНИЦА ПОКАЗА, И ЭТО КУПЛЕНО ЗАМЕРОМ
+##
+## quadrant = −1 значит «весь чанк», 0…3 — четверть (младший бит по x, старший по
+## z). Четверть нужна затем, что порог visibility_range_begin — свойство УЗЛА, а
+## подробный сосед есть не под всей клеткой: клетка уровня L+1 накрывает 2×2
+## клетки уровня L, и часть из них сервер не хранит (они дальше radius_of(L) от
+## пути). Узлом на всю клетку пришлось бы выбирать одно из двух: либо порог, и
+## тогда под непокрытой четвертью дыра до неба, либо без порога — и тогда
+## подробные соседи не показываются ВОВСЕ.
+##
+## ЗАМЕР ЦЕНЫ ВТОРОГО (затравка ST_A, дальность 2000 м): из 22 клеток уровня 1
+## полный набор из четырёх подробных детей имеют единицы — клетка полна только
+## если её ЦЕНТР ближе radius_of(L−1) к оси (каждый ребёнок держит центр клетки
+## своим углом). Без квадрантов 9 из 29 клеток уровня 0 не показались бы никогда,
+## то есть 0.59 км² вблизи пути рисовались бы шагом 8 м вместо 4 м.
+##
+## Цена квадрантов названа: общий ряд отсчётов на шве четвертей строится дважды,
+## и вершин выходит на 3.1 % больше (4×33² против 65²).
+##
+## # ЮБКА
+##
+## skirt_m — на сколько метров вниз загнут лишний ряд вершин по краю построенного
+## куска. Ею закрывается ТРЕЩИНА: соседний столбец вправе показать уровень
+## погрубее, у него шаг вдвое больше, и по шву поверхности расходятся на sag()
+## (см. выше). Приём взят у ассета godot-cuberact-planet-chunked-lod (MIT).
+##
+## ЮБКА НИЧЕМ НЕ ПОМЕЧЕНА, и это решение, а не забывчивость. У образца вершины
+## юбки помечались альфой вершинного цвета, потому что его шейдер обязан был
+## отличать их от земли. У нас альфа занята травянистостью покрова
+## (cover_grassy), и — важнее — помечать нечего: юбку видно только в самой щели,
+## и там она обязана выглядеть продолжением земли. Поэтому вершина юбки берёт
+## цвет, альфу и НОРМАЛЬ своего края: в щели видна та же трава той же яркости,
+## а не тёмная стенка, объявляющая, что здесь шов.
+static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, cz: int, rule: ChunkRule,
+		cover: PackedByteArray = PackedByteArray(),
+		quadrant: int = -1, skirt_m: float = 0.0) -> Dictionary:
+	var n := rule.samples
+	var count := n * n
+	if h.size() != count:
+		return {"ok": false, "error": "чанк %d/%d/%d: отсчётов %d, ожидалось %d" % [
+			level, cx, cz, h.size(), count]}
 
 	# Покров — ЯЧЕЙКИ, а не отсчёты: их (n−1)², а не n². Пустой массив значит
 	# «покрова нет» и рисуется серым — тем же, чем рисовалось до его появления.
@@ -123,15 +390,22 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 	var cover_cells := n - 1
 	var has_cover := cover.size() == cover_cells * cover_cells
 
-	var count := n * n
-	var h := PackedFloat32Array()
-	h.resize(count)
-
-	# ЗАМЕР: только цикл декодирования, без выделения буфера и без сборки меша.
-	var t_dec := Time.get_ticks_usec()
-	for k in count:
-		h[k] = float(blob.decode_s16(k * 2))
-	var decode_usec := Time.get_ticks_usec() - t_dec
+	# ГРАНИЦЫ КУСКА в отсчётах. Четверть клетки — это (n−1)/2 интервалов, и
+	# нечётное (n−1) сделало бы её невыразимой: отказ, а не деление пополам с
+	# потерей ряда. Сегодня samples = 65, интервалов 64.
+	var i0 := 0
+	var j0 := 0
+	var i1 := n - 1
+	var j1 := n - 1
+	if quadrant >= 0:
+		if (n - 1) % 2 != 0:
+			return {"ok": false, "error": "чанк %d/%d/%d: samples−1 = %d нечётно, четверть невыразима" % [
+				level, cx, cz, n - 1]}
+		var half := (n - 1) / 2
+		i0 = (quadrant & 1) * half
+		j0 = ((quadrant >> 1) & 1) * half
+		i1 = i0 + half
+		j1 = j0 + half
 
 	var t_build := Time.get_ticks_usec()
 
@@ -143,23 +417,26 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var cols := PackedColorArray()
-	verts.resize(count)
-	norms.resize(count)
-	cols.resize(count)
+	# Таблица переноса: индекс отсчёта -> индекс вершины в буфере, −1 у тех, что в
+	# этот кусок не вошли. Без неё индексы квадов пришлось бы считать дважды.
+	var remap := PackedInt32Array()
+	remap.resize(count)
+	remap.fill(-1)
 
 	var z_min := INF
 	var z_max := -INF
 	var steep := 0
 
-	for j in n:
-		for i in n:
+	for j in range(j0, j1 + 1):
+		for i in range(i0, i1 + 1):
 			var k := j * n + i
 			var z := base_z_m + h[k] * 0.01
 			if z < z_min:
 				z_min = z
 			if z > z_max:
 				z_max = z
-			verts[k] = to_godot(ox + float(i) * step, oz + float(j) * step, z)
+			remap[k] = verts.size()
+			verts.append(to_godot(ox + float(i) * step, oz + float(j) * step, z))
 
 			# Нормаль — центральной разностью по сетке отсчётов. У края чанка
 			# соседа нет, и разность берётся односторонней: это ошибка ОСВЕЩЕНИЯ
@@ -171,49 +448,55 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 			var ju := mini(j + 1, n - 1)
 			var dzdx := (h[j * n + ir] - h[j * n + il]) * 0.01 / (float(ir - il) * step)
 			var dzdy := (h[ju * n + i] - h[jd * n + i]) * 0.01 / (float(ju - jd) * step)
-			norms[k] = Vector3(-dzdx, 1.0, dzdy).normalized()
+			norms.append(Vector3(-dzdx, 1.0, dzdy).normalized())
 
 			# Тот же уклон, что дал нормаль, красит и вершину: второй проход по
 			# полю не нужен, а правило названо в шапке.
 			var slope := sqrt(dzdx * dzdx + dzdy * dzdy)
 			var base := C_GROUND
+			# АЛЬФА ВЕРШИНЫ — ТРАВЯНИСТОСТЬ, а не прозрачность: ею шейдер земли
+			# смешивает тайл дернины с тайлом грунта. Она приходит ПОКРОВОМ
+			# (класс и сомкнутость), и в этом весь смысл: сервер говорит, где
+			# какой биом, клиент рисует. Собственного шума у шейдера нет.
+			# Доля обнажённого грунта на крутизне. Та же величина, которую кладёт
+			# в цвет slope_colour, — она нужна и альфе, потому что у спайка цвет
+			# и фактура считались ОДНИМ выражением (разбор — у cover_grassy).
+			var scarp := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO),
+				0.0, 1.0) * SCARP_TINT_MAX
+			# Без покрова земля серая, и дернину рисовать не по чему.
+			var grassy := 0.0
 			if has_cover:
 				# Вершина лежит в УГЛУ ячейки, а класс принадлежит площади:
 				# берётся ячейка, для которой эта вершина — нижний левый угол, а
 				# у крайнего ряда — последняя. Иначе крайняя вершина осталась бы
 				# без класса, а достраивать ей соседа значило бы выдумать ячейку.
+				#
+				# Ячейка читается ОДИН раз на цвет и на альфу: до 2026-08-12 те
+				# же два mini() и та же выборка стояли ниже второй копией, и
+				# ничто не мешало им разъехаться.
 				var ci := mini(i, cover_cells - 1)
 				var cj := mini(j, cover_cells - 1)
 				var packed := cover[cj * cover_cells + ci]
-				base = cover_colour(packed >> 4, packed & 0x0f)
-			# АЛЬФА ВЕРШИНЫ — ТРАВЯНИСТОСТЬ, а не прозрачность: ею шейдер земли
-			# смешивает тайл дернины с тайлом грунта. Она приходит ПОКРОВОМ
-			# (класс и сомкнутость), и в этом весь смысл: сервер говорит, где
-			# какой биом, клиент рисует. Собственного шума у шейдера нет.
-			var grassy := 0.0
-			if has_cover:
-				var pk := cover[mini(j, cover_cells - 1) * cover_cells + mini(i, cover_cells - 1)]
-				var cl := pk >> 4
-				if cl != SURFACE_SAND and cl != SURFACE_BARE_SOIL:
-					grassy = float(pk & 0x0f) / 15.0
-			# Крутизна смывает дернину: на откосе грунт обнажён. То же правило,
-			# что красит вершину, — оно поверх присланного, а не вместо него.
-			grassy *= 1.0 - clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO), 0.0, 1.0)
+				var cl := packed >> 4
+				base = cover_colour(cl, packed & 0x0f,
+					GroundLook.meadow_tone(ox + float(i) * step, oz + float(j) * step))
+				grassy = cover_grassy(cl, packed & 0x0f, scarp)
 			var c := slope_colour(slope, base).srgb_to_linear()
 			c.a = grassy
-			cols[k] = c
+			cols.append(c)
 			if slope >= SCARP_SLOPE_LO:
 				steep += 1
 
+	var draw_quads := (i1 - i0) * (j1 - j0)
 	var idx := PackedInt32Array()
-	idx.resize((n - 1) * (n - 1) * 6)
+	idx.resize(draw_quads * 6)
 	var w := 0
-	for j in n - 1:
-		for i in n - 1:
-			var a := j * n + i
-			var b := j * n + i + 1
-			var c := (j + 1) * n + i
-			var d := (j + 1) * n + i + 1
+	for j in range(j0, j1):
+		for i in range(i0, i1):
+			var a := remap[j * n + i]
+			var b := remap[j * n + i + 1]
+			var c := remap[(j + 1) * n + i]
+			var d := remap[(j + 1) * n + i + 1]
 			idx[w] = a
 			idx[w + 1] = c
 			idx[w + 2] = b
@@ -222,30 +505,70 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 			idx[w + 5] = d
 			w += 6
 
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_COLOR] = cols
-	arrays[Mesh.ARRAY_INDEX] = idx
+	# ЮБКА. Обход края идёт петлёй против часовой стрелки в индексах (i, j): низ
+	# слева направо, правый край вверх, верх справа налево, левый край вниз. При
+	# таком порядке «ребро, повёрнутое на +90° вокруг Y» смотрит НАРУЖУ куска, и
+	# треугольники юбки выходят лицом к зрителю при cull_back — проверено выводом
+	# для нижнего края и перенесено на остальные три поворотом.
+	var skirt_tris := 0
+	if skirt_m > 0.0:
+		var loop: Array[int] = []
+		for i in range(i0, i1):
+			loop.append(j0 * n + i)
+		for j in range(j0, j1):
+			loop.append(j * n + i1)
+		for i in range(i1, i0, -1):
+			loop.append(j1 * n + i)
+		for j in range(j1, j0, -1):
+			loop.append(j * n + i0)
+		var drop := Vector3(0.0, -skirt_m, 0.0)
+		var first := verts.size()
+		for k in loop:
+			var v := remap[k]
+			verts.append(verts[v] + drop)
+			norms.append(norms[v])
+			cols.append(cols[v])
+		var m := loop.size()
+		for t in m:
+			var p := remap[loop[t]]
+			var q := remap[loop[(t + 1) % m]]
+			var pl := first + t
+			var ql := first + (t + 1) % m
+			idx.append(p)
+			idx.append(q)
+			idx.append(pl)
+			idx.append(q)
+			idx.append(ql)
+			idx.append(pl)
+			skirt_tris += 2
 
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	# Кусок без единого квада — не отказ, а вырожденный вызов (например четверть
+	# клетки, у которой samples−1 = 0). Пустой поверхности движок не примет
+	# (add_surface_from_arrays на пустом массиве вершин — ошибка), поэтому здесь
+	# честный null, а не поверхность из нуля треугольников.
+	var mesh: ArrayMesh = null
+	if draw_quads > 0:
+		var arrays := []
+		arrays.resize(Mesh.ARRAY_MAX)
+		arrays[Mesh.ARRAY_VERTEX] = verts
+		arrays[Mesh.ARRAY_NORMAL] = norms
+		arrays[Mesh.ARRAY_COLOR] = cols
+		arrays[Mesh.ARRAY_INDEX] = idx
+		mesh = ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	var build_usec := Time.get_ticks_usec() - t_build
 
 	return {
 		"ok": true,
 		"mesh": mesh,
-		"vertices": count,
-		"triangles": (n - 1) * (n - 1) * 2,
+		"vertices": verts.size(),
+		"triangles": draw_quads * 2 + skirt_tris,
+		# Треугольники юбки названы ОТДЕЛЬНО: это цена приёма, и она обязана быть
+		# видна числом, а не растворяться в общем счёте.
+		"skirt_triangles": skirt_tris,
 		"z_min": z_min,
 		"z_max": z_max,
-		# Отсчёты отдаются наружу, а не выбрасываются после сборки меша: по ним
-		# рассевается растительность, и второй разбор того же тела ради тех же
-		# чисел был бы двойной работой на каждый чанк.
-		"heights": h,
 		"steep_vertices": steep,
-		"decode_usec": decode_usec,
 		"build_usec": build_usec,
 	}
 
