@@ -55,7 +55,14 @@ REGION ?= ST_A
 ## распухал доказательствами работы). У client/assets/ от этого был .gdignore, у
 ## shots/ его забыли. Дешевле не иметь их внутри проекта вовсе.
 SHOT   ?= $(CURDIR)/shots/station.png
-VIEW   ?= station
+# РОЛЬ и ГАБАРИТ — разные вопросы, и потому это две переменные.
+#
+# ROLE отвечает «кто смотрит»: тип камеры, углы, проекция. FRAME отвечает «на
+# что навести», и габарит берётся из данных. Прежняя одна переменная VIEW мешала
+# их в один список (station, throat, wide, track), отчего «вид с оси» и «вид
+# горловины» стояли рядом, будучи разного рода.
+ROLE   ?= builder
+FRAME  ?= network
 
 # Запятая переменной, и это не причуда. $(call …) режет свои аргументы ПО
 # ЗАПЯТЫМ, поэтому «--position -9000,-9000» внутри $(call with_server,…) уезжало
@@ -81,8 +88,9 @@ help:
 	@echo '  make client-check  проверки клиента без окна (--headless)'
 	@echo '  make client-shot   снимок экрана в $(SHOT), окно за экраном'
 	@echo
-	@echo 'Переменные: DB, SERVER_ADDR, GODOT, REGION, SHOT, VIEW'
-	@echo 'VIEW: station (вся станция), throat (горловина), wide (весь рельеф), track (с оси, горизонтально).'
+	@echo 'Переменные: DB, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME'
+	@echo 'ROLE: builder (орто под углом), dsp (почти сверху, шире), driver (с оси, горизонтально).'
+	@echo 'FRAME: network (вся сеть), throat (только устройства), terrain (весь приехавший рельеф).'
 	@echo 'Горловина наводится по габаритам элементов с role.turnout, а не по числу.'
 	@echo
 	@echo 'Примеры:'
@@ -166,7 +174,7 @@ dev-check: dev-bin client-import
 ## снимать), но уведено за экран.
 dev-shot: dev-bin client-import
 	@mkdir -p $(dir $(SHOT))
-	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --view=$(VIEW) --quit-when-done)
+	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) --quit-when-done)
 	@echo "снимок: $(SHOT)"
 
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
@@ -229,6 +237,6 @@ client-check: client-import
 client-shot: client-import
 	@mkdir -p $(dir $(SHOT))
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1600x900 -- \
-		--server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --view=$(VIEW) \
+		--server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) \
 		--quit-when-done
 	@echo "снимок: $(SHOT)"

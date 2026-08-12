@@ -51,9 +51,10 @@ static func _cone(v: PackedVector3Array, n: PackedVector3Array, c: PackedColorAr
 			nrm = Vector3.UP
 		var b := v.size()
 		v.append(p0); v.append(p1); v.append(apex)
+		var lin := col.srgb_to_linear()
 		for _i in 3:
 			n.append(nrm)
-			c.append(col)
+			c.append(lin)
 		idx.append_array([b, b + 1, b + 2])
 
 
@@ -71,8 +72,9 @@ static func _cylinder(v: PackedVector3Array, n: PackedVector3Array, c: PackedCol
 		v.append(d1 * r + Vector3(0, y0 + h, 0))
 		v.append(d0 * r + Vector3(0, y0 + h, 0))
 		n.append(d0); n.append(d1); n.append(d1); n.append(d0)
+		var lin := col.srgb_to_linear()
 		for _i in 4:
-			c.append(col)
+			c.append(lin)
 		idx.append_array([b, b + 1, b + 2, b, b + 2, b + 3])
 
 
@@ -164,8 +166,11 @@ static func grass_mesh() -> ArrayMesh:
 		var nrm := Vector3(-d.z, 0.6, d.x).normalized()
 		for _i in 4:
 			n.append(nrm)
-		c.append(C_GRASS_DRY); c.append(C_GRASS_DRY)
-		c.append(C_GRASS); c.append(C_GRASS)
+		# Линейным, как и всюду: у корня сухой тон, у верхушки живой.
+		var dry := C_GRASS_DRY.srgb_to_linear()
+		var lush := C_GRASS.srgb_to_linear()
+		c.append(dry); c.append(dry)
+		c.append(lush); c.append(lush)
 		idx.append_array([b, b + 1, b + 2, b, b + 2, b + 3])
 	return _mesh(v, n, c, idx)
 

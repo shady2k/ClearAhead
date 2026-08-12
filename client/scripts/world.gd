@@ -1,4 +1,10 @@
-## Main — сборка сцены из того, и только из того, что прислал сервер.
+## World — сборка сцены из того, и только из того, что прислал сервер.
+##
+## Строится ОБОЛОЧКОЙ (app.gd) и живёт ровно столько, сколько игрок находится в
+## роли. До 2026-08-12 этот файл звался main.gd и был приложением целиком: сам
+## разбирал ключи запуска, сам решал, какой регион показать, и выйти из него было
+## некуда. Разделение не косметическое — у мира появился владелец, который умеет
+## его снести и построить заново другой ролью, не ходя в сеть повторно.
 ##
 ## ЗАКОН: чего сервер не прислал, того на экране нет. Ни одной зашитой
 ## константы, описывающей мир. Если чего-то не хватает — оно показывается как
@@ -50,7 +56,18 @@ const BUSH_H_MAX := 2.6
 const BUILDING_SINK := 1.5
 const ROOF_OVERHANG := 0.7
 const ROOF_THICKNESS := 0.6
+## Насколько кровля САДИТСЯ НА СТЕНУ, а не встаёт над ней. Порт из спайка вместе
+## с доводом: плита, поставленная ровно на срез стены, оставляет щель, и дом
+## читается висящим на ножках.
+const ROOF_SEAT := 0.3
+## C_ROOF — не цвет кровли, а то, КУДА цвет кровли уводится от цвета стен.
+## Разница существенная, и она куплена ошибкой: до 2026-08-12 крыша красилась
+## прямо в C_ROOF, и посёлок с высоты строителя читался серыми плитами — все
+## двенадцать домов одинаковыми. Спайк записал причину рядом со своим кодом:
+## СВЕРХУ ВИДНО КРЫШУ, значит цвет несёт она, а стены только оттеняют.
 const C_ROOF := Color(0.38, 0.39, 0.41)
+const ROOF_TINT := 0.18   # доля увода кровли к C_ROOF
+const WALL_SHADE := 0.22  # насколько стена темнее своего цвета
 const HOUSE_COLORS := [
 	Color(0.84, 0.83, 0.79), Color(0.74, 0.62, 0.64), Color(0.66, 0.72, 0.63),
 	Color(0.55, 0.50, 0.62), Color(0.82, 0.75, 0.60), Color(0.60, 0.66, 0.72),
@@ -83,8 +100,16 @@ const AXIS_SAMPLE_STEP_M := 5.0
 var server_url := "http://127.0.0.1:8080"
 var region := "ST_A"
 var shot_path := ""
-var shot_view := "station"
 var quit_when_done := false
+
+## Роль и её камера. Приходят от оболочки: КТО смотрит — не свойство мира.
+var role := -1
+var role_name := ""
+var role_hints := ""
+var role_camera := {}
+## На что наводиться: network — вся сеть, throat — только устройства, terrain —
+## весь приехавший рельеф. Это ГАБАРИТ, а не взгляд, и берётся он из данных.
+var frame := "network"
 
 var world: Node3D
 var ui_label: RichTextLabel
@@ -96,8 +121,23 @@ var errors: Array[String] = []
 var report_lines: Array[String] = []
 
 
+## configure — всё, что мир получает СНАРУЖИ, одним вызовом и до входа в дерево.
+##
+## До входа — потому что загрузка начинается в _ready: настроенный после этого
+## мир успел бы сходить в сеть не за тем регионом.
+func configure(cfg: Dictionary) -> void:
+	server_url = String(cfg.get("server_url", server_url)).rstrip("/")
+	region = String(cfg.get("region", region))
+	role = int(cfg.get("role", -1))
+	role_name = String(cfg.get("role_name", ""))
+	role_hints = String(cfg.get("role_hints", ""))
+	role_camera = cfg.get("camera", {}) as Dictionary
+	frame = String(cfg.get("frame", frame))
+	shot_path = String(cfg.get("shot_path", ""))
+	quit_when_done = bool(cfg.get("quit_when_done", false))
+
+
 func _ready() -> void:
-	_parse_args()
 	_build_scene()
 	await _load_world()
 	_print_report()
@@ -107,21 +147,16 @@ func _ready() -> void:
 		get_tree().quit(1 if not errors.is_empty() else 0)
 
 
-func _parse_args() -> void:
-	var args: PackedStringArray = OS.get_cmdline_user_args()
-	if args.is_empty():
-		args = OS.get_cmdline_args()
-	for a in args:
-		if a.begins_with("--server="):
-			server_url = a.substr(9).rstrip("/")
-		elif a.begins_with("--region="):
-			region = a.substr(9)
-		elif a.begins_with("--shot="):
-			shot_path = a.substr(7)
-		elif a.begins_with("--view="):
-			shot_view = a.substr(7)
-		elif a == "--quit-when-done":
-			quit_when_done = true
+## set_input_enabled — отдать или отобрать у камеры жесты. Зовёт оболочка,
+## когда поверх мира появляется меню.
+func set_input_enabled(on: bool) -> void:
+	if camera == null:
+		return
+	if camera.has_method("set_active"):
+		camera.call("set_active", on)
+	else:
+		camera.set_process_unhandled_input(on)
+		camera.set_process(on)
 
 
 func _build_scene() -> void:
@@ -183,9 +218,16 @@ func _build_scene() -> void:
 	sun.shadow_normal_bias = 2.0
 	add_child(sun)
 
+	# КАМЕРА ПО РОЛИ. Орбитальная там, где смотрят НА место (строитель, ДСП), и
+	# свободная там, где смотрят ИЗ места (машинист). Разница не в удобстве: у
+	# первой мышь обходит станцию кругом, у второй — поворачивает голову.
+	#
+	# Роль называет тип и углы; куда навести и в каком масштабе — считается из
+	# габаритов приехавших данных (_place_camera).
 	camera = Camera3D.new()
 	camera.name = "Camera"
-	camera.set_script(load("res://scripts/free_camera.gd"))
+	camera.set_script(load("res://scripts/orbit_camera.gd" if not role_camera.is_empty()
+		else "res://scripts/free_camera.gd"))
 	add_child(camera)
 
 	var ui := CanvasLayer.new()
@@ -811,21 +853,27 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	stats["terrain_radius_m"] = rule.radius_of(rule.max_level)
 
 
+## _place_camera — навести камеру роли на габарит, названный `frame`.
+##
+## Здесь сходятся две вещи, и они РАЗНОЙ природы. Углы и проекция приходят от
+## РОЛИ (свойство взгляда). Точка и масштаб считаются из ГАБАРИТОВ ДАННЫХ —
+## ни одного числа о мире тут нет и быть не может: снесённый клиент держал фокус
+## `Vector2(240.0, 0.0)`, и это одна из причин, по которым его снесли.
 func _place_camera(bbox: Rect2, elements: Array[TrackGeom.Element]) -> void:
-	# ВИД С ПУТИ — единственный, который смотрит ГОРИЗОНТАЛЬНО, и потому
-	# единственный, на котором видно небо, дымку и силуэт леса. Остальные виды
-	# смотрят сверху, и по ним нельзя судить, похоже ли это на железную дорогу.
+	# МАШИНИСТ смотрит ГОРИЗОНТАЛЬНО, и потому он единственный, на чьём кадре
+	# видно небо, дымку и силуэт леса. Остальные роли смотрят сверху, и по ним
+	# нельзя судить, похоже ли это на железную дорогу.
 	#
-	# Точка берётся из ДАННЫХ, а не из координат: начало самого длинного
-	# элемента, отметка его оси плюс высота глаза. Высота глаза — решение
-	# художника (у человека она около 1.7 м), и потому названа константой.
-	if shot_view == "track":
+	# Точка берётся из ДАННЫХ: начало самого длинного элемента, отметка его оси
+	# плюс высота глаза. Высота глаза — решение художника (у человека она около
+	# 1.7 м), и потому названа константой.
+	if role_camera.is_empty():
 		var longest: TrackGeom.Element = null
 		for el in elements:
 			if longest == null or el.length_m > longest.length_m:
 				longest = el
 		if longest == null:
-			_fail("вид «путь»: ни одного элемента не приехало — вставать некуда")
+			_fail("роль «машинист»: ни одного элемента не приехало — вставать некуда")
 			return
 		var a0 := longest.pose_at(0.0)
 		var a1 := longest.pose_at(minf(EYE_LOOK_AHEAD_M, longest.length_m))
@@ -833,42 +881,51 @@ func _place_camera(bbox: Rect2, elements: Array[TrackGeom.Element]) -> void:
 		var target := TerrainMesh.to_godot(a1.x, a1.y, a1.z + EYE_HEIGHT_M)
 		camera.global_position = eye
 		camera.look_at(target, Vector3.UP)
-		stats["view"] = "track: с оси %s, глаз на %.2f м над головкой рельса" % [longest.id, EYE_HEIGHT_M]
+		stats["view"] = "с оси %s, глаз на %.2f м над головкой рельса" % [longest.id, EYE_HEIGHT_M]
 		return
 
-	# Камера наводится по ГАБАРИТАМ ДАННЫХ: центр пути и его размер, высота —
-	# середина диапазона приехавших отсчётов. Ни одного числа о мире здесь нет.
-	var view_box := bbox
-	if shot_view == "throat":
-		# Горловина — не координата и не константа: это габарит ТЕХ ЭЛЕМЕНТОВ,
-		# у которых сервер прислал role.turnout. Не прислал ни у одного — вида
-		# нет, и это сказано вслух, а не подменено станцией.
-		var throat := _role_bbox(elements)
-		if throat.size == Vector2.ZERO:
-			_fail("вид «горловина»: ни у одного элемента нет role.turnout — наводиться не на что")
-		else:
-			view_box = throat
+	var view_box := _frame_bbox(bbox, elements)
 	var cx := view_box.position.x + view_box.size.x * 0.5
 	var cy := view_box.position.y + view_box.size.y * 0.5
 	var mid_z := 0.0
 	if stats.has("z_min") and float(stats["z_min"]) < INF:
 		mid_z = (float(stats["z_min"]) + float(stats["z_max"])) * 0.5
 	var centre := TerrainMesh.to_godot(cx, cy, mid_z)
-	var radius := maxf(view_box.size.length() * 0.5, 1.0)
-	stats["view"] = "%s: центр (%.1f, %.1f), радиус %.1f м" % [shot_view, cx, cy, radius]
-	if shot_view == "wide":
-		# Весь приехавший рельеф: полоса вокруг оси шириной в радиус последнего
-		# уровня — число из манифеста, а не из головы.
-		radius = maxf(radius, float(stats.get("terrain_radius_m", radius)))
-		camera.frame_bounds(centre, radius, 48.0, 1.5)
-	elif shot_view == "throat":
-		# Круче наклон и ближе: решётку и галочку крестовины видно только сверху.
-		camera.frame_bounds(centre, radius, 74.0, 1.35)
-	else:
-		# Наклон 55°, а не 30°: при пологом взгляде плоскость станции вырождается
-		# в полоску, и решётка, платформа и крестовины сливаются в одну линию.
-		# Наклон — свойство ВЗГЛЯДА, менять его закон разрешает.
-		camera.frame_bounds(centre, radius, 70.0, 1.25)
+	# Ширина кадра — по БОЛЬШЕЙ стороне габарита: по диагонали станция ушла бы в
+	# половину экрана, по меньшей — не влезла бы вдоль.
+	var span := maxf(maxf(view_box.size.x, view_box.size.y), 1.0)
+	var factor := float(role_camera.get("frame_factor", 1.15))
+	camera.configure(centre, span * factor,
+		float(role_camera.get("azimuth", 205.0)),
+		float(role_camera.get("elevation", 45.0)),
+		bool(role_camera.get("ortho", true)))
+	stats["view"] = "%s, габарит «%s»: центр (%.1f, %.1f), кадр %.0f м, %s" % [
+		role_name, frame, cx, cy, span * factor, camera.projection_name()]
+
+
+## _frame_bbox — габарит, названный `frame`. Из данных, а не из координат.
+func _frame_bbox(bbox: Rect2, elements: Array[TrackGeom.Element]) -> Rect2:
+	match frame:
+		"throat":
+			# Горловина — не координата и не константа: это габарит ТЕХ
+			# элементов, у которых сервер прислал role.turnout. Не прислал ни у
+			# одного — габарита нет, и это сказано вслух, а не подменено сетью.
+			var throat := _role_bbox(elements)
+			if throat.size == Vector2.ZERO:
+				_fail("габарит «горловина»: ни у одного элемента нет role.turnout — наводиться не на что")
+				return bbox
+			return throat
+		"terrain":
+			# Весь приехавший рельеф: полоса вокруг оси шириной в радиус
+			# последнего уровня — число из манифеста, а не из головы.
+			var r := float(stats.get("terrain_radius_m", 0.0))
+			if r <= 0.0:
+				return bbox
+			return bbox.grow(r)
+		"network":
+			return bbox
+	_fail("габарит «%s» неизвестен — знаю network, throat, terrain" % frame)
+	return bbox
 
 
 ## _role_bbox — габарит элементов, входящих в устройства.
@@ -895,7 +952,12 @@ func _refresh_ui() -> void:
 
 func _hud_text() -> String:
 	var l: Array[String] = []
-	l.append("[b]ClearAhead — клиент В1[/b]   %s   регион %s" % [server_url, region])
+	# Роль первой строкой: игрок обязан видеть, кем он сейчас смотрит, не открывая
+	# меню. Это то же место, где спайк держал имя роли и подсказку управления.
+	if role_name != "":
+		l.append("[b]%s[/b]   %s   регион %s" % [role_name, server_url, region])
+	else:
+		l.append("[b]ClearAhead — клиент В1[/b]   %s   регион %s" % [server_url, region])
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
 			stats.get("epoch"), stats.get("revision"), stats.get("network_model_hash"),
@@ -968,7 +1030,10 @@ func _hud_text() -> String:
 		for e in errors:
 			l.append("[color=#ff6060]  %s[/color]" % e)
 	l.append("")
-	l.append("[i]мышь (правая) — обзор, WASD — движение, Q/E — вниз/вверх, колесо — скорость[/i]")
+	# Подсказка управления приходит ОТ РОЛИ: у орбитальной камеры и свободной
+	# разные жесты, и одна строка на обе врала бы одной из них.
+	l.append("[i]%s[/i]" % (role_hints if role_hints != ""
+		else "мышь (правая) — обзор, WASD — движение, Q/E — вниз/вверх, колесо — скорость"))
 	return "\n".join(l)
 
 
@@ -1257,8 +1322,12 @@ func _draw_buildings() -> void:
 
 
 ## _house — коробка стен плюс плита крыши с напуском.
+##
+## Цвет дома несёт КРОВЛЯ, а стены его оттеняют: с высоты строителя и ДСП стен
+## почти не видно, и посёлок, у которого цветные стены под серой крышей,
+## читается двенадцатью одинаковыми плитами. Разбор — у объявления C_ROOF.
 func _house(v: PackedVector3Array, n: PackedVector3Array, c: PackedColorArray, idx: PackedInt32Array,
 		x: float, y: float, z: float, fwd: Vector2, hw: float, hd: float, h: float, wall: Color) -> void:
-	TrackView.box_into(v, n, c, idx, x, y, fwd, hd, hw, z, z + h, wall)
+	TrackView.box_into(v, n, c, idx, x, y, fwd, hd, hw, z, z + h, wall.darkened(WALL_SHADE))
 	TrackView.box_into(v, n, c, idx, x, y, fwd, hd + ROOF_OVERHANG, hw + ROOF_OVERHANG,
-		z + h, z + h + ROOF_THICKNESS, C_ROOF)
+		z + h - ROOF_SEAT, z + h - ROOF_SEAT + ROOF_THICKNESS, wall.lerp(C_ROOF, ROOF_TINT))

@@ -73,6 +73,23 @@ func _run() -> void:
 	var rule := ChunkRule.from_manifest(man.get("chunks", {}) as Dictionary)
 	_ok("правило подробности заполнено", rule.valid(), rule.rule_text())
 
+	# 1б. КАТАЛОГ РЕГИОНОВ. На нём стоит весь вход в игру: оболочка спрашивает
+	#     его первым и без него не доходит до выбора роли. Проверяется не «код
+	#     200», а то, ради чего он заведён, — что регион, в который клиент
+	#     СОБИРАЕТСЯ войти, в каталоге есть и объявлен играбельным. Каталог,
+	#     отдающий пустой список при живом регионе, оставил бы игрока в меню с
+	#     отказом, и выглядело бы это поломкой клиента.
+	var cat_res: Dictionary = await net.fetch_json("/regions")
+	_ok("каталог регионов 200", cat_res["ok"], String(cat_res.get("error", "")))
+	if cat_res["ok"]:
+		var listed := {}
+		for c_raw in ((cat_res["data"] as Dictionary).get("regions", []) as Array):
+			var c: Dictionary = c_raw as Dictionary
+			listed[String(c.get("region", ""))] = bool(c.get("playable", false))
+		_ok("регион %s есть в каталоге" % region, listed.has(region), str(listed.keys()))
+		_ok("регион %s объявлен играбельным" % region, bool(listed.get(region, false)),
+			"иначе оболочка покажет заглушку вместо входа")
+
 	# 1a. ИМЕНА ПОЛЕЙ. Проверка заведена после того, как клиент читал
 	#     `network.trackside` (поле переименовано в `structures` коммитом
 	#     3637504) и `track_hash` (умер вместе с ресурсом geometry). Ни то, ни

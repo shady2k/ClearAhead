@@ -371,8 +371,20 @@ static func box_into(verts: PackedVector3Array, norms: PackedVector3Array, cols:
 		z_bot: float, z_top: float, col: Color) -> void:
 	var before := verts.size()
 	_box(verts, norms, idx, cx, cy, fwd, half_len, half_wid, z_bot, z_top)
+	# ЦВЕТ КЛАДЁТСЯ ЛИНЕЙНЫМ, а принимается sRGB — в нём записаны константы и в
+	# нём же их читает человек. Перевод живёт ЗДЕСЬ, в единственной двери в меш,
+	# а не у каждого вызывающего: правило уже записано (bd recall
+	# godot-vertex-color-linear), и терялось оно ровно тем, что было в одном
+	# месте (terrain_mesh.gd) и отсутствовало в двух других.
+	#
+	# Цена пропуска замерена спайком и видна на кадре: albedo_color движок
+	# переводит сам, а ARRAY_COLOR берёт как есть, и 0.41 выходит на экран как
+	# 0.67. Посёлок из шести разных цветов читался двенадцатью одинаковыми
+	# светло-серыми плитами — не потому, что цвета одинаковы, а потому, что все
+	# они выбелены к одному пределу.
+	var lin := col.srgb_to_linear()
 	for _k in range(before, verts.size()):
-		cols.append(col)
+		cols.append(lin)
 
 
 static func _box(verts: PackedVector3Array, norms: PackedVector3Array, idx: PackedInt32Array,

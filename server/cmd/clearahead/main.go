@@ -65,6 +65,11 @@ func main() {
 	// подручки и не знает ни одного хранилища; манифест региона — единственный,
 	// кому нужны оба, и оба приходят ему аргументами, а не через соседа.
 	mux := http.NewServeMux()
+	// Каталог регионов — БЕЗ косой черты, и это не опечатка рядом со строкой
+	// ниже: у ServeMux "/regions" адресует один ресурс, "/regions/" — поддерево.
+	// Список того, во что можно войти, и есть отдельный ресурс, а не корень
+	// чужих подресурсов.
+	mux.Handle("/regions", httpapi.NewRegionCatalogHandler(world, store))
 	mux.Handle("/regions/", httpapi.NewRegionsHandler(
 		httpapi.NewRegionManifestHandler(world, store),
 		httpapi.NewNetworkHandler(store),

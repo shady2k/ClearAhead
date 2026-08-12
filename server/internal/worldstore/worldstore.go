@@ -177,6 +177,37 @@ func (s *Store) GetRegion(id string) (Region, bool, error) {
 	return r, true, nil
 }
 
+// ListRegions перечисляет регионы по возрастанию идентификатора.
+//
+// Порядок задан ORDER BY, а не оставлен на усмотрение движка: список едет на
+// экран выбора, и регионы, меняющиеся местами от запроса к запросу, выглядели бы
+// как изменившийся мир. SQLite без ORDER BY порядка не обещает.
+//
+// Отдаётся ВЕСЬ список, без страниц. Это осознанный предел: регионов на сервере
+// сегодня единицы, и страницы понадобятся вместе с тем, кто их заведёт тысячами.
+func (s *Store) ListRegions() ([]Region, error) {
+	rows, err := s.db.Query(
+		`SELECT id, frame, provenance, redistributable, epoch FROM regions ORDER BY id`)
+	if err != nil {
+		return nil, fmt.Errorf("worldstore: перечисление регионов: %w", err)
+	}
+	defer rows.Close()
+	var out []Region
+	for rows.Next() {
+		var r Region
+		var redist int
+		if err := rows.Scan(&r.ID, &r.Frame, &r.Provenance, &redist, &r.Epoch); err != nil {
+			return nil, fmt.Errorf("worldstore: перечисление регионов: %w", err)
+		}
+		r.Redistributable = redist != 0
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("worldstore: перечисление регионов: %w", err)
+	}
+	return out, nil
+}
+
 // Chunk — статический ярус чанка.
 //
 // BaseZmm — опорная высота в целых миллиметрах: в базе float не хранится, иначе
