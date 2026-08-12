@@ -441,6 +441,120 @@ static func solid_material(colour: Color) -> StandardMaterial3D:
 	return m
 
 
+## ФАКТУРА ПУТИ — ПОРТ ИЗ СНЕСЁННОГО СПАЙКА, а не новое сочинение.
+##
+## Материалы щебня и шпалы были написаны в `spike_world.gd` (коммит 809280f^) и
+## доведены там снимками; вместе с кодом там записаны три ошибки, которые стоили
+## заходов, и переписывать их заново значило бы наступить на них второй раз:
+##
+##  1. КЛЕТОЧНЫЙ ШУМ, А НЕ ПЕРЛИН. У перлина нет высоких частот: вблизи балласт
+##     читается серой лентой с разводами. Щебень — это ЯЧЕЙКИ С ГРАНИЦАМИ, и
+##     даёт их F2−F1: ноль в середине зерна, максимум на шве с соседним.
+##  2. SEAMLESS ЗДЕСЬ ВРЕДЕН. NoiseTexture2D делает бесшовность кросс-фейдом
+##     тайла с самим собой; клеточный шум от наложения двух сеток теряет ровно
+##     то, ради чего взят, — границу зерна. Первый заход спайка с seamless дал
+##     наждак вместо щебня. Шов тайла на узкой полосе не виден.
+##  3. РАМПА ТОЛЬКО ГАСИТ, ПОДНЯТЬ ОНА НЕ МОЖЕТ: печётся в RGBA8, всё выше
+##     единицы обрезается. У F2−F1 бо́льшая часть площади — середина зерна, то
+##     есть малые значения; рампа 0.38…1.0 съедала две трети альбедо, и «сухой
+##     светлый щебень» выходил почти чёрным. Светлоту задаёт ЦВЕТ, рампа
+##     оставляет себе только тень в шве.
+##
+## Трипланар вместо UV — оттуда же: у мешей пути развёртки нет, и заводить её
+## означало бы третью систему координат рядом с (x, y) и u.
+const BALLAST_STONE := 0.050   # м — характерный размер щебёнки (натура 3–6 см)
+const BALLAST_TILE := 512      # px — сторона тайла
+const BALLAST_CELL_PX := 32.0  # px — сторона ячейки, она же 1/frequency
+const C_BALLAST := Color(0.50, 0.48, 0.45)  # сухой щебень на солнце
+const C_SLEEPER := Color(0.22, 0.17, 0.13)  # пропитанная шпала
+## Направление волокна берётся анизотропным uv1_scale, то есть в МИРОВЫХ осях, и
+## ограничение названо честно ещё спайком: на дуге и на путях под углом волокно
+## поедет. Правильное лечение — свои UV на коробке шпалы; это отдельная работа.
+const SLEEPER_GRAIN := 0.045   # м — период волокна ПОПЕРЁК бруса
+const SLEEPER_RUN := 2.2       # м — период рисунка ВДОЛЬ бруса
+
+
+static func ballast_material() -> StandardMaterial3D:
+	var period := BALLAST_STONE * (float(BALLAST_TILE) / BALLAST_CELL_PX)
+	var m := StandardMaterial3D.new()
+	m.albedo_color = C_BALLAST
+	m.roughness = 1.0
+	m.albedo_texture = _stone_texture(false)
+	m.normal_enabled = true
+	m.normal_texture = _stone_texture(true)
+	m.normal_scale = 1.5
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3.ONE / period
+	return m
+
+
+static func _stone_texture(as_normal: bool) -> NoiseTexture2D:
+	var noise := FastNoiseLite.new()
+	noise.seed = 0xB0115
+	noise.noise_type = FastNoiseLite.TYPE_CELLULAR
+	noise.cellular_return_type = FastNoiseLite.RETURN_DISTANCE2_SUB
+	noise.cellular_distance_function = FastNoiseLite.DISTANCE_EUCLIDEAN
+	noise.cellular_jitter = 1.0
+	noise.frequency = 1.0 / BALLAST_CELL_PX
+	noise.fractal_type = FastNoiseLite.FRACTAL_NONE
+	var nt := NoiseTexture2D.new()
+	nt.width = BALLAST_TILE
+	nt.height = BALLAST_TILE
+	nt.seamless = false
+	nt.noise = noise
+	if as_normal:
+		nt.as_normal_map = true
+		nt.bump_strength = 24.0
+	else:
+		var ramp := Gradient.new()
+		ramp.offsets = PackedFloat32Array([0.0, 0.30, 0.75, 1.0])
+		ramp.colors = PackedColorArray([
+			Color(0.62, 0.62, 0.62), Color(0.82, 0.82, 0.82),
+			Color(1.00, 1.00, 1.00), Color(1.00, 1.00, 1.00)])
+		nt.color_ramp = ramp
+	return nt
+
+
+static func sleeper_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = C_SLEEPER
+	m.roughness = 0.82
+	m.albedo_texture = _wood_texture(false)
+	m.normal_enabled = true
+	m.normal_texture = _wood_texture(true)
+	# Дерево почти плоское: рельеф даёт трещина, а не волокно.
+	m.normal_scale = 0.7
+	m.uv1_triplanar = true
+	m.uv1_scale = Vector3(1.0 / SLEEPER_GRAIN, 1.0 / SLEEPER_RUN, 1.0 / SLEEPER_RUN)
+	return m
+
+
+static func _wood_texture(as_normal: bool) -> NoiseTexture2D:
+	var noise := FastNoiseLite.new()
+	noise.seed = 0x0D06
+	noise.noise_type = FastNoiseLite.TYPE_PERLIN
+	noise.frequency = 0.09
+	noise.fractal_octaves = 4
+	var nt := NoiseTexture2D.new()
+	nt.width = 256
+	nt.height = 256
+	nt.seamless = false
+	nt.noise = noise
+	if as_normal:
+		nt.as_normal_map = true
+		nt.bump_strength = 6.0
+	else:
+		# Резкий тёмный край — это и есть трещина: рампа с уступом, а не плавный
+		# градиент, иначе выходит та же серая муть.
+		var ramp := Gradient.new()
+		ramp.offsets = PackedFloat32Array([0.0, 0.16, 0.30, 1.0])
+		ramp.colors = PackedColorArray([
+			Color(0.34, 0.34, 0.34), Color(0.62, 0.62, 0.62),
+			Color(1.00, 1.00, 1.00), Color(1.00, 1.00, 1.00)])
+		nt.color_ramp = ramp
+	return nt
+
+
 ## flat_material — материал плоского слоя пути.
 ##
 ## Проверка глубины выключена по причине из шапки, а запись глубины — заодно:

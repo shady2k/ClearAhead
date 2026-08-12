@@ -447,7 +447,7 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	var ballast := Node3D.new()
 	ballast.name = "Ballast"
 	node.add_child(ballast)
-	var prism_mat := TrackView.solid_material(Color(0.46, 0.44, 0.41))
+	var prism_mat := TrackView.ballast_material()
 	var flat_ballast_mat := TrackView.flat_material(Color(0.40, 0.38, 0.36), TrackView.PRIO_BALLAST)
 	var covered := {}
 	var prisms := 0
@@ -526,7 +526,7 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	sleeper_mi.name = "Sleepers"
 	sleeper_mi.mesh = TrackView.sleeper_mesh(sleepers)
 	if sleeper_mi.mesh != null:
-		sleeper_mi.material_override = TrackView.solid_material(Color(0.26, 0.20, 0.16))
+		sleeper_mi.material_override = TrackView.sleeper_material()
 		node.add_child(sleeper_mi)
 	stats["sleepers_drawn"] = sleepers.size()
 	stats["sleeper_runs"] = sl["runs"]
@@ -540,7 +540,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	var rails_node := Node3D.new()
 	rails_node.name = "Rails"
 	node.add_child(rails_node)
-	var rail_mat := TrackView.solid_material(Color(0.62, 0.63, 0.66))
+	# Рельс: тело ржавое (диэлектрик, шероховатое), накат металлический. Числа и
+	# довод — из спайка: 0.55/0.35 были «полуметалл, какого не бывает».
+	var rail_mat := TrackView.solid_material(Color(0.42, 0.40, 0.40))
 	var thread_mat := TrackView.flat_material(Color(0.90, 0.91, 0.95), TrackView.PRIO_RAIL, true)
 	var threads: Array[PackedVector3Array] = []
 	var rail_bodies := 0
@@ -761,9 +763,10 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		build_usec += int(built["build_usec"])
 		steep += int(built["steep_vertices"])
 
-		if int(c["level"]) == 0 and not cover.is_empty():
+		if not cover.is_empty():
 			ground.append({"cover": cover, "forest": forest, "heights": built["heights"],
-				"base_z": base_z, "cx": int(c["cx"]), "cz": int(c["cz"])})
+				"base_z": base_z, "level": int(c["level"]),
+				"cx": int(c["cx"]), "cz": int(c["cz"])})
 
 		var mi := MeshInstance3D.new()
 		mi.name = "C%d_%d_%d" % [c["level"], c["cx"], c["cz"]]
@@ -1024,8 +1027,6 @@ func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
 	world.add_child(node)
 
 	var cells := rule.samples - 1
-	var side := rule.side_of(0)
-	var step := side / float(cells)
 
 	var spruce: Array[Transform3D] = []
 	var broad: Array[Transform3D] = []
@@ -1040,8 +1041,25 @@ func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
 		var base_z: float = g["base_z"]
 		var cx: int = g["cx"]
 		var cz: int = g["cz"]
+		var level: int = g["level"]
+		# Сторона и шаг — СВОИ У КАЖДОГО УРОВНЯ. Брать их у нулевого значило бы
+		# посадить дальний лес в шестнадцать раз плотнее и в шестнадцать раз
+		# ближе к оси, чем говорит покров.
+		var side := rule.side_of(level)
+		var step := side / float(cells)
 		var has_forest := forest.size() == cells * cells / 8
 
+		# ЛЕС ЗА КОРИДОРОМ РАССЕВАЕТ КЛИЕНТ САМ, и это не отступление от правила,
+		# а его прямое следствие (разбор раскладки леса, §«грубые уровни»).
+		#
+		# Тождество нужно дереву затем, что его РУБЯТ; рубят там, куда
+		# дотянулись, — в коридоре, и полоса рубки совпадает с полосой уровня 0.
+		# За её границей у дерева тождества нет, значит нет и повода возить его
+		# битом: оно рассевается по покрову ровно так же, как трава, и по тому
+		# же основанию — «сажать ПО ПОКРОВУ, а не по своему шуму».
+		#
+		# Цена названа: срубить такое дерево нельзя, и на границе коридора при
+		# рубке появится шов. Он невидим, пока рубки нет.
 		if has_forest:
 			var res := Forest.trees(forest, cover, heights, base_z, rule.samples, cx, cz, side)
 			for st_raw in (res["list"] as Array):
@@ -1072,7 +1090,32 @@ func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
 				# пучков она стоит столько же.
 				if has_forest and (forest[k / 8] & (1 << (k % 8))) != 0:
 					continue
-				var z := base_z + float(heights[j * rule.samples + i]) * 0.01
+				var z0 := base_z + float(heights[j * rule.samples + i]) * 0.01
+				# Лесная ячейка БЕЗ битовой карты — дальний уровень. Дерево
+				# ставится хешем той же функции: она уже часть контракта, и
+				# заводить второй жребий значило бы иметь два ответа на вопрос
+				# «где стоит дерево».
+				if not has_forest and (cls == TerrainMesh.SURFACE_FOREST_CONIFER
+						or cls == TerrainMesh.SURFACE_FOREST_BROAD):
+					var fj := Forest.jitter(cx, cz, i + cells, j)
+					if fj[2] < float(closure) / 15.0:
+						var fh := Forest.TREE_H_MIN + float(fj[2]) * (Forest.TREE_H_MAX - Forest.TREE_H_MIN)
+						var ft := Transform3D(
+							Basis.IDENTITY.scaled(Vector3(fh, fh, fh)),
+							TerrainMesh.to_godot(ox + (float(i) + fj[0]) * step,
+								oz + (float(j) + fj[1]) * step, z0))
+						if cls == TerrainMesh.SURFACE_FOREST_BROAD:
+							ft = ft.scaled_local(Vector3(Forest.BROAD_SCALE, Forest.BROAD_SCALE, Forest.BROAD_SCALE))
+							broad.append(ft)
+						else:
+							spruce.append(ft)
+					continue
+				# Трава — только вблизи: на дальних уровнях ячейка 64 м, и пучок
+				# в ней означал бы одну травинку на гектар. Порог по уровню, а не
+				# по расстоянию до камеры: рассев считается один раз при загрузке.
+				if level > 0:
+					continue
+				var z := z0
 				var per_cell := int(round(float(closure) / 15.0 * float(GRASS_MAX_PER_CELL)))
 				for n in per_cell:
 					var jt := Forest.jitter(cx, cz, i + n * 97, j + n * 31)
