@@ -74,14 +74,33 @@ func WithTerrain() Option {
 			// порода около 180 м, вырубка 34 м вдоль оси. У спайка это были
 			// решения художника; здесь они стали данными о мире, и подбирать их
 			// придётся заново, когда появится, по чему подбирать.
+			//
+			// Парные пороги (2026-08-12): у спайка обе величины — и сомкнутость
+			// покрова, и плотность посадки — были функциями с НАСЫЩЕНИЕМ, и
+			// верхние их пороги при переносе потеряли. Восстановлены из тех же
+			// строк спайка:
+			//   ClosedThreshold −0.16 — это VEG_FULL 0.42 в шуме [0, 1],
+			//     развёрнутое в [-1, 1]: 0.42·2 − 1;
+			//   ForestDenseThreshold 0.22 — это множитель 5 в
+			//     clamp((mask − 0.02)·5, 0, 0.96): 0.02 + 1/5.
+			//
+			// Октавы (2026-08-12) — оттуда же: `fractal_octaves` 3 / 2 / 2 у
+			// трёх FastNoiseLite спайка. Одна октава давала не мозаику, а
+			// материки: замер по классам показал плешины связными пятнами по
+			// 100–150 м при длине волны 45 м.
 			Cover: &mapfmt.Cover{
-				Seed:               20260812,
-				ForestWavelengthM:  312,
-				ForestThreshold:    0.02,
-				SpeciesWavelengthM: 180,
-				VegWavelengthM:     45,
-				BareThreshold:      -0.48,
-				ClearHalfWidthM:    34,
+				Seed:                 20260812,
+				ForestWavelengthM:    312,
+				ForestOctaves:        3,
+				ForestThreshold:      0.02,
+				ForestDenseThreshold: 0.22,
+				SpeciesWavelengthM:   180,
+				SpeciesOctaves:       2,
+				VegWavelengthM:       45,
+				VegOctaves:           2,
+				BareThreshold:        -0.48,
+				ClosedThreshold:      -0.16,
+				ClearHalfWidthM:      34,
 			},
 		}
 	}

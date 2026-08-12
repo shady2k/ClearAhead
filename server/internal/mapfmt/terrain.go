@@ -99,6 +99,10 @@ func checkFiniteFloat(what string, v float64) error {
 const (
 	MinCoverWavelengthM, MaxCoverWavelengthM = 1.0, 100000.0
 	MaxCoverClearHalfWidthM                  = 1000.0
+	// MaxCoverOctaves — потолок по той же причине, что у рельефа: каждая
+	// следующая октава вдвое мельче, и за шестой мельчает мельче ячейки
+	// покрова (4 м на уровне 0), то есть считается впустую.
+	MaxCoverOctaves = 6
 )
 
 // validateCover проверяет рецепт покрова. Отказывает, не чинит.
@@ -122,6 +126,25 @@ func validateCover(c *Cover) error {
 	if err := wave("длина волны низового покрова", c.VegWavelengthM); err != nil {
 		return err
 	}
+	// Октавы обязательны и не подставляются единицей. Ноль октав — это маска,
+	// тождественно равная нулю: лес либо всюду, либо нигде, и покров ровно
+	// такой же. Молчаливая единица выглядела бы исправной картой с материками
+	// вместо мозаики — ровно та ошибка, которой этот проект уже заплатил.
+	oct := func(name string, v int) error {
+		if !(v >= 1 && v <= MaxCoverOctaves) {
+			return fmt.Errorf("mapfmt: покров: октав %s %d вне [1, %d]", name, v, MaxCoverOctaves)
+		}
+		return nil
+	}
+	if err := oct("маски леса", c.ForestOctaves); err != nil {
+		return err
+	}
+	if err := oct("маски породы", c.SpeciesOctaves); err != nil {
+		return err
+	}
+	if err := oct("маски низового покрова", c.VegOctaves); err != nil {
+		return err
+	}
 	thr := func(name string, v float64) error {
 		if !(v >= -1 && v <= 1) {
 			return fmt.Errorf("mapfmt: покров: %s %v вне [-1, 1] — маска есть значение шума и других значений не принимает", name, v)
@@ -131,8 +154,26 @@ func validateCover(c *Cover) error {
 	if err := thr("порог леса", c.ForestThreshold); err != nil {
 		return err
 	}
+	if err := thr("порог сомкнутого леса", c.ForestDenseThreshold); err != nil {
+		return err
+	}
 	if err := thr("порог голой почвы", c.BareThreshold); err != nil {
 		return err
+	}
+	if err := thr("порог сомкнутого покрова", c.ClosedThreshold); err != nil {
+		return err
+	}
+	// Пороги ПАРНЫЕ, и порядок в паре — не придирка. Между ними величина растёт
+	// от нуля до полной; равные пороги дают деление на ноль, перевёрнутые —
+	// растущую наоборот величину. И то и другое выглядело бы исправной картой с
+	// вывернутым покровом, и автор искал бы ошибку в рендерере.
+	if !(c.ClosedThreshold > c.BareThreshold) {
+		return fmt.Errorf("mapfmt: покров: порог сомкнутого покрова %v не выше порога голой почвы %v — между ними растёт сомкнутость, и расти ей некуда",
+			c.ClosedThreshold, c.BareThreshold)
+	}
+	if !(c.ForestDenseThreshold > c.ForestThreshold) {
+		return fmt.Errorf("mapfmt: покров: порог сомкнутого леса %v не выше порога леса %v — между ними растёт плотность посадки, и расти ей некуда",
+			c.ForestDenseThreshold, c.ForestThreshold)
 	}
 	if !(c.ClearHalfWidthM >= 0 && c.ClearHalfWidthM <= MaxCoverClearHalfWidthM) {
 		return fmt.Errorf("mapfmt: покров: полуширина отчуждения %v вне [0, %v] м", c.ClearHalfWidthM, MaxCoverClearHalfWidthM)

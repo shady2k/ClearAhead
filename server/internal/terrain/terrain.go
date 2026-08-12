@@ -571,6 +571,112 @@ func (f *Field) ChunkHeights(a chunk.Address) ([]int16, error) {
 // BaseZ — опорная высота рецепта в метрах. Отсчёты чанка отложены от неё.
 func (f *Field) BaseZ() float64 { return f.recipe.BaseZ }
 
+// Затухание и сгущение фрактального шума покрова.
+//
+// Это НЕ подобранные числа, а умолчания FastNoiseLite, которым считал спайк:
+// каждая следующая октава вдвое мельче и вдвое слабее. Названы константами, а
+// не полями рецепта, потому что крутить их никто не крутил, — разбор в шапке
+// mapfmt.Cover.VegOctaves.
+const (
+	coverGain       = 0.5
+	coverLacunarity = 2.0
+)
+
+// fractalNoise — сумма октав, нормированная на сумму размахов.
+//
+// Нормировка обязательна: без неё сумма трёх октав выходит за [-1, 1], а все
+// пороги покрова заданы именно в этих границах и валидатором в них же заперты.
+//
+// Затравка октавы сдвигается фиксированным шагом, а не берётся той же: одна
+// затравка на все октавы дала бы совпадающие решётки разного масштаба, то есть
+// усиление рисунка в одних и тех же местах — сетку вместо фрактала.
+func fractalNoise(seed uint64, x, y float64, octaves int) float64 {
+	sum, amp, norm, freq := 0.0, 1.0, 0.0, 1.0
+	for o := range octaves {
+		sum += amp * valueNoise(seed+uint64(o)*0x9E3779B9, x*freq, y*freq)
+		norm += amp
+		amp *= coverGain
+		freq *= coverLacunarity
+	}
+	if norm == 0 {
+		return 0
+	}
+	return sum / norm
+}
+
+// smoothstep — доля продвижения x от a до b, сглаженная на обоих концах.
+//
+// Сглаженная, а не линейная, потому что переносится КОНКРЕТНАЯ функция спайка
+// (`smoothstep(VEG_BARE, VEG_FULL, …)` в GDScript), а не идея плавного
+// перехода: на границе плешины линейная рампа даёт видимый излом там, где
+// покров перестаёт редеть.
+func smoothstep(a, b, x float64) float64 {
+	if b == a {
+		return 0
+	}
+	t := (x - a) / (b - a)
+	if t <= 0 {
+		return 0
+	}
+	if t >= 1 {
+		return 1
+	}
+	return t * t * (3 - 2*t)
+}
+
+// grade переводит долю [0, 1] в 16 градаций полубайта.
+//
+// Множитель 15.999, а не 16: доля, равная единице, обязана дать 15, а не 16 —
+// шестнадцатое значение в полубайт не помещается и перевернулось бы в ноль,
+// то есть полностью сомкнутый покров стал бы голой почвой.
+func grade(v float64) int {
+	k := int(v * 15.999)
+	if k < 0 {
+		return 0
+	}
+	if k > 15 {
+		return 15
+	}
+	return k
+}
+
+// forestMaxDensity — доля занятых мест в самом сомкнутом массиве.
+//
+// Не единица, и это перенос числа спайка (`clamp(…, 0, 0.96)`) вместе с его
+// доводом: в сомкнутом массиве всегда есть прогалы, а сплошная посадка по сетке
+// 4 м читается не лесом, а частоколом. Число ПРЕДВАРИТЕЛЬНОЕ и живёт здесь, а
+// не в рецепте, потому что потребителя у него ровно один — эта функция; в
+// рецепт оно переедет, когда лес разных карт начнёт различаться прогалами.
+const forestMaxDensity = 0.96
+
+// forestDensity — доля занятых мест в ячейке: от нуля на границе массива до
+// forestMaxDensity в его глубине.
+//
+// # Почему это отдельная функция, а не сомкнутость покрова
+//
+// До 2026-08-12 плотность посадки бралась из сомкнутости низового покрова, и
+// это утверждало, что лес гуще там, где гуще трава. У спайка поля были разные:
+// деревья сажались по МАСКЕ ЛЕСА, а низовой покров в посадке не участвовал
+// вовсе. Смешение было не только неверным по существу, но и самоусиливающимся:
+// починка сомкнутости (см. CoverAt) насытила бы её до полной на двух третях
+// площади, и лес встал бы сплошняком.
+func (f *Field) forestDensity(x, y float64) float64 {
+	c := f.recipe.Cover
+	mask := fractalNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM, c.ForestOctaves)
+	// Рампа ЛИНЕЙНАЯ, в отличие от сомкнутости: у спайка здесь стоял
+	// clamp((mask − thr)·5, …), и опушка держится именно ею. Сглаженная рампа
+	// сузила бы переход и вернула ту самую стену по границе массива, против
+	// которой у спайка заведены одиночки в поле.
+	t := (mask - c.ForestThreshold) / (c.ForestDenseThreshold - c.ForestThreshold)
+	if t <= 0 {
+		return 0
+	}
+	if t >= 1 {
+		return forestMaxDensity
+	}
+	return t * forestMaxDensity
+}
+
 // CoverAt возвращает класс поверхности и сомкнутость низового покрова в точке.
 //
 // # Почему это считает сервер, а не клиент
@@ -601,23 +707,27 @@ func (f *Field) BaseZ() float64 { return f.recipe.BaseZ }
 // Класс объявлен заранее потому, что перечень классов — часть провода, и
 // добавление значения потом стоит дороже, чем пустая ветка сейчас.
 //
-// Сомкнутость возвращается в 16 градациях: маска низового покрова, отображённая
-// из [-1, 1] в [0, 15]. Под лесом она означает подлесок, на лугу — густоту
-// травы, на плешине — ноль.
+// # Сомкнутость — величина, а не её аргумент
+//
+// Сомкнутость возвращается в 16 градациях и считается НАСЫЩАЮЩЕЙСЯ функцией
+// маски: ноль ниже BareThreshold, полная выше ClosedThreshold, плавный переход
+// между ними. Под лесом она означает подлесок, на лугу — густоту травы, на
+// плешине — ноль.
+//
+// До 2026-08-12 здесь стояла линейная развёртка самого шума в [0, 15], и это
+// была подмена величины её аргументом. Цена подмены замерена на карте ST_A
+// (полоса 1000 × 1000 м, шаг 4 м): средняя сомкнутость 0.49 от полной против
+// 0.73 по правилу спайка, полная сомкнутость на 1.0 % площади против 64.8 %.
+// Клиент смешивает цвет класса с голым грунтом ровно по этой доле — и весь луг
+// выходил наполовину грунтовым, то есть коричневым.
 func (f *Field) CoverAt(x, y float64) (class, closure int) {
 	c := f.recipe.Cover
 	if c == nil {
 		return chunk.SurfaceMeadow, 0
 	}
 
-	veg := valueNoise(c.Seed^0x7E6E, x/c.VegWavelengthM, y/c.VegWavelengthM)
-	closure = int((veg + 1.0) * 0.5 * 16.0)
-	if closure < 0 {
-		closure = 0
-	}
-	if closure > 15 {
-		closure = 15
-	}
+	veg := fractalNoise(c.Seed^0x7E6E, x/c.VegWavelengthM, y/c.VegWavelengthM, c.VegOctaves)
+	closure = grade(smoothstep(c.BareThreshold, c.ClosedThreshold, veg))
 
 	if veg < c.BareThreshold {
 		return chunk.SurfaceBareSoil, 0
@@ -635,9 +745,9 @@ func (f *Field) CoverAt(x, y float64) (class, closure int) {
 		}
 	}
 	if !cleared {
-		forest := valueNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM)
+		forest := fractalNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM, c.ForestOctaves)
 		if forest >= c.ForestThreshold {
-			species := valueNoise(c.Seed^0x59EC, x/c.SpeciesWavelengthM, y/c.SpeciesWavelengthM)
+			species := fractalNoise(c.Seed^0x59EC, x/c.SpeciesWavelengthM, y/c.SpeciesWavelengthM, c.SpeciesOctaves)
 			if species > 0 {
 				return chunk.SurfaceForestBroad, closure
 			}
@@ -681,9 +791,10 @@ func (f *Field) HasCover() bool { return f.recipe.Cover != nil }
 //
 // # Плотность
 //
-// Вероятность дерева берётся из СОМКНУТОСТИ той же ячейки: внутри массива лес
-// гуще к середине и редеет к опушке, и это уже описано покровом. Отдельной
-// маски плотности нет намеренно — она была бы третьей копией одного поля.
+// Вероятность дерева берётся из МАСКИ ЛЕСА той же ячейки (forestDensity):
+// внутри массива лес гуще к середине и редеет к опушке. До 2026-08-12 здесь
+// стояла сомкнутость низового покрова — то есть утверждалось, что лес гуще там,
+// где гуще трава. Разбор — в шапке forestDensity.
 //
 // Жребий — та же ForestJitter, что даёт смещение и высоту, но взятая по
 // ДРУГОМУ полю: пусти посадку и высоту от одного числа — и высокие деревья
@@ -698,14 +809,18 @@ func (f *Field) ChunkForest(a chunk.Address, cover []byte) []byte {
 	out := make([]byte, chunk.ForestBytes)
 	for j := 0; j < chunk.CoverCells; j++ {
 		for i := 0; i < chunk.CoverCells; i++ {
-			class, closure := chunk.UnpackCover(cover[chunk.CoverIndex(i, j)])
+			class, _ := chunk.UnpackCover(cover[chunk.CoverIndex(i, j)])
 			if class != chunk.SurfaceForestConifer && class != chunk.SurfaceForestBroad {
 				continue
 			}
+			// Маска берётся в ЦЕНТРЕ той же ячейки, что дал класс: возьми её в
+			// углу — и плотность разошлась бы с классом на полшага, отчего по
+			// краю массива стояли бы деревья вероятности нуль.
+			x, z := a.CoverCellCenterM(i, j)
 			// Жребий по третьему числу: первые два уйдут на смещение, и общий
 			// источник посадил бы высокие деревья в один угол ячейки.
 			_, _, lot := chunk.ForestJitter(a.CX, a.CZ, i+chunk.CoverCells, j)
-			if lot < float64(closure)/15.0 {
+			if lot < f.forestDensity(x, z) {
 				chunk.SetForestOccupied(out, i, j)
 			}
 		}
