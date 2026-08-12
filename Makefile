@@ -186,9 +186,20 @@ fmt:
 ## Отсюда же следует, что на СВЕЖЕМ КЛОНЕ (где .godot/ нет по .gitignore) любая
 ## цель client* падала бы тем же способом. Условие — на файле таблицы, а не на
 ## каталоге: каталог создаёт и пустой запуск.
+## Условие — СВЕЖЕСТЬ, а не наличие, и это вторая половина той же ошибки.
+## Первая редакция проверяла `test -f`: кэш есть — значит годен. Он не годен,
+## если после его сборки появился скрипт с новым `class_name`: имя в таблицу не
+## попало, и вызов падает «Nonexistent function» — то есть выглядит как ошибка
+## в коде, которого не касались. Поймано в тот же день на forest.gd.
+##
+## find -newer вместо сравнения времён руками: он и обходит подкаталоги, и не
+## требует stat-разбора, а -quit останавливает обход на первом же свежем файле.
 client-import:
-	@test -f $(CLIENT)/.godot/global_script_class_cache.cfg || \
-		$(GODOT) --headless --path $(CLIENT) --import >/dev/null 2>&1 || true
+	@if [ ! -f $(CLIENT)/.godot/global_script_class_cache.cfg ] || \
+		[ -n "$$(find $(CLIENT)/scripts $(CLIENT)/tools -name '*.gd' \
+			-newer $(CLIENT)/.godot/global_script_class_cache.cfg -print -quit 2>/dev/null)" ]; then \
+		$(GODOT) --headless --path $(CLIENT) --import >/dev/null 2>&1 || true; \
+	fi
 
 ## client — клиент окном. Сервер должен быть уже поднят (make serve рядом):
 ## клиент ничего не подставляет вместо ответа и покажет отказ красным.
