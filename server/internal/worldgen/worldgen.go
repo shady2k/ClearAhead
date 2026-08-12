@@ -85,17 +85,27 @@ func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision int64)
 		if err != nil {
 			return err
 		}
+		// Покров разворачивается тем же проходом, что и высоты, а не отдельным:
+		// оба берутся из одного рецепта в одних координатах, и второй обход
+		// стоил бы ровно столько же, сколько первый, ради разделения, которого
+		// никто не просил. nil означает карту без рецепта покрова — законное
+		// состояние, отличимое от пустого покрова.
+		cover, err := field.ChunkCover(a)
+		if err != nil {
+			return err
+		}
 		if err := s.PutChunk(worldstore.Chunk{
 			Address:  a,
 			Revision: revision,
 			BaseZmm:  baseZmm,
 			Heights:  heights,
+			Cover:    cover,
 		}); err != nil {
 			return err
 		}
 		rep.ByLevel[a.Level]++
 		rep.TotalChunks++
-		rep.TotalBytes += chunk.HeightsBytes
+		rep.TotalBytes += chunk.HeightsBytes + len(cover)
 		return nil
 	})
 	if err != nil {

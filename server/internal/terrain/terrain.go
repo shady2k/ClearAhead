@@ -544,3 +544,95 @@ func (f *Field) ChunkHeights(a chunk.Address) ([]int16, error) {
 
 // BaseZ — опорная высота рецепта в метрах. Отсчёты чанка отложены от неё.
 func (f *Field) BaseZ() float64 { return f.recipe.BaseZ }
+
+// CoverAt возвращает класс поверхности и сомкнутость низового покрова в точке.
+//
+// # Почему это считает сервер, а не клиент
+//
+// По той же причине, по которой сервер считает высоты: рецепт клиенту не
+// показывают никогда (mapfmt.Terrain, шапка). Иначе шум пришлось бы
+// реализовать дважды — в Go и на клиенте, — и две реализации разошлись бы на
+// первой же смене движка, а «клиент ничего не придумывает» перестало бы быть
+// правдой в самом заметном слое кадра.
+//
+// # Порядок правил, и он значим
+//
+// Правила применяются сверху вниз, и первое сработавшее выигрывает. Порядок —
+// это и есть модель, а не деталь реализации:
+//
+//  1. ПОЛОСА ОТЧУЖДЕНИЯ. Ближе ClearHalfWidth к оси леса нет. Не потому, что
+//     так красивее, а потому что её вырубают: ширина полосы — факт о дороге.
+//  2. ГОЛАЯ ПОЧВА. Низовой покров ниже порога — плешина. Она бывает и в лесу, и
+//     на лугу, поэтому проверяется раньше леса.
+//  3. ЛЕС. Маска выше порога — массив; порода берётся второй маской, у которой
+//     своя длина волны. Порода — свойство МЕСТА (роща берёзы за ельником), и
+//     хешем по ячейке она не выражается: у хеша нет пространственной
+//     корреляции (разбор §3.2).
+//  4. ЛУГ — всё остальное.
+//
+// Песок (SurfaceSand) сегодня НЕ ПОРОЖДАЕТСЯ НИКОГДА, и это названо, а не
+// умолчано: пояс песка привязан к урезу воды, а воды в контракте ещё нет.
+// Класс объявлен заранее потому, что перечень классов — часть провода, и
+// добавление значения потом стоит дороже, чем пустая ветка сейчас.
+//
+// Сомкнутость возвращается в 16 градациях: маска низового покрова, отображённая
+// из [-1, 1] в [0, 15]. Под лесом она означает подлесок, на лугу — густоту
+// травы, на плешине — ноль.
+func (f *Field) CoverAt(x, y float64) (class, closure int) {
+	c := f.recipe.Cover
+	if c == nil {
+		return chunk.SurfaceMeadow, 0
+	}
+
+	veg := valueNoise(c.Seed^0x7E6E, x/c.VegWavelengthM, y/c.VegWavelengthM)
+	closure = int((veg + 1.0) * 0.5 * 16.0)
+	if closure < 0 {
+		closure = 0
+	}
+	if closure > 15 {
+		closure = 15
+	}
+
+	if veg < c.BareThreshold {
+		return chunk.SurfaceBareSoil, 0
+	}
+
+	cleared := false
+	if d, ok := f.DistanceToAxis(x, y); ok && d <= c.ClearHalfWidthM {
+		cleared = true
+	}
+	if !cleared {
+		forest := valueNoise(c.Seed^0xF0E5, x/c.ForestWavelengthM, y/c.ForestWavelengthM)
+		if forest >= c.ForestThreshold {
+			species := valueNoise(c.Seed^0x59EC, x/c.SpeciesWavelengthM, y/c.SpeciesWavelengthM)
+			if species > 0 {
+				return chunk.SurfaceForestBroad, closure
+			}
+			return chunk.SurfaceForestConifer, closure
+		}
+	}
+	return chunk.SurfaceMeadow, closure
+}
+
+// ChunkCover разворачивает покров чанка в блоб.
+//
+// Ячеек 64 × 64, а не 65 × 65 отсчётов: покров площадной, и значение берётся в
+// ЦЕНТРЕ ячейки (chunk.CoverCellCenterM). Разбор — в шапке констант покрова в
+// пакете chunk.
+func (f *Field) ChunkCover(a chunk.Address) ([]byte, error) {
+	if f.recipe.Cover == nil {
+		return nil, nil
+	}
+	out := make([]byte, chunk.CoverBytes)
+	for j := 0; j < chunk.CoverCells; j++ {
+		for i := 0; i < chunk.CoverCells; i++ {
+			x, z := a.CoverCellCenterM(i, j)
+			class, closure := f.CoverAt(x, z)
+			out[chunk.CoverIndex(i, j)] = chunk.PackCover(class, closure)
+		}
+	}
+	return out, nil
+}
+
+// HasCover сообщает, есть ли у карты рецепт покрова.
+func (f *Field) HasCover() bool { return f.recipe.Cover != nil }

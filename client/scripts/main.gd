@@ -623,6 +623,8 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	var decode_usec := 0
 	var build_usec := 0
 	var steep := 0
+	var cover_got := 0
+	var cover_empty := 0
 	var by_level := {}
 	var t0 := Time.get_ticks_usec()
 
@@ -652,7 +654,26 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 			continue
 		var base_z := float(base_hdr.to_int()) / 1000.0
 
-		var built := TerrainMesh.build(r["body"], base_z, c["level"], c["cx"], c["cz"], rule)
+		# Покров — второй запрос по ТОМУ ЖЕ адресу с хвостом /cover. Отдельным
+		# телом, а не полем в первом: блобы разной природы и разной длины (8450
+		# против 4096), и склеенные они заставили бы клиента без покрова возить
+		# покров, а клиента без рельефа — разбирать заголовок длины.
+		#
+		# 204 значит «у карты нет рецепта покрова» — законное состояние, а не
+		# сбой: земля тогда рисуется серой, как рисовалась до его появления.
+		var cover := PackedByteArray()
+		var cr: Dictionary = await net.fetch(path + "/cover")
+		if cr["ok"] and int(cr["code"]) == 200:
+			cover = cr["body"]
+			cover_got += 1
+		elif cr["ok"] and int(cr["code"]) == 204:
+			cover_empty += 1
+		elif cr["ok"]:
+			_fail("покров %d/%d/%d: сервер ответил HTTP %d" % [c["level"], c["cx"], c["cz"], int(cr["code"])])
+		else:
+			_fail("покров %d/%d/%d: %s" % [c["level"], c["cx"], c["cz"], cr["error"]])
+
+		var built := TerrainMesh.build(r["body"], base_z, c["level"], c["cx"], c["cz"], rule, cover)
 		if not built["ok"]:
 			_fail(String(built["error"]))
 			continue
@@ -676,6 +697,8 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	stats["chunks_requested"] = candidates.size()
 	stats["chunks_200"] = got
 	stats["chunks_204"] = empty
+	stats["cover_200"] = cover_got
+	stats["cover_204"] = cover_empty
 	stats["chunks_by_level"] = by_level
 	stats["vertices"] = verts
 	stats["triangles"] = tris
@@ -787,6 +810,8 @@ func _hud_text() -> String:
 		l.append("[b]рельеф[/b]: запрошено %d, 200 → %d, 204 (чанка нет) → %d" % [
 			stats["chunks_requested"], stats["chunks_200"], stats["chunks_204"]])
 		l.append("  по уровням: %s" % str(stats["chunks_by_level"]))
+		l.append("  покров: 200 → %d, 204 (рецепта покрова нет) → %d; класс и сомкнутость на ячейку 64×64" % [
+			stats.get("cover_200", 0), stats.get("cover_204", 0)])
 		l.append("  вершин %d, треугольников %d, высоты %.2f…%.2f м" % [
 			stats["vertices"], stats["triangles"], stats["z_min"], stats["z_max"]])
 		l.append("  крутизной покрашено %d вершин (%.1f %%), порог %s" % [
@@ -800,8 +825,10 @@ func _hud_text() -> String:
 	l.append("formation_to_rail_top ниже, и это число сервер считает тем же, чем земляные работы.")
 	l.append("[i]объявленное упрощение: рельс — прямоугольник head_width × height; профиля")
 	l.append("рельса в контракте нет. Длина упора вдоль пути и длина крыла крестовины — стиль.[/i]")
-	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: покров и цвет земли, трава,")
-	l.append("деревья, вода, здания, небо, решётка стрелки (переводные брусья).[/i]")
+	l.append("[i]ЦВЕТ КЛАССА — единственное, что этот клиент ещё держит сам. По границе")
+	l.append("владения он серверный и приедет каталогом ассетов; класс поверхности прислан.[/i]")
+	l.append("[i]не рисуется, потому что сервер не отдаёт вовсе: трава, деревья, вода,")
+	l.append("здания, небо, решётка стрелки (переводные брусья).[/i]")
 	l.append("[i]204 (чанка нет) оставлено дырой: base_z региона в манифест не приезжает.[/i]")
 	for s in (stats.get("sleepers_skipped", []) as Array):
 		l.append("[color=#ffc060]решётка пропущена — %s[/color]" % s)

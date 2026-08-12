@@ -65,6 +65,21 @@ func WithTerrain() Option {
 				{WavelengthM: 90, AmplitudeM: 3},
 			},
 			Earthworks: mapfmt.Earthworks{FormationHalfWidth: 5, SideSlope: 1.5},
+			// Покров. Числа ПРЕДВАРИТЕЛЬНЫЕ, происхождение названо: длины волн
+			// и пороги сняты с констант снесённого спайка (разбор §1.2, §1.3) —
+			// маска леса с периодом около 312 м, низовой покров около 45 м,
+			// порода около 180 м, вырубка 34 м вдоль оси. У спайка это были
+			// решения художника; здесь они стали данными о мире, и подбирать их
+			// придётся заново, когда появится, по чему подбирать.
+			Cover: &mapfmt.Cover{
+				Seed:               20260812,
+				ForestWavelengthM:  312,
+				ForestThreshold:    0.02,
+				SpeciesWavelengthM: 180,
+				VegWavelengthM:     45,
+				BareThreshold:      -0.48,
+				ClearHalfWidthM:    34,
+			},
 		}
 	}
 }

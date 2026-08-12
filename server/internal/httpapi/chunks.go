@@ -46,7 +46,7 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// сначала выясняется, адресован ли вообще чанк, и лишь потом — можно ли
 	// его так спрашивать. Синтаксически чужой путь — это «нет такого ресурса»
 	// при любом методе.
-	addr, ok := chunkPath(r.URL.Path)
+	addr, wantCover, ok := chunkPath(r.URL.Path)
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -94,10 +94,25 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// (little-endian) и порядок обхода (строками по возрастанию j, внутри
 	// строки по возрастанию i) — часть контракта, и вторая их реализация рано
 	// или поздно разошлась бы с первой.
-	blob, err := chunk.EncodeHeights(c.Heights)
-	if err != nil {
-		http.Error(w, "чанк повреждён", http.StatusInternalServerError)
-		return
+	var blob []byte
+	if wantCover {
+		// Покрова нет — 204, тот же ответ, что у отсутствующего чанка, и по той
+		// же причине: адрес верен, содержимого нет. 404 здесь означал бы
+		// «такого ресурса не бывает» и был бы неотличим от опечатки в уровне.
+		//
+		// Карта без рецепта покрова — законное состояние, а не недоделка, и
+		// клиент обязан отличить его от «покров есть и весь луг».
+		if len(c.Cover) == 0 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		blob = c.Cover
+	} else {
+		blob, err = chunk.EncodeHeights(c.Heights)
+		if err != nil {
+			http.Error(w, "чанк повреждён", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	// ETag — хеш чанка из хранилища; он считается там же, где пишется тело
@@ -131,7 +146,12 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Cache-Control", "public, no-cache")
 	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set(HeaderChunkBaseZ, strconv.FormatInt(c.BaseZmm, 10))
+	// База высот у покрова не имеет смысла: класс поверхности не отсчитывается
+	// ни от чего. Заголовок ставится только там, где он что-то значит — лишний
+	// заголовок читается как «здесь есть высоты» и врёт.
+	if !wantCover {
+		w.Header().Set(HeaderChunkBaseZ, strconv.FormatInt(c.BaseZmm, 10))
+	}
 	if match := r.Header.Get("If-None-Match"); match == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
@@ -140,39 +160,56 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Write(blob)
 }
 
-// chunkPath разбирает /regions/{region}/chunks/{level}/{cx}/{cz}.
+// chunkPath разбирает /regions/{region}/chunks/{level}/{cx}/{cz}[/cover].
 //
 // Здесь проверяется только форма адреса — то, при чём ответ обязан быть 404:
 // лишние или недостающие сегменты, нечисловые и переполняющие координаты,
 // уровень вне хранимого диапазона. Существование региона и наличие чанка — не
 // форма, и решаются они выше.
 //
+// # Почему покров — ХВОСТ адреса, а не отдельная ручка и не поле в теле
+//
+// Не поле в теле: блобы разной природы и разной длины (8450 против 4096), и
+// склеить их значило бы заставить клиента, которому нужен только рельеф,
+// возить покров, а клиента без покрова — разбирать заголовок длины.
+//
+// Не отдельная ручка /regions/{r}/cover/{level}/{cx}/{cz}: у покрова ТОТ ЖЕ
+// АДРЕС, что у высот — тот же чанк, тот же уровень, та же клетка. Два разных
+// пути к одной клетке развели бы её тождество на два, и первый же вопрос «а
+// совпадают ли уровни у cover и heights» пришлось бы отвечать соглашением
+// вместо построения.
+//
 // Ничего не паникует и ничего не предполагает о входе: путь приходит снаружи.
-func chunkPath(p string) (chunk.Address, bool) {
+func chunkPath(p string) (chunk.Address, bool, bool) {
 	parts := strings.Split(strings.Trim(p, "/"), "/")
+	cover := false
+	if len(parts) == 7 && parts[6] == "cover" {
+		cover = true
+		parts = parts[:6]
+	}
 	if len(parts) != 6 || parts[0] != "regions" || parts[2] != "chunks" {
-		return chunk.Address{}, false
+		return chunk.Address{}, false, false
 	}
 	region := parts[1]
 	if region == "" {
-		return chunk.Address{}, false
+		return chunk.Address{}, false, false
 	}
 	level, ok := parseInt32(parts[3])
 	if !ok || level < 0 || level > chunk.MaxLevel {
 		// Уровень вне [0, MaxLevel] — неверный адрес, а не пустота: такого
 		// уровня подробности не существует ни у одного региона, и отвечать на
 		// него 204 значило бы обещать, что чанк там когда-нибудь появится.
-		return chunk.Address{}, false
+		return chunk.Address{}, false, false
 	}
 	cx, ok := parseInt32(parts[4])
 	if !ok {
-		return chunk.Address{}, false
+		return chunk.Address{}, false, false
 	}
 	cz, ok := parseInt32(parts[5])
 	if !ok {
-		return chunk.Address{}, false
+		return chunk.Address{}, false, false
 	}
-	return chunk.Address{Region: region, Level: level, CX: cx, CZ: cz}, true
+	return chunk.Address{Region: region, Level: level, CX: cx, CZ: cz}, cover, true
 }
 
 // parseInt32 разбирает десятичное целое, помещающееся в int32.

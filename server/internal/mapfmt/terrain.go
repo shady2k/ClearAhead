@@ -55,6 +55,9 @@ func validateTerrain(t *Terrain) error {
 		prev = o.WavelengthM
 		total += o.AmplitudeM
 	}
+	if err := validateCover(t.Cover); err != nil {
+		return err
+	}
 	if total > MaxTerrainAmplitudeM {
 		return fmt.Errorf("mapfmt: рельеф: суммарный размах %v м больше %v — отсчёты перестанут помещаться в целые сантиметры относительно base_z",
 			total, MaxTerrainAmplitudeM)
@@ -79,6 +82,60 @@ func validateTerrain(t *Terrain) error {
 func checkFiniteFloat(what string, v float64) error {
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		return fmt.Errorf("mapfmt: %s: значение не конечно (%v)", what, v)
+	}
+	return nil
+}
+
+// Диапазоны рецепта покрова. Числа ПРЕДВАРИТЕЛЬНЫЕ и отвергают заведомо
+// невозможное, а не проверяют замысел: источник не назначен, как и у профиля
+// норм.
+//
+// Пороги проверяются диапазоном [-1, 1] потому, что маска — значение шума
+// terrain.valueNoise, а он по построению лежит в этих границах. Порог вне их
+// означает «леса нет никогда» либо «лес всюду»: и то и другое выразимо
+// осмысленнее — отсутствием блока cover либо порогом на самой границе, — а
+// молча принятый недостижимый порог выглядел бы как исправная карта с пустым
+// лесом, и автор искал бы ошибку в другом месте.
+const (
+	MinCoverWavelengthM, MaxCoverWavelengthM = 1.0, 100000.0
+	MaxCoverClearHalfWidthM                  = 1000.0
+)
+
+// validateCover проверяет рецепт покрова. Отказывает, не чинит.
+func validateCover(c *Cover) error {
+	if c == nil {
+		// Карта без покрова законна: ресурс покрова просто не существует.
+		return nil
+	}
+	wave := func(name string, v float64) error {
+		if !(v >= MinCoverWavelengthM && v <= MaxCoverWavelengthM) {
+			return fmt.Errorf("mapfmt: покров: %s %v вне [%v, %v] м", name, v, MinCoverWavelengthM, MaxCoverWavelengthM)
+		}
+		return nil
+	}
+	if err := wave("длина волны леса", c.ForestWavelengthM); err != nil {
+		return err
+	}
+	if err := wave("длина волны породы", c.SpeciesWavelengthM); err != nil {
+		return err
+	}
+	if err := wave("длина волны низового покрова", c.VegWavelengthM); err != nil {
+		return err
+	}
+	thr := func(name string, v float64) error {
+		if !(v >= -1 && v <= 1) {
+			return fmt.Errorf("mapfmt: покров: %s %v вне [-1, 1] — маска есть значение шума и других значений не принимает", name, v)
+		}
+		return nil
+	}
+	if err := thr("порог леса", c.ForestThreshold); err != nil {
+		return err
+	}
+	if err := thr("порог голой почвы", c.BareThreshold); err != nil {
+		return err
+	}
+	if !(c.ClearHalfWidthM >= 0 && c.ClearHalfWidthM <= MaxCoverClearHalfWidthM) {
+		return fmt.Errorf("mapfmt: покров: полуширина отчуждения %v вне [0, %v] м", c.ClearHalfWidthM, MaxCoverClearHalfWidthM)
 	}
 	return nil
 }

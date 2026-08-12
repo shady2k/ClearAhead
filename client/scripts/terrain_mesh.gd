@@ -38,6 +38,55 @@ const SCARP_SLOPE_HI := 0.50
 const C_GROUND := Color(0.62, 0.62, 0.60)
 const C_SCARP := Color(0.44, 0.37, 0.26)
 
+## Классы покрова. Коды — часть контракта чанков: старший полубайт байта
+## покрова. Клиент их не назначает, а ЧИТАЕТ, и перечень обязан совпадать с
+## server/internal/chunk/chunk.go — там же записано, почему классов пять и
+## почему песок объявлен, но сервером пока не порождается.
+const SURFACE_MEADOW := 0
+const SURFACE_FOREST_CONIFER := 1
+const SURFACE_FOREST_BROAD := 2
+const SURFACE_SAND := 3
+const SURFACE_BARE_SOIL := 4
+
+## ПАЛИТРА — ВРЕМЕННАЯ, И ЭТО НАДО ЧИТАТЬ БУКВАЛЬНО.
+##
+## По границе владения редакции 6 §1 цвет класса поверхности принадлежит
+## СЕРВЕРУ и приедет каталогом ассетов — четвёртым ресурсом региона, спека
+## которого пишется. До тех пор он лежит здесь, и это ЕДИНСТВЕННОЕ место, где
+## сегодняшний клиент держит данные о мире.
+##
+## Оставлено сознательно и названо вслух, а не спрятано: класс поверхности —
+## факт (сервер прислал «здесь лес»), цвет леса — изображение факта, и без
+## каталога изображать его нечем. Альтернатива — не красить вовсе и оставить
+## землю серой — хуже: она скрыла бы, что покров ПРИЕХАЛ, и дыра выглядела бы
+## так же, как её отсутствие.
+##
+## Числа взяты у снесённого спайка (разбор §1.2), чтобы не выдумывать второй
+## раз то, что уже подбиралось глазом.
+const COVER_COLOURS := {
+	SURFACE_MEADOW: Color(0.41, 0.54, 0.22),
+	SURFACE_FOREST_CONIFER: Color(0.20, 0.31, 0.14),
+	SURFACE_FOREST_BROAD: Color(0.29, 0.43, 0.18),
+	SURFACE_SAND: Color(0.70, 0.65, 0.48),
+	SURFACE_BARE_SOIL: Color(0.50, 0.43, 0.31),
+}
+## Цвет ячейки нулевой сомкнутости: покров есть, а низового яруса нет.
+const C_NO_CLOSURE := Color(0.50, 0.43, 0.31)
+
+
+## cover_colour — цвет по классу и сомкнутости.
+##
+## Сомкнутость смешивает цвет класса с голым грунтом: внутри одного луга трава
+## редеет плавно, и ступенька на границе классов есть, а внутри класса её быть
+## не должно. Неизвестный класс НЕ подменяется лугом — он рисуется грунтом, и
+## это видно: подстановка правдоподобного класса вместо неизвестного скрыла бы
+## расхождение версий контракта.
+static func cover_colour(cover_class: int, closure: int) -> Color:
+	if not COVER_COLOURS.has(cover_class):
+		return C_NO_CLOSURE
+	var base: Color = COVER_COLOURS[cover_class]
+	return C_NO_CLOSURE.lerp(base, clampf(float(closure) / 15.0, 0.0, 1.0))
+
 
 ## slope_colour — цвет вершины по крутизне. Вынесена, чтобы правило было в одном
 ## месте и его можно было проверить числом, а не глазом.
@@ -46,20 +95,33 @@ const C_SCARP := Color(0.44, 0.37, 0.26)
 ## В меш кладётся ЛИНЕЙНЫЙ: albedo_color движок переводит сам, а ARRAY_COLOR
 ## берёт как есть, и 0.62, положенные напрямую, дают на экране 0.81 — земля
 ## выбеливается, и снимок врёт про яркость правила.
-static func slope_colour(slope: float) -> Color:
+##
+## base — цвет, от которого пляшет правило: серый, пока покрова нет, и цвет
+## покрова, когда он приехал. Крутизна поверх покрова остаётся тем же правилом
+## над присланным, каким была: обнажённый грунт на срезе не отменяется тем, что
+## по паспорту здесь луг.
+static func slope_colour(slope: float, base: Color = C_GROUND) -> Color:
 	var t := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO), 0.0, 1.0)
-	return C_GROUND.lerp(C_SCARP, t)
+	return base.lerp(C_SCARP, t)
 
 
 ## build — меш одного чанка.
 ##
 ## Возвращает: mesh, vertices, z_min, z_max, decode_usec, build_usec.
 ## Ошибка размера тела — это ошибка, а не повод дорисовать: пустой результат.
-static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, cz: int, rule: ChunkRule) -> Dictionary:
+static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, cz: int, rule: ChunkRule,
+		cover: PackedByteArray = PackedByteArray()) -> Dictionary:
 	var n := rule.samples
 	var want := n * n * 2
 	if blob.size() != want:
 		return {"ok": false, "error": "чанк %d/%d/%d: тело %d байт, ожидалось %d" % [level, cx, cz, blob.size(), want]}
+
+	# Покров — ЯЧЕЙКИ, а не отсчёты: их (n−1)², а не n². Пустой массив значит
+	# «покрова нет» и рисуется серым — тем же, чем рисовалось до его появления.
+	# Тело неверной длины НЕ додумывается: покров молча игнорируется и это
+	# видно числом в отчёте, а не подставляется частично.
+	var cover_cells := n - 1
+	var has_cover := cover.size() == cover_cells * cover_cells
 
 	var count := n * n
 	var h := PackedFloat32Array()
@@ -114,7 +176,17 @@ static func build(blob: PackedByteArray, base_z_m: float, level: int, cx: int, c
 			# Тот же уклон, что дал нормаль, красит и вершину: второй проход по
 			# полю не нужен, а правило названо в шапке.
 			var slope := sqrt(dzdx * dzdx + dzdy * dzdy)
-			cols[k] = slope_colour(slope).srgb_to_linear()
+			var base := C_GROUND
+			if has_cover:
+				# Вершина лежит в УГЛУ ячейки, а класс принадлежит площади:
+				# берётся ячейка, для которой эта вершина — нижний левый угол, а
+				# у крайнего ряда — последняя. Иначе крайняя вершина осталась бы
+				# без класса, а достраивать ей соседа значило бы выдумать ячейку.
+				var ci := mini(i, cover_cells - 1)
+				var cj := mini(j, cover_cells - 1)
+				var packed := cover[cj * cover_cells + ci]
+				base = cover_colour(packed >> 4, packed & 0x0f)
+			cols[k] = slope_colour(slope, base).srgb_to_linear()
 			if slope >= SCARP_SLOPE_LO:
 				steep += 1
 
