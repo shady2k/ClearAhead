@@ -43,7 +43,7 @@ func TestControlCharsAndSpacesInIdentifier(t *testing.T) {
 }
 
 func TestLegalIdentifiersAreAccepted(t *testing.T) {
-	good := []string{"ST_A", "ST_A_SW_1", "TRACK_MAIN_1435", "RUN_ST_A_E_T1", "Путь_2", "E1_CONT"}
+	good := []string{"ST_A", "ST_A_SW_1", "TRACK_MAIN_1520", "RUN_ST_A_E_T1", "Путь_2", "E1_CONT"}
 	for _, id := range good {
 		if err := ValidID("ребро", id); err != nil {
 			t.Errorf("отвергнут законный идентификатор %q: %v", id, err)

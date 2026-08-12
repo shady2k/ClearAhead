@@ -23,7 +23,7 @@ func frogEls(straight, diverging geom.Chain) map[string]Element {
 
 func frogTypes() map[string]mapfmt.TrackType {
 	return map[string]mapfmt.TrackType{
-		"TRACK_MAIN": {ID: "TRACK_MAIN", Gauge: 1.435},
+		"TRACK_MAIN": {ID: "TRACK_MAIN", Gauge: 1.520},
 	}
 }
 
@@ -48,8 +48,12 @@ func mustChain(t *testing.T, prims ...geom.Primitive) geom.Chain {
 }
 
 // TestFrogST_A_SW_1 — проверяемое следствие спеки §5: для ST_A_SW_1 (R=300,
-// колея 1.435) крестовина попадает на s ≈ 29.36 м при длине бокового прохода
+// колея 1.520) крестовина попадает на s ≈ 30.21 м при длине бокового прохода
 // 33.21 м. Допуск — 0.05 м, как в плане волны 2a, задача 4.
+//
+// Ожидание пересчитано, а не подогнано: боковой проход — дуга R=300, отход
+// достигает колеи при cos θ = 1 − g/R, откуда s = R·arccos(1 − g/R). Для 1.435
+// это давало 29.355, для 1.520 даёт 30.212 (ClearAhead-3ay, колея мира).
 func TestFrogST_A_SW_1(t *testing.T) {
 	straight := mustChain(t, primStraight(t, 33.5))
 	diverging := mustChain(t, primArc(t, 300, -0.1107))
@@ -68,9 +72,9 @@ func TestFrogST_A_SW_1(t *testing.T) {
 	if a0.Element != "SW1:straight" || a1.Element != "SW1:diverging" {
 		t.Fatalf("порядок адресов не «прямой, затем боковой»: %s, %s", a0.Element, a1.Element)
 	}
-	// Принятое число: u бокового прохода ≈ 29.36 м, допуск 0.05 м.
-	if d := math.Abs(a1.U - 29.36); d > 0.05 {
-		t.Fatalf("крестовина на u=%g бокового прохода, ожидалось 29.36 ± 0.05", a1.U)
+	// Принятое число: u бокового прохода ≈ 30.21 м, допуск 0.05 м.
+	if d := math.Abs(a1.U - 30.21); d > 0.05 {
+		t.Fatalf("крестовина на u=%g бокового прохода, ожидалось 30.21 ± 0.05", a1.U)
 	}
 	if a0.U <= 0 || a1.U <= 0 {
 		t.Fatalf("адреса вне проходов: straight u=%g, diverging u=%g", a0.U, a1.U)
@@ -141,11 +145,11 @@ func TestFrogLeftHand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("крестовина: %v", err)
 	}
-	if math.Abs(f.Addresses[1].U-29.36) > 0.05 {
-		t.Fatalf("левая стрелка: u=%g, ожидалось 29.36 ± 0.05", f.Addresses[1].U)
+	if math.Abs(f.Addresses[1].U-30.21) > 0.05 {
+		t.Fatalf("левая стрелка: u=%g, ожидалось 30.21 ± 0.05", f.Addresses[1].U)
 	}
-	if d := math.Abs(f.Point.Y - (1.435 / 2)); d > 0.05 {
-		t.Fatalf("левая стрелка: point.y=%g, ожидалось +gauge/2 = %g", f.Point.Y, 1.435/2)
+	if d := math.Abs(f.Point.Y - (1.520 / 2)); d > 0.05 {
+		t.Fatalf("левая стрелка: point.y=%g, ожидалось +gauge/2 = %g", f.Point.Y, 1.520/2)
 	}
 }
 
@@ -164,8 +168,8 @@ func TestFrogDeviceType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("крестовина: %v", err)
 	}
-	// Колея 1.0: нитки сходятся при R(1−cos) = 1.0 → s ≈ 24.5 м, не 29.36.
-	if math.Abs(f.Addresses[1].U-29.36) < 4 {
+	// Колея 1.0: нитки сходятся при R(1−cos) = 1.0 → s ≈ 24.5 м, не 30.21.
+	if math.Abs(f.Addresses[1].U-30.21) < 4 {
 		t.Fatalf("крестовина посчитана по чужой колее: u=%g при gauge=1.0", f.Addresses[1].U)
 	}
 	// Явный type устройства перебивает умолчание.
@@ -174,8 +178,8 @@ func TestFrogDeviceType(t *testing.T) {
 	if err != nil {
 		t.Fatalf("крестовина: %v", err)
 	}
-	if math.Abs(f.Addresses[1].U-29.36) > 0.05 {
-		t.Fatalf("явный тип устройства не применён: u=%g, ожидалось 29.36 ± 0.05", f.Addresses[1].U)
+	if math.Abs(f.Addresses[1].U-30.21) > 0.05 {
+		t.Fatalf("явный тип устройства не применён: u=%g, ожидалось 30.21 ± 0.05", f.Addresses[1].U)
 	}
 }
 
@@ -193,8 +197,12 @@ func TestFrogUnknownType(t *testing.T) {
 }
 
 // TestCompileFrogFixture — сквозная проверка на карте фабрики: крестовина
-// SW1 попадает на u ≈ 29.32 м бокового прохода. Это тот же критерий, что
+// SW1 попадает на u ≈ 30.17 м бокового прохода. Это тот же критерий, что
 // TestFrogST_A_SW_1, но через весь компилятор и целую карту.
+//
+// Число на 4 см меньше чистых 30.21 выше не от неточности: там дуга бралась
+// одна, здесь проход идёт через настоящую цепочку примитивов карты. Разница
+// была и до смены колеи (29.32 против 29.36) и осталась той же.
 func TestCompileFrogFixture(t *testing.T) {
 	rg := compileStation(t)
 	byID := map[string]RenderFeature{}
@@ -208,8 +216,8 @@ func TestCompileFrogFixture(t *testing.T) {
 	if len(f.Addresses) != 2 || f.Addresses[1].Element != seedmap.StationSW1+mapfmt.PassageDiverging {
 		t.Fatalf("адреса крестовины %+v", f.Addresses)
 	}
-	if d := math.Abs(f.Addresses[1].U - 29.32); d > 0.05 {
-		t.Fatalf("крестовина SW1 на u=%g, ожидалось 29.32 ± 0.05", f.Addresses[1].U)
+	if d := math.Abs(f.Addresses[1].U - 30.17); d > 0.05 {
+		t.Fatalf("крестовина SW1 на u=%g, ожидалось 30.17 ± 0.05", f.Addresses[1].U)
 	}
 	if len(rg.Features) != 2 {
 		t.Fatalf("крестовин %d, ожидалось 2 (по одной на стрелку горловины)", len(rg.Features))

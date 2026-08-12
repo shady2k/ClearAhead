@@ -257,18 +257,18 @@
     }
   },
   "construction": {
-    "default_type": "TRACK_MAIN_1435",
+    "default_type": "TRACK_MAIN_1520",
     "types": [
       {
-        "id": "TRACK_MAIN_1435",
-        "gauge": 1.435,
+        "id": "TRACK_MAIN_1520",
+        "gauge": 1.52,
         "rail": {
           "height": 0.18,
           "head_width": 0.075
         },
         "sleeper": {
-          "pitch": 0.6,
-          "length": 2.5,
+          "pitch": 0.543,
+          "length": 2.75,
           "width": 0.28,
           "height": 0.2
         },

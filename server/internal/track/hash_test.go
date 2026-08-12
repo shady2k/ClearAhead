@@ -136,7 +136,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 				Spans: []netloc.IntervalU{{Element: "E1", From: 10, To: 150}},
 			}},
 			TrackTypes: []RenderTrackType{{
-				ID: "TRACK_MAIN", Gauge: 1.435,
+				ID: "TRACK_MAIN", Gauge: 1.520,
 				Rail:    RenderRail{Height: 0.18, HeadWidth: 0.075},
 				Sleeper: RenderSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20},
 				Ballast: RenderBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
@@ -189,7 +189,7 @@ func TestRenderHashCoversEveryWireField(t *testing.T) {
 			g.Structures[0].Spans = append(g.Structures[0].Spans, g.Structures[0].Spans[0])
 		},
 		"тип id":                func(g *RenderGeometry) { g.TrackTypes[0].ID = "TRACK_SIDING" },
-		"тип gauge":             func(g *RenderGeometry) { g.TrackTypes[0].Gauge = 1.520 },
+		"тип gauge":             func(g *RenderGeometry) { g.TrackTypes[0].Gauge = 1.435 },
 		"тип pitch":             func(g *RenderGeometry) { g.TrackTypes[0].Sleeper.Pitch = 0.7 },
 		"тип sleeper.length":    func(g *RenderGeometry) { g.TrackTypes[0].Sleeper.Length = 2.6 },
 		"тип sleeper.width":     func(g *RenderGeometry) { g.TrackTypes[0].Sleeper.Width = 0.29 },

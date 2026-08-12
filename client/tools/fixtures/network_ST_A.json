@@ -168,7 +168,7 @@
         "branch": "diverging",
         "hand": "right",
         "frog": "1/9",
-        "type": "TRACK_MAIN_1435"
+        "type": "TRACK_MAIN_1520"
       }
     },
     {
@@ -200,7 +200,7 @@
         "branch": "straight",
         "hand": "right",
         "frog": "1/9",
-        "type": "TRACK_MAIN_1435"
+        "type": "TRACK_MAIN_1520"
       }
     },
     {
@@ -234,7 +234,7 @@
         "branch": "diverging",
         "hand": "right",
         "frog": "1/9",
-        "type": "TRACK_MAIN_1435"
+        "type": "TRACK_MAIN_1520"
       }
     },
     {
@@ -266,7 +266,7 @@
         "branch": "straight",
         "hand": "right",
         "frog": "1/9",
-        "type": "TRACK_MAIN_1435"
+        "type": "TRACK_MAIN_1520"
       }
     }
   ],
@@ -329,15 +329,15 @@
   ],
   "track_types": [
     {
-      "id": "TRACK_MAIN_1435",
-      "gauge": 1.435,
+      "id": "TRACK_MAIN_1520",
+      "gauge": 1.52,
       "rail": {
         "height": 0.18,
         "head_width": 0.075
       },
       "sleeper": {
-        "pitch": 0.6,
-        "length": 2.5,
+        "pitch": 0.543,
+        "length": 2.75,
         "width": 0.28,
         "height": 0.2
       },
@@ -353,7 +353,7 @@
   "construction_runs": [
     {
       "id": "RUN_APPROACH_CROSS",
-      "type": "TRACK_MAIN_1435",
+      "type": "TRACK_MAIN_1520",
       "coordinate": "u",
       "phase": 0.0,
       "spans": [
@@ -373,7 +373,7 @@
     },
     {
       "id": "RUN_MAIN",
-      "type": "TRACK_MAIN_1435",
+      "type": "TRACK_MAIN_1520",
       "coordinate": "u",
       "phase": 0.0,
       "spans": [
@@ -387,7 +387,7 @@
     },
     {
       "id": "RUN_SIDING",
-      "type": "TRACK_MAIN_1435",
+      "type": "TRACK_MAIN_1520",
       "coordinate": "u",
       "phase": 0.0,
       "spans": [
@@ -401,7 +401,7 @@
     },
     {
       "id": "RUN_STUB",
-      "type": "TRACK_MAIN_1435",
+      "type": "TRACK_MAIN_1520",
       "coordinate": "u",
       "phase": 0.0,
       "spans": [
@@ -419,13 +419,13 @@
       "owner": "SW1",
       "kind": "frog",
       "point": {
-        "x": 149.34280150224174,
-        "y": -0.7175
+        "x": 150.19933774108284,
+        "y": -0.76
       },
       "addresses": [
         {
           "element": "SW1:straight",
-          "u": 29.34280150224175,
+          "u": 30.19933774108284,
           "tangent": {
             "x": 1.0,
             "y": 0.0
@@ -433,10 +433,10 @@
         },
         {
           "element": "SW1:diverging",
-          "u": 29.31944228015453,
+          "u": 30.173874770625428,
           "tangent": {
-            "x": 0.9952280796009604,
-            "y": -0.0975759682185349
+            "x": 0.994946136377544,
+            "y": -0.10041008767747156
           }
         }
       ]
@@ -445,13 +445,13 @@
       "owner": "SW2",
       "kind": "frog",
       "point": {
-        "x": 202.10372250958355,
-        "y": -8.000504081926533
+        "x": 202.9503207515236,
+        "y": -8.137368961247958
       },
       "addresses": [
         {
           "element": "SW2:straight",
-          "u": 29.34280150224225,
+          "u": 30.199337741083095,
           "tangent": {
             "x": 0.9938790096331525,
             "y": -0.11047404315324032
@@ -459,10 +459,10 @@
         },
         {
           "element": "SW2:diverging",
-          "u": 29.319442280154995,
+          "u": 30.17387477062563,
           "tangent": {
-            "x": 0.9783566863892132,
-            "y": -0.2069255764701864
+            "x": 0.9777633723021434,
+            "y": -0.20971120090338596
           }
         }
       ]

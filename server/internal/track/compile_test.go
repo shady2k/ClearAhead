@@ -242,7 +242,7 @@ func TestCompileConstructionWire(t *testing.T) {
 		t.Fatalf("типы в проводе %+v", rg.TrackTypes)
 	}
 	tt := rg.TrackTypes[0]
-	if tt.Gauge != 1.435 || tt.Sleeper.Pitch != 0.6 || tt.Sleeper.Length != 2.5 ||
+	if tt.Gauge != 1.520 || tt.Sleeper.Pitch != 0.543 || tt.Sleeper.Length != 2.75 ||
 		tt.Sleeper.Width != 0.28 || tt.Ballast.HalfWidth != 1.75 {
 		t.Fatalf("тип в проводе %+v, ожидались числа из карты", tt)
 	}
