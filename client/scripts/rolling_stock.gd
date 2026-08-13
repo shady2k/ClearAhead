@@ -60,22 +60,38 @@ class Unit extends RefCounted:
 	## у того же элемента, по которому машину и ставили.
 	var element: TrackGeom.Element = null
 	var u_m := 0.0
+	## ПОСТЫ МАШИНИСТА в осях узла единицы — уже после масштаба и сдвига каталога.
+	## Пусто значит «в эту машину сесть некуда», и это законно: у вагона кабины
+	## нет. Считаются при постановке, а не при посадке, потому что живут ровно
+	## столько же, сколько сама единица.
+	var cabs: Array[Vector3] = []
 
 
 ## place — ставит единицы живого состояния на путь.
 ##
-## Возвращает {units: Array[Unit], skipped: Array[String]}. Пропуск — не отказ
+## Возвращает {units, skipped, notes}. Пропуск — не отказ
 ## загрузки: единица, которую невозможно поставить, называется словами в HUD, а
 ## остальной мир рисуется. Причина в том, что состояние приходит отдельно от
 ## сети и может обогнать её на одну правку.
+##
+## КАТАЛОГ ВИДОВ НУЖЕН ЗДЕСЬ, хотя байты вида доедут много позже: посты
+## машиниста объявлены записью каталога, а не паспортом, и приезжают вместе с
+## ней — то есть килобайтами, а не двадцатью мегабайтами. Сесть в машину можно
+## раньше, чем доедет её вид; на экране это будет коробка изнутри, и это честная
+## картинка ровно того, что известно.
 static func place(parent: Node3D, live: Dictionary, types: Dictionary,
-		elements: Array[TrackGeom.Element]) -> Dictionary:
+		assets: Dictionary, elements: Array[TrackGeom.Element]) -> Dictionary:
 	var by_id := {}
 	for el in elements:
 		by_id[el.id] = el
 
 	var out: Array[Unit] = []
 	var skipped: Array[String] = []
+	# ЗАМЕЧАНИЕ — НЕ ПРОПУСК, и это разные списки нарочно. Пропущенная единица не
+	# нарисована вовсе; единица с испорченным постом стоит на своём месте и верна
+	# во всём, кроме того, что в неё нельзя сесть. Слить их в один список значило
+	# бы сказать «локомотива нет» про локомотив, который видно.
+	var notes: Array[String] = []
 	for raw in (live.get("units", []) as Array):
 		var d := raw as Dictionary
 		var uid := String(d.get("id", ""))
@@ -108,6 +124,11 @@ static func place(parent: Node3D, live: Dictionary, types: Dictionary,
 		u.u_m = u_ref
 		u.pose = el.pose_at(u_ref)
 
+		var posts := cabs_of(assets.get(u.appearance, {}) as Dictionary)
+		u.cabs = posts["cabs"]
+		if String(posts["reason"]) != "":
+			notes.append("%s: вид %s: %s" % [uid, u.appearance, posts["reason"]])
+
 		u.node = Node3D.new()
 		u.node.name = "unit_" + uid
 		u.node.transform = _stand(el, u_ref, u.bogie_base_m, u.reversed)
@@ -116,7 +137,37 @@ static func place(parent: Node3D, live: Dictionary, types: Dictionary,
 		u.box = _box(u)
 		u.node.add_child(u.box)
 		out.append(u)
-	return {"units": out, "skipped": skipped}
+	return {"units": out, "skipped": skipped, "notes": notes}
+
+
+## cabs_of — посты машиниста записи каталога, переведённые в оси УЗЛА ЕДИНИЦЫ.
+##
+## Сервер объявляет их в осях ассета и ДО постановки — теми же осями, в которых
+## лежат вершины меша. Значит и перевод обязан быть тем же самым: сначала
+## масштаб, потом сдвиг, сдвиг НЕ домножается. Это не повтор ради удобства, а
+## единственный способ, при котором смена масштаба увозит пост вместе с окнами
+## кабины; своя формула разошлась бы с мешем молча, и разошлась бы ровно на ту
+## величину, которую однажды уже поймал зонд (0.31 м вдоль хода).
+##
+## Записи нет вовсе — постов нет: вид, не объявленный в наборе, уедет в отказы
+## отдельно (world.gd::_load_stock_meshes), и второй раз кричать об этом здесь
+## незачем. А вот пост, записанный НЕ ТРЕМЯ ЧИСЛАМИ, — это испорченный набор, и
+## он получает причину словами. Молча выбросить такой пост значило бы показать
+## «в эту машину сесть некуда» там, где на самом деле сломан ответ сервера.
+##
+## Возвращает {cabs: Array[Vector3], reason: String}.
+static func cabs_of(asset: Dictionary) -> Dictionary:
+	var out: Array[Vector3] = []
+	var scale := float(asset.get("scale", 1.0))
+	var tr: Array = asset.get("translation", [0.0, 0.0, 0.0]) as Array
+	var shift := Vector3(float(tr[0]), float(tr[1]), float(tr[2]))
+	for i in (asset.get("cabs", []) as Array).size():
+		var p := (asset.get("cabs", []) as Array)[i] as Array
+		if p == null or p.size() != 3:
+			return {"cabs": [] as Array[Vector3],
+				"reason": "пост %d записан не тремя числами" % i}
+		out.append(Vector3(float(p[0]), float(p[1]), float(p[2])) * scale + shift)
+	return {"cabs": out, "reason": ""}
 
 
 ## show_mesh — ставит доехавший вид вместо коробки.

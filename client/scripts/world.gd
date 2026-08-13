@@ -194,6 +194,9 @@ var frame := "network"
 ## Ключ запуска, а не пункт меню, и по той же причине, что --frame: им пользуются
 ## снимок и зонд, которым нажимать V некому. Игрок переключает виды клавишей.
 var driver_view := "eye"
+## Посадить машиниста в кабину сразу, не спрашивая досягаемости. Ключ снимка и
+## зонда, разбор — у app.gd::_board.
+var driver_board := false
 
 ## ДАЛЬНОСТЬ ВЗГЛЯДА, метры. Приходит от оболочки — это НАСТРОЙКА ИГРОКА.
 ##
@@ -247,6 +250,8 @@ var _fog_standoff_m := -1.0
 
 var world: Node3D
 var ui_label: RichTextLabel
+## Подсказка подошедшему. Пустая и невидимая, пока предложить нечего.
+var ui_prompt: Label
 var camera: Camera3D
 ## Мир спрашивает СЛОЙ, а не трубу: манифест, сеть, рельеф, объекты — вопросами,
 ## а не адресами. Ни кода ответа, ни имени заголовка отсюда не видно (WorldApi).
@@ -318,6 +323,7 @@ func configure(cfg: Dictionary) -> void:
 	role_camera = cfg.get("camera", {}) as Dictionary
 	frame = String(cfg.get("frame", frame))
 	driver_view = String(cfg.get("driver_view", driver_view))
+	driver_board = bool(cfg.get("board", driver_board))
 	view_reach_m = float(cfg.get("view_reach_m", view_reach_m))
 	shot_path = String(cfg.get("shot_path", ""))
 	quit_when_done = bool(cfg.get("quit_when_done", false))
@@ -348,6 +354,7 @@ func _ready() -> void:
 	if _driver != null:
 		await get_tree().physics_frame
 		await get_tree().physics_frame
+		_board_if_asked()
 	if shot_path != "":
 		await _measure_fps()
 	_print_report()
@@ -564,7 +571,44 @@ func _build_scene() -> void:
 	box.set_content_margin_all(10.0)
 	box.set_corner_radius_all(4)
 	ui_label.add_theme_stylebox_override("normal", box)
+	# ПАНЕЛЬ СКРЫТА В ИГРЕ И ПОКАЗАНА В СНИМКЕ, и это не два решения, а одно:
+	# у неё два разных зрителя.
+	#
+	# В снимке она ДОКАЗАТЕЛЬСТВО — снимок затем и делается, чтобы числа рядом с
+	# картинкой можно было прочитать и сверить; ключ --shot-no-hud снимает её и
+	# там, когда нужен чистый кадр.
+	#
+	# В игре она ПОМЕХА, и это слова владельца: 700×820 из 1600×900 — почти
+	# половина кадра, закрытая числами, которых игрок не спрашивал. Раньше она
+	# висела всегда, потому что другого места у чисел не было; теперь есть
+	# клавиша H, и молчаливое умолчание сменилось на явный вопрос игрока.
+	ui_label.visible = shot_path != ""
 	ui.add_child(ui_label)
+
+	# ПОДСКАЗКА ПОДОШЕДШЕМУ. Появляется, когда действие возможно, и исчезает,
+	# когда нет, — так это устроено в играх, и довод у них общий: предложение
+	# показывают тогда, когда оно настоящее.
+	#
+	# ВНИЗУ ПО СЕРЕДИНЕ, а не в панели слева. Панель — числа для отладки, её
+	# уводят с кадра ключом --shot-no-hud; подсказка обращена к игроку и стоит
+	# там, куда он смотрит. Низ, а не центр: центр кадра — это то, на что человек
+	# наводит взгляд, и надпись поверх него закрывала бы ровно тот предмет, о
+	# котором говорит.
+	ui_prompt = Label.new()
+	ui_prompt.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_prompt.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	ui_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	ui_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	ui_prompt.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	ui_prompt.offset_top = -96.0
+	ui_prompt.add_theme_font_size_override("font_size", 18)
+	var prompt_box := StyleBoxFlat.new()
+	prompt_box.bg_color = Color(0.04, 0.05, 0.07, 0.72)
+	prompt_box.set_content_margin_all(9.0)
+	prompt_box.set_corner_radius_all(4)
+	ui_prompt.add_theme_stylebox_override("normal", prompt_box)
+	ui_prompt.visible = false
+	ui.add_child(ui_prompt)
 
 
 ## _apply_fog_to_reach — плотность дымки из дальности взгляда.
@@ -852,11 +896,20 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element]) -> void:
 	_stock_root = Node3D.new()
 	_stock_root.name = "rolling_stock"
 	world.add_child(_stock_root)
-	var res := RollingStock.place(_stock_root, live_res.data, _stock_types, elements)
+	var res := RollingStock.place(_stock_root, live_res.data, _stock_types, _stock_assets, elements)
 	_stock_units = res["units"]
 	stats["stock_units"] = _stock_units.size()
 	for note in (res["skipped"] as Array):
 		errors.append("единица не поставлена — %s" % note)
+	# ЗАМЕЧАНИЕ — НЕ ПРОПУСК: машина стоит и нарисована, испорчен только её пост.
+	# Слова разные нарочно, иначе «единица не поставлена» сказали бы про
+	# локомотив, который игрок видит перед собой.
+	for note in (res["notes"] as Array):
+		errors.append("в единицу нельзя сесть — %s" % note)
+	var posts := 0
+	for u_raw in _stock_units:
+		posts += (u_raw as RollingStock.Unit).cabs.size()
+	stats["stock_cabs"] = posts
 
 
 ## _load_stock_meshes — качает виды и меняет коробки на меши.
@@ -1810,6 +1863,12 @@ func _spawn_driver(elements: Array[TrackGeom.Element]) -> void:
 	# засеянного ему так же нельзя: там нет ни земли под ногами, ни кадра вокруг.
 	_driver.limit_changed.connect(_on_limit)
 	_driver.set_bounds(_bounds)
+	# ПОСТЫ ДАЁТ МИР, а не человек добывает их сам. Где стоят машины и где у них
+	# кабины — приехавшие факты; человек отвечает лишь на вопрос, дотянется ли он.
+	# Состав ставится до камеры (порядок в _load_world), поэтому здесь он уже есть.
+	_driver.boarding_changed.connect(_on_boarding)
+	_driver.prompt_changed.connect(_on_prompt)
+	_driver.set_posts(_stock_posts())
 
 
 ## _on_driver_settled — человек нашёл под собой твердь (или не нашёл).
@@ -1823,6 +1882,64 @@ func _on_driver_settled(note: String) -> void:
 	if note.begins_with("под машинистом нет тверди"):
 		_fail("роль «%s»: %s" % [role_name, note])
 	_refresh_ui()
+
+
+## _board_if_asked — ключ --board: посадить машиниста без подхода к машине.
+##
+## ПОСЛЕ постановки на твердь, а не вместо неё: место, откуда он «сел», — это
+## место, куда он выйдет, и оно обязано быть настоящей точкой на земле.
+##
+## Отсутствие поста — ОТКАЗ на экране, а не тихий пропуск: снимок, снятый снаружи
+## там, где просили изнутри, выглядит исправным кадром и врёт ровно про то, ради
+## чего его снимали.
+func _board_if_asked() -> void:
+	if not driver_board:
+		return
+	var posts := _stock_posts()
+	if posts.is_empty():
+		_fail("ключ --board: ни у одной поставленной единицы нет поста машиниста — садиться некуда")
+		_refresh_ui()
+		return
+	_driver.board(posts[0])
+
+
+## _stock_posts — посты машиниста всех поставленных единиц, одним списком.
+##
+## Собирается ЗДЕСЬ, потому что «какие машины стоят в мире» знает мир. Человеку
+## отдаётся плоский список: ему безразлично, две кабины у одной машины или по
+## одной у двух, — он ищет ближайшую.
+func _stock_posts() -> Array[Driver.Post]:
+	var out: Array[Driver.Post] = []
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		for i in u.cabs.size():
+			var p := Driver.Post.new()
+			p.unit_id = u.id
+			p.node = u.node
+			p.local = u.cabs[i]
+			p.index = i
+			out.append(p)
+	return out
+
+
+## _on_boarding — человек сел в кабину или вышел из неё. В панель, а не в отказы:
+## это не поломка, а состояние.
+func _on_boarding(note: String) -> void:
+	stats["driver_board"] = note
+	_refresh_ui()
+
+
+## _on_prompt — подсказка подошедшему. Пустая строка гасит её целиком.
+##
+## Отдельной надписью, а не строкой панели, и это разные вещи по назначению:
+## панель — числа для отладки, и она уводится с кадра ключом --shot-no-hud;
+## подсказка — ОРГАН УПРАВЛЕНИЯ, она обращена к игроку и стоит там, куда он
+## смотрит. Слей их — и подсказка исчезала бы вместе с отладочной панелью.
+func _on_prompt(text: String) -> void:
+	if ui_prompt == null:
+		return
+	ui_prompt.text = text
+	ui_prompt.visible = text != ""
 
 
 ## _on_limit — смотрящий упёрся в край мира (или отошёл от него).
@@ -1908,6 +2025,26 @@ func _role_bbox(elements: Array[TrackGeom.Element]) -> Rect2:
 	if not any:
 		return Rect2()
 	return Rect2(mn, mx - mn)
+
+
+## H — показать или убрать панель отладки.
+##
+## Живёт У МИРА, а не у человека и не у камеры, и это не мелочь: панель одна на
+## все три роли, а человек есть только у машиниста. Повесь клавишу на него — и у
+## ДСП со строителем панели не стало бы вовсе.
+##
+## Слушается ВСЕГДА, в том числе когда ввод у мира отобран паузой: числа
+## отладки — не действие в мире, и посмотреть их из-под меню законно. Тем эта
+## клавиша и отличается от E, V и F, которые гаснут вместе с вводом.
+func _unhandled_input(event: InputEvent) -> void:
+	if not (event is InputEventKey):
+		return
+	var key := event as InputEventKey
+	if not key.pressed or key.echo or key.keycode != KEY_H:
+		return
+	if ui_label != null:
+		ui_label.visible = not ui_label.visible
+	get_viewport().set_input_as_handled()
 
 
 func _refresh_ui() -> void:

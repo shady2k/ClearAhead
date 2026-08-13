@@ -102,6 +102,56 @@ func run() -> void:
 	_ok("машинист: V переключает вид", driver.mode_name() != view_before,
 		"вид «%s» → «%s»" % [view_before, driver.mode_name()])
 
+	# ПОСАДКА. Мира здесь нет, и он не нужен: пост — это узел и точка в его осях,
+	# а «дотянусь ли» считается по расстоянию в плане. Что глаз при этом попадает
+	# внутрь НАРИСОВАННОЙ кабины, доказывает зонд по доехавшему мешу — здесь
+	# доказывается ввод и досягаемость.
+	var rig := Node3D.new()
+	ctx.tree.root.add_child(rig)
+	var post := Driver.Post.new()
+	post.unit_id = "LOCO_T"
+	post.node = rig
+	post.local = Vector3(0.0, 1.72, 15.5)
+	driver.set_posts([post] as Array[Driver.Post])
+
+	# ВДАЛИ — НИ ПОДСКАЗКИ, НИ ПОСАДКИ. Предложение показывают тогда, когда оно
+	# настоящее, а E, сработавшая с сорока метров, — телепорт, а не посадка.
+	driver.global_position = Vector3(0.0, 0.0, -25.0)
+	await _feed(_key(KEY_E))
+	_ok("машинист: вдали от машины E не сажает", not driver.is_boarded(),
+		"до поста %.1f м" % [40.5])
+	_ok("машинист: вдали подсказки нет", driver.prompt() == "",
+		"подсказка «%s»" % driver.prompt())
+
+	# ВБЛИЗИ — ПОДСКАЗКА, и она появляется САМА, от того, что человек подошёл.
+	# Ждать её надо шага физики: расстояние считается там, а не в разборе ввода.
+	driver.global_position = post.at() - Vector3(0.0, 1.72, 2.0)
+	await ctx.tree.physics_frame
+	await ctx.tree.process_frame
+	_ok("машинист: у машины появляется подсказка", driver.prompt() != "",
+		"подсказка «%s»" % driver.prompt())
+
+	await _feed(_key(KEY_E))
+	_ok("машинист: у машины E сажает в кабину", driver.is_boarded())
+	# Пол кабины — не земля: сев, человек обязан оказаться ТАМ, где объявлен пост.
+	_ok("машинист: сев, стоит на посту",
+		driver.global_position.distance_to(post.at()) < 0.01,
+		"разошлось на %.3f м" % driver.global_position.distance_to(post.at()))
+	await ctx.tree.physics_frame
+	_ok("машинист: в кабине подсказка предлагает выйти",
+		driver.prompt().contains("выйти"), "подсказка «%s»" % driver.prompt())
+
+	await _feed(_key(KEY_E))
+	_ok("машинист: E выпускает из кабины", not driver.is_boarded())
+
+	# F РАБОТАЕТ И ИЗ КАБИНЫ — это средство от застревания, и отказывать оно не
+	# вправе (решение владельца, довод — Derail Valley). Проверяется именно
+	# ВЫСАДКА: оставь пост занятым, и тело в тот же шаг физики уехало бы обратно.
+	await _feed(_key(KEY_E))
+	_ok("машинист: сел обратно", driver.is_boarded())
+	await _feed(_key(KEY_F))
+	_ok("машинист: F выносит из кабины", not driver.is_boarded())
+
 	# Погашенный человек не слушает ничего: поверх мира стоит меню. Та же грабля,
 	# что у камеры выше, и куплена она была именно на роли машиниста — событие,
 	# дошедшее до мира из-под меню, снаружи неотличимо от сломанного управления.
@@ -110,7 +160,13 @@ func run() -> void:
 	await _feed(_key(KEY_V))
 	_ok("машинист: в паузе вид не переключается", driver.mode_name() == view_before,
 		"вид «%s»" % driver.mode_name())
+	driver.global_position = post.at()
+	await _feed(_key(KEY_E))
+	_ok("машинист: в паузе E не сажает", not driver.is_boarded())
+	_ok("машинист: в паузе подсказка погашена", driver.prompt() == "",
+		"подсказка «%s»" % driver.prompt())
 	driver.free()
+	rig.free()
 
 	Input.set_use_accumulated_input(accum)
 

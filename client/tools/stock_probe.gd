@@ -117,7 +117,88 @@ func _measure(w: Node) -> void:
 		_check("вдоль хода центр меша", c.z, 0.0, 0.10, "м")
 		_check("длина меша против паспорта", aabb.size.z, float(t.get("length", 0.0)), 0.30, "м")
 		_axis_offset(u)
+		await _cab(node, u)
 		await _wheels(w, node)
+
+
+## _cab — СТОИТ ЛИ МАШИНИСТ В КАБИНЕ. Второй вопрос того же рода, что колёса на
+## рельсах, и заданный по той же причине.
+##
+## Кадр из кабины на него не отвечает. Из глаз человека, оказавшегося в полу по
+## колено или под потолком макушкой, видно РОВНО ТО ЖЕ: рамку лобового стекла и
+## лес впереди. А если пост промахнулся на метр вдоль машины, кадр будет
+## отличаться от правильного оконным переплётом, о котором можно спорить.
+##
+## ЛУЧОМ ПО НАРИСОВАННОМУ, а не по объявленному, и это тот же приём, каким
+## человек спрашивает землю под ногами. Проверяется НЕ то, что число из каталога
+## равно числу из каталога, — это тавтология, — а то, что под объявленной точкой
+## есть НАРИСОВАННЫЙ пол, а над ней нарисованный потолок, и между ними влезает
+## человек ростом 1.80.
+##
+## Меши состава твердью не становятся (world.gd::_build_solid проходит по миру
+## ДО того, как доедет вид), поэтому твердь для луча строится здесь и живёт
+## ровно один замер.
+func _cab(unit: Node3D, u) -> void:
+	if u.cabs.is_empty():
+		print("    (постов машиниста у вида нет — в машину не сесть)")
+		_fails += 1
+		return
+	var bodies: Array[Node] = []
+	for mi in _meshes(unit):
+		mi.create_trimesh_collision()
+		var body := mi.get_child(mi.get_child_count() - 1)
+		bodies.append(body)
+	# Тела созданы в этом же кадре, и физический сервер о них ещё не знает: луч,
+	# пущенный сразу, уходит в пустоту. Та же грабля, что у постановки человека
+	# на твердь (Driver._settle), и лечится так же — шагом физики.
+	await unit.get_tree().physics_frame
+
+	var space := unit.get_world_3d().direct_space_state
+	for i in u.cabs.size():
+		var at: Vector3 = unit.to_global(u.cabs[i])
+		print("    пост %d: %.3f, %.3f, %.3f (в осях единицы %.3f, %.3f, %.3f)" % [
+			i, at.x, at.y, at.z, u.cabs[i].x, u.cabs[i].y, u.cabs[i].z])
+		# ПОЛ. Луч сверху вниз с высоты пояса: снизу вверх он упёрся бы в пол же,
+		# но с изнанки, и назвал бы его потолком.
+		var floor_y := _hit(space, at + Vector3.UP * 0.9, Vector3.DOWN * 2.0)
+		if is_finite(floor_y):
+			_check("пол кабины под объявленным постом", floor_y, at.y, 0.05, "м")
+		else:
+			print("    МИМО под постом %d нет нарисованного пола на 2 м вниз" % i)
+			_fails += 1
+		# ПОТОЛОК. Человек ростом 1.80 обязан влезть стоя — иначе он в кабине не
+		# стоит, а торчит из крыши.
+		var roof_y := _hit(space, at + Vector3.UP * 0.1, Vector3.UP * 4.0)
+		if is_finite(roof_y):
+			var head := roof_y - at.y
+			print("    потолок кабины на %.3f м над полом (человеку нужно %.2f м)" % [
+				head, Driver.BODY_H])
+			if head < Driver.BODY_H:
+				print("    МИМО в кабине не встать: %.3f м при росте %.2f м" % [head, Driver.BODY_H])
+				_fails += 1
+		else:
+			print("    МИМО над постом %d нет нарисованного потолка на 4 м вверх" % i)
+			_fails += 1
+	for b in bodies:
+		b.queue_free()
+
+
+## _hit — отметка первого пересечения луча, либо NAN.
+func _hit(space: PhysicsDirectSpaceState3D, from: Vector3, delta: Vector3) -> float:
+	var q := PhysicsRayQueryParameters3D.create(from, from + delta)
+	var got := space.intersect_ray(q)
+	return NAN if got.is_empty() else (got["position"] as Vector3).y
+
+
+## _meshes — все меши поддерева, плоским списком.
+func _meshes(node: Node) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	var mi := node as MeshInstance3D
+	if mi != null and mi.mesh != null:
+		out.append(mi)
+	for c in node.get_children():
+		out.append_array(_meshes(c))
+	return out
 
 
 ## _axis_offset — ОТХОД ТЕЛА ОТ ОСИ ПО ВСЕЙ ДЛИНЕ.

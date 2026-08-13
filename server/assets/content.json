@@ -10,6 +10,10 @@
       "anchor": "rail_top_gauge_center",
       "scale": 1.0286,
       "translation": [0, 0, 8.451],
+      "cabs": [
+        [0, 1.726, 6.89],
+        [0, 1.726, -23.197]
+      ],
       "attribution": {
         "title": "Electric Freight Locomotive",
         "author": "fabirbige — https://sketchfab.com/fabirbige",

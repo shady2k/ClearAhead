@@ -125,6 +125,23 @@ FRAME  ?= network
 REACH ?=
 REACH_ARG := $(if $(REACH),--reach=$(REACH))
 
+## BOARD — посадить машиниста в кабину сразу, не подводя его к машине пешком.
+##
+## Ключ снимка и зонда, а не игрока: игрок жмёт E, подойдя к локомотиву, а
+## снимку и замеру нажимать некому. Досягаемости он не спрашивает нарочно —
+## человек появляется на платформе, а машина стоит в сотне метров.
+##
+##   make dev-shot ROLE=driver BOARD=1 SHOT=$(CURDIR)/shots/cab.png
+BOARD ?=
+BOARD_ARG := $(if $(BOARD),--board)
+
+## NOHUD — снять кадр без панели отладки. В игре её и так нет (клавиша H), а вот
+## в снимке она стоит по умолчанию: снимок затем и делается, чтобы числа рядом с
+## картинкой можно было прочитать. Этот ключ — для кадров, которые смотрят
+## глазом, а не читают.
+NOHUD ?=
+NOHUD_ARG := $(if $(NOHUD),--shot-no-hud)
+
 # Запятая переменной, и это не причуда. $(call …) режет свои аргументы ПО
 # ЗАПЯТЫМ, поэтому «--position -9000,-9000» внутри $(call with_server,…) уезжало
 # вторым аргументом: до Godot доходило «--position -9000», и он отвечал «Invalid
@@ -153,7 +170,9 @@ help:
 	@echo '  make client-fixtures    переснять снимок сети с живого сервера'
 	@echo '  make client-shot        снимок экрана в $(SHOT), окно за экраном'
 	@echo
-	@echo 'Переменные: MAP, CONTENT, PLACEMENT, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH'
+	@echo 'Переменные: MAP, CONTENT, PLACEMENT, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH, BOARD'
+	@echo 'BOARD=1 сажает машиниста в кабину сразу: клавишу E снимку нажимать некому.'
+	@echo 'NOHUD=1 снимает кадр без панели отладки — для того, что смотрят, а не читают.'
 	@echo 'CONTENT — набор: какие машины бывают. PLACEMENT — расстановка партии: что где стоит.'
 	@echo 'MAP — авторская карта мира файлом; нет файла — сервер не поднимется.'
 	@echo 'REACH — ДАЛЬНОСТЬ ВЗГЛЯДА клиента, метры либо all. Мир от неё не меняется:'
@@ -241,7 +260,7 @@ dev-bin:
 
 ## dev — СЕРВЕР И КЛИЕНТ одной командой. Обычный способ запустить всё.
 dev: dev-bin client-import
-	$(call with_server,$(GODOT) --path $(CLIENT) -- --server=$(SERVER_URL) --region=$(REGION) --role=$(ROLE) $(REACH_ARG))
+	$(call with_server,$(GODOT) --path $(CLIENT) -- --server=$(SERVER_URL) --region=$(REGION) --role=$(ROLE) $(REACH_ARG) $(BOARD_ARG))
 
 ## dev-check — сервер и ВСЕ проверки клиента, без единого окна. То, что стоит
 ## гонять после правки контракта: расхождение клиента с сервером видно числами.
@@ -254,7 +273,7 @@ dev-check: dev-bin client-import
 ## снимать), но уведено за экран.
 dev-shot: dev-bin client-import
 	@mkdir -p $(dir $(SHOT))
-	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) $(REACH_ARG) --quit-when-done)
+	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) $(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) --quit-when-done)
 	@echo "снимок: $(SHOT)"
 
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
@@ -386,5 +405,5 @@ client-shot: client-import
 	@mkdir -p $(dir $(SHOT))
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1600x900 -- \
 		--server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) \
-		$(REACH_ARG) --quit-when-done
+		$(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) --quit-when-done
 	@echo "снимок: $(SHOT)"

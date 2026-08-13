@@ -96,6 +96,30 @@ func TestSetHashFollowsNumbers(t *testing.T) {
 	}
 }
 
+// TestSetHashFollowsCabs — переехавший пост обязан менять хеш перечня.
+//
+// Не косметика: у набора Cache-Control no-cache и ETag по этому хешу. Не
+// сменись он — клиент с набором в кэше поставил бы машиниста по вчерашнему
+// числу, то есть в стену, и никакой отказ этого бы не показал.
+func TestSetHashFollowsCabs(t *testing.T) {
+	body := fakeGLB(t)
+	doc := goodDoc(t, body)
+	doc["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{0, 1.5, 4.0}}
+	base, err := Load(writeSet(t, doc, map[string][]byte{"x.glb": body}))
+	if err != nil {
+		t.Fatalf("набор: %v", err)
+	}
+	doc = goodDoc(t, body)
+	doc["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{0, 1.5, 4.2}}
+	moved, err := Load(writeSet(t, doc, map[string][]byte{"x.glb": body}))
+	if err != nil {
+		t.Fatalf("набор: %v", err)
+	}
+	if base.Hash == moved.Hash {
+		t.Fatal("пост переехал, хеш перечня — нет")
+	}
+}
+
 // TestLoadRefusals — валидатор отказывает, а не чинит. Каждая строка таблицы —
 // испорченный набор, который обязан НЕ СОБРАТЬСЯ.
 func TestLoadRefusals(t *testing.T) {
@@ -151,6 +175,30 @@ func TestLoadRefusals(t *testing.T) {
 		}},
 		{"подрезка без объявления изменений", "modified=false", func(d map[string]any) {
 			d["assets"].([]any)[0].(map[string]any)["drop_nodes"] = []any{"spare"}
+		}},
+		// ПОСТ ВНЕ ГАБАРИТА. Три оси проверяются порознь нарочно: путаница осей
+		// (z, записанное в поле y) проходит проверку по двум из трёх, и таблица,
+		// щупающая одну ось, объявила бы её исправной.
+		{"пост выше машины", "над поверхностью катания", func(d map[string]any) {
+			d["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{0, 9.0, 0}}
+		}},
+		{"пост под колёсами", "над поверхностью катания", func(d map[string]any) {
+			d["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{0, -0.5, 0}}
+		}},
+		{"пост за торцом машины", "вдоль хода", func(d map[string]any) {
+			d["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{0, 2.0, 40.0}}
+		}},
+		{"пост сбоку от машины", "поперёк оси", func(d map[string]any) {
+			d["assets"].([]any)[0].(map[string]any)["cabs"] = []any{[]any{5.0, 2.0, 0}}
+		}},
+		// ПОСТ ПРОВЕРЯЕТСЯ ПОСЛЕ ПОСТАНОВКИ, а не по сырому числу. Здесь сырое
+		// число внутри габарита (z = 4 при длине 10), а после сдвига каталога
+		// уезжает за торец — и отказ обязан случиться, иначе постановка каталога
+		// проверялась бы только на клиенте, то есть глазом.
+		{"пост уезжает за габарит сдвигом каталога", "вдоль хода", func(d map[string]any) {
+			a := d["assets"].([]any)[0].(map[string]any)
+			a["translation"] = []any{0, 0, 3.0}
+			a["cabs"] = []any{[]any{0, 2.0, 4.0}}
 		}},
 		{"подрезка несуществующего узла", "не найден", func(d map[string]any) {
 			a := d["assets"].([]any)[0].(map[string]any)

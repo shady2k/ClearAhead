@@ -50,13 +50,21 @@ type contentAPI struct {
 // эти байты добыл, его не касается. Атрибуция при этом едет целиком и всегда:
 // раздача ассета есть его распространение.
 type wireAsset struct {
-	Name        string              `json:"name"`
-	MediaType   string              `json:"media_type"`
-	Hash        string              `json:"hash"`
-	Size        int                 `json:"size"`
-	Anchor      string              `json:"anchor"`
-	Scale       float64             `json:"scale"`
-	Translation [3]float64          `json:"translation"`
+	Name        string     `json:"name"`
+	MediaType   string     `json:"media_type"`
+	Hash        string     `json:"hash"`
+	Size        int        `json:"size"`
+	Anchor      string     `json:"anchor"`
+	Scale       float64    `json:"scale"`
+	Translation [3]float64 `json:"translation"`
+	// Cabs — посты машиниста, в осях ассета и ДО постановки, ровно как в наборе.
+	// Уезжают клиенту вместе с масштабом и сдвигом, потому что без них
+	// бесполезны: постановку применяет тот же, кто ставит вершины.
+	//
+	// omitempty здесь ЗАКОННО, а не экономия байтов: машина без кабины — вагон и
+	// платформа — постов не имеет вовсе, и пустой список на проводе означал бы
+	// то же самое более длинным способом.
+	Cabs        [][3]float64        `json:"cabs,omitempty"`
 	Attribution content.Attribution `json:"attribution"`
 }
 
@@ -79,7 +87,7 @@ func NewContentHandler(set *content.Set) http.Handler {
 		doc.Assets = append(doc.Assets, wireAsset{
 			Name: a.Name, MediaType: a.MediaType, Hash: a.Hash, Size: a.Size,
 			Anchor: a.Anchor, Scale: a.Scale, Translation: a.Translation,
-			Attribution: a.Attribution,
+			Cabs: a.Cabs, Attribution: a.Attribution,
 		})
 	}
 	body, err := json.Marshal(doc)
