@@ -918,13 +918,17 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element]) -> void:
 ## есть хеш содержимого, и дедупликация здесь даровая — ровно то, ради чего
 ## адресация по содержимому и выбрана.
 ##
+## Кэш на диске (user://assets/) по имени = адрес (sha256-<hex>). При каждом
+## запросе сверяется хеш: если совпал — отдать, не совпал (повреждён) —
+## перекачать. Несовпадение при загрузке отвергается отказом с обоими хешами.
+##
 ## Отказ вида не отменяет машину: коробка остаётся стоять там же, где стояла, и
 ## это по-прежнему верное положение верной машины. Отсутствие вида обязано быть
 ## ВИДНО — оно уезжает в отказы, а не гасится молча.
 func _load_stock_meshes() -> void:
 	if _stock_units.is_empty():
 		return
-	var cache := {}
+	var asset_cache := AssetCache.new()
 	var loaded := 0
 	for u_raw in _stock_units:
 		var u := u_raw as RollingStock.Unit
@@ -933,14 +937,11 @@ func _load_stock_meshes() -> void:
 			continue
 		var asset := _stock_assets[u.appearance] as Dictionary
 		var address := String(asset.get("hash", ""))
-		if not cache.has(address):
-			var blob: WorldApi.AssetBlob = await api.asset(address)
-			if blob.failed():
-				errors.append("вид %s: %s" % [u.appearance, blob.reason])
-				cache[address] = PackedByteArray()
-			else:
-				cache[address] = blob.bytes
-		var bytes: PackedByteArray = cache[address]
+		var blob: WorldApi.AssetBlob = await asset_cache.load_or_download(address, api)
+		if blob.failed():
+			errors.append("вид %s: %s" % [u.appearance, blob.reason])
+			continue
+		var bytes: PackedByteArray = blob.bytes
 		if bytes.is_empty():
 			continue
 		var why := RollingStock.show_mesh(u, bytes, asset)
@@ -950,6 +951,12 @@ func _load_stock_meshes() -> void:
 		loaded += 1
 		stats["stock_asset_bytes"] = int(stats.get("stock_asset_bytes", 0)) + bytes.size()
 	stats["stock_meshes"] = loaded
+	# БЕДЫ САМОГО КЭША — отдельно от бед ассетов, и на экран они выходят здесь.
+	# Неудавшаяся запись не отменяет ни одной машины (байты доехали и проверены),
+	# но молчать о ней нельзя: снаружи она выглядит как «клиент почему-то качает
+	# двадцать мегабайт каждый запуск», и разбирается это вслепую.
+	for note in asset_cache.notes:
+		errors.append("кэш ассетов: %s" % note)
 
 
 func _parse_elements(network: Dictionary) -> Array[TrackGeom.Element]:
