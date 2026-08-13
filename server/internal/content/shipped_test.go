@@ -4,6 +4,8 @@ import (
 	"math"
 	"path/filepath"
 	"testing"
+
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Боевой набор репозитория проводится через полный вход — ровно тем же приёмом
@@ -209,4 +211,49 @@ func reachableNames(t *testing.T, body []byte) map[string]bool {
 		}
 	}
 	return out
+}
+
+// TestShippedLocomotivePhysicsMatchesPublishedPassport — числа физики боевого
+// набора против ОПУБЛИКОВАННОГО паспорта ВЛ80С.
+//
+// Проверяется не форма, а величины: файл набора — это данные, и опечатка в
+// разряде массы или силы прошла бы любую проверку типов. Источник — статья
+// «ВЛ80» русской Википедии: служебная масса ВЛ80С 192 т, конструкционная
+// скорость 110 км/ч, длительный режим 40.9 тс при 53.6 км/ч.
+func TestShippedLocomotivePhysicsMatchesPublishedPassport(t *testing.T) {
+	set := shipped(t)
+	st, ok := set.StockType("VL80")
+	if !ok {
+		t.Fatal("в боевом наборе нет паспорта VL80")
+	}
+	loco, isLoco := st.Locomotive()
+	if !isLoco {
+		t.Fatal("VL80 не объявлен локомотивом: блока traction нет")
+	}
+	if got := loco.Mass.Tonnes(); math.Abs(got-192) > 0.5 {
+		t.Errorf("масса %.1f т, паспорт называет 192 т", got)
+	}
+	if got := loco.AdhesiveMass.Tonnes(); math.Abs(got-192) > 0.5 {
+		t.Errorf("сцепной вес %.1f т, у ВЛ80 все восемь осей движущие — ожидалось 192 т", got)
+	}
+	if got := loco.MaxSpeed.Kmh(); math.Abs(got-110) > 0.5 {
+		t.Errorf("конструкционная скорость %.1f км/ч, паспорт называет 110 км/ч", got)
+	}
+	// Точка длительного режима обязана воспроизводиться огибающей: 40.9 тс при
+	// 53.6 км/ч. Это и есть проверка того, что сила в файле записана в
+	// килоньютонах, а не в тоннах-силы, — разница вдесятеро.
+	v, err := units.KmhToSpeed(53.6)
+	if err != nil {
+		t.Fatalf("скорость: %v", err)
+	}
+	if got := loco.TractiveEffort(v).TonnesForce(); math.Abs(got-40.9) > 0.15 {
+		t.Errorf("на 53.6 км/ч тяга %.2f тс, паспорт называет 40.9 тс", got)
+	}
+	// Осевая нагрузка как независимая сверка: 192 т на восемь осей — 24 т/ось,
+	// то есть в пределах допустимого для магистрального электровоза. Число
+	// нагрузки в паспорт не записано, и проверять его нечем, кроме деления, —
+	// поэтому проверяется порядок, а не равенство.
+	if axle := loco.Mass.Tonnes() / 8; axle < 20 || axle > 26 {
+		t.Errorf("нагрузка на ось %.1f т — вне правдоподобного для электровоза", axle)
+	}
 }

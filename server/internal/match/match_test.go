@@ -49,6 +49,12 @@ func set(t *testing.T) *content.Set {
 		}},
 		"stock": []any{map[string]any{
 			"id": "VL80", "length": 34.18, "bogie_base": 24.71, "width": 3.63, "height": 5.4,
+			"mass": 192.0, "max_speed": 110.0,
+			"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
+			"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3},
+			"traction": map[string]any{
+				"adhesive_mass": 192.0, "continuous_force": 401.1, "continuous_speed": 53.6,
+			},
 			"appearance": "vid",
 		}},
 	}

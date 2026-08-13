@@ -44,6 +44,12 @@ func goodDoc(t *testing.T, body []byte) map[string]any {
 		}},
 		"stock": []any{map[string]any{
 			"id": "X1", "length": 10.0, "bogie_base": 6.0, "width": 3.0, "height": 4.0,
+			"mass": 100.0, "max_speed": 100.0,
+			"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
+			"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 4, "axle_force": 100.0},
+			"traction": map[string]any{
+				"adhesive_mass": 100.0, "continuous_force": 200.0, "continuous_speed": 40.0,
+			},
 			"appearance": "loco_x",
 		}},
 	}
@@ -172,6 +178,29 @@ func TestLoadRefusals(t *testing.T) {
 		{"два паспорта одного имени", "объявлен дважды", func(d map[string]any) {
 			s := d["stock"].([]any)[0]
 			d["stock"] = []any{s, s}
+		}},
+		// ФИЗИКА. Каждый случай — опечатка, которая иначе прошла бы насквозь и
+		// вышла бы не отказом, а правдоподобно неверным движением.
+		{"машина без массы", "mass", func(d map[string]any) {
+			delete(d["stock"].([]any)[0].(map[string]any), "mass")
+		}},
+		{"машина без конструкционной скорости", "max_speed", func(d map[string]any) {
+			delete(d["stock"].([]any)[0].(map[string]any), "max_speed")
+		}},
+		{"машина без сопротивления", "основное сопротивление", func(d map[string]any) {
+			delete(d["stock"].([]any)[0].(map[string]any), "resistance")
+		}},
+		{"сцепной вес больше служебной массы", "не бывает больше массы", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["traction"].(map[string]any)["adhesive_mass"] = 150.0
+		}},
+		{"режим быстрее конструкционной скорости", "выше конструкционной", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["traction"].(map[string]any)["continuous_speed"] = 120.0
+		}},
+		{"нулевая сила длительного режима", "continuous_force", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["traction"].(map[string]any)["continuous_force"] = 0
+		}},
+		{"отрицательный коэффициент сопротивления", "неотрицательное", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["resistance"].(map[string]any)["b"] = -0.01
 		}},
 		{"подрезка без объявления изменений", "modified=false", func(d map[string]any) {
 			d["assets"].([]any)[0].(map[string]any)["drop_nodes"] = []any{"spare"}

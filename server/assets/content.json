@@ -31,6 +31,15 @@
       "bogie_base": 24.71,
       "width": 3.63,
       "height": 5.4,
+      "mass": 192,
+      "max_speed": 110,
+      "resistance": { "a": 1.9, "b": 0.01, "c": 0.0003 },
+      "brake": { "shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3 },
+      "traction": {
+        "adhesive_mass": 192,
+        "continuous_force": 401.1,
+        "continuous_speed": 53.6
+      },
       "appearance": "loco_vl80"
     }
   ]
