@@ -2,6 +2,7 @@ package track
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/shady2k/ClearAhead/server/internal/geom"
@@ -21,6 +22,50 @@ type CompiledElement struct {
 	LengthU units.Distance
 	LengthS units.Distance
 	Prof    Profile
+	// HProf — горизонтальное выравнивание: радиусы кривых элемента.
+	HProf HProfile
+}
+
+// AlignmentAt — что под машиной в точке s: уклон и радиус кривой.
+//
+// # Почему один вызов, а не два
+//
+// Потому что оба ответа стоят на ОДНОМ переводе координаты. Физика стоит в s,
+// план и профиль записаны в u, и перевод (Profile.SToU) — самая дорогая часть
+// вопроса: двоичный поиск против двух проходов по цепочкам. Два раздельных
+// метода заставили бы вызывающего либо платить за перевод дважды, либо тащить
+// промежуточное u через свой код — то есть знать про две координаты там, где
+// ему хватает одной.
+//
+// Заодно это единственное место, где перевод s → u вообще случается в горячем
+// пути, и когда он подорожает или переедет в кэш, править придётся здесь.
+//
+// # Уклон отдаётся целым, и почему именно в этой шкале
+//
+// Профиль хранит уклон как float64 dz/du — это авторская запись, пришедшая из
+// карты. Физике float в состояние отдавать нельзя (правило проекта, куплено
+// потерей эталона контракта), поэтому перевод происходит ЗДЕСЬ, на границе, как
+// и всякий другой перевод float → домен.
+//
+// Шкала — тысячные доли промилле, и она выбрана не произвольно: по ПТР удельное
+// сопротивление от уклона ЧИСЛЕННО РАВНО уклону в промилле, а физика хранит
+// удельные величины в тысячных Н/кН (physics.SpecificResistance). Совпадение
+// шкал делает physics.GradeResistance тождеством — и это тождество проверяется
+// тестом там же.
+func (e CompiledElement) AlignmentAt(s units.Distance) (milliPermille int64, radius units.Distance, err error) {
+	u, err := e.Prof.SToU(s)
+	if err != nil {
+		return 0, 0, fmt.Errorf("track: элемент %s: %w", e.ID, err)
+	}
+	_, slope, err := e.Prof.At(u)
+	if err != nil {
+		return 0, 0, fmt.Errorf("track: элемент %s: уклон: %w", e.ID, err)
+	}
+	radius, err = e.HProf.At(u)
+	if err != nil {
+		return 0, 0, fmt.Errorf("track: элемент %s: радиус: %w", e.ID, err)
+	}
+	return int64(math.Round(slope * 1e6)), radius, nil
 }
 
 // Протяжённость сооружения живёт в общем типе netloc: одна форма на файл,
@@ -423,6 +468,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 			LengthU: e.Plan.Length(),
 			LengthS: lengthS,
 			Prof:    e.Prof,
+			HProf:   e.HProf,
 		}
 		re := RenderElement{
 			ID:      id,

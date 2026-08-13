@@ -71,6 +71,7 @@ type Element struct {
 	To    string
 	Plan  geom.Chain
 	Prof  Profile
+	HProf HProfile // горизонтальное выравнивание: радиусы кривых
 	Start PortPose // поза конца From, направленная внутрь элемента
 }
 
@@ -443,11 +444,15 @@ func buildElements(m *mapfmt.Map) (map[string]Element, error) {
 		if err != nil {
 			return nil, fmt.Errorf("track: %s: %w", id, err)
 		}
+		hprof, err := HProfileFrom(a.Horizontal)
+		if err != nil {
+			return nil, fmt.Errorf("track: %s: %w", id, err)
+		}
 		e, ok := ends[id]
 		if !ok {
 			return nil, fmt.Errorf("track: у элемента %s нет концов", id)
 		}
-		out[id] = Element{ID: id, Kind: kinds[id], From: e[0], To: e[1], Plan: chain, Prof: prof}
+		out[id] = Element{ID: id, Kind: kinds[id], From: e[0], To: e[1], Plan: chain, Prof: prof, HProf: hprof}
 	}
 	return out, nil
 }

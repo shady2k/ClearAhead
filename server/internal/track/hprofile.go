@@ -1,0 +1,111 @@
+package track
+
+import (
+	"fmt"
+
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/units"
+)
+
+// HSegment — звено горизонтальной цепочки. Кривая имеет постоянный радиус.
+//
+// Прямая выражается радиусом 0 по соглашению формата (у примитива straight
+// поля radius вовсе нет), а не радиусом ∞. Физика читает это правильно:
+// CurveResistance(0) → 0 (нет сопротивления от кривой на прямой).
+type HSegment struct {
+	LengthU units.Distance
+	Radius  units.Distance
+}
+
+// HProfile — горизонтальное выравнивание элемента: цепочка звеньев плана с
+// радиусами кривых. Пакет называется track, и имена величин длины несут букву в
+// имени: u — авторский пикетаж вдоль горизонтальной проекции, приходит из
+// mapfmt; s — пространственная длина оси, уходит в CompiledNetwork.
+type HProfile []HSegment
+
+// HProfileFrom строит горизонтальный профиль из цепочки примитивов плана.
+// Пустая цепочка — ошибка: план без примитивов невозможен по спеке (редакция 6
+// §1.2).
+func HProfileFrom(prims []mapfmt.HPrim) (HProfile, error) {
+	if len(prims) == 0 {
+		return nil, fmt.Errorf("track: горизонтальный профиль пуст")
+	}
+	p := make(HProfile, 0, len(prims))
+	for i, prim := range prims {
+		switch prim.Kind {
+		case "straight":
+			// Прямая: длина задана явно, радиус 0 по соглашению формата.
+			l, err := units.MetersToDistance(prim.Length)
+			if err != nil {
+				return nil, fmt.Errorf("track: горизонтальный примитив[%d]: %w", i, err)
+			}
+			p = append(p, HSegment{LengthU: l, Radius: 0})
+		case "arc":
+			// У дуги длина НЕ ЗАПИСАНА, а выводится: L = R·φ при φ в радианах.
+			// Так же её выводит клиент при тесселяции, и сходимость этих двух
+			// выводов он же и сторожит (world.gd, length_mismatch_m) — расхождение
+			// значило бы, что примитив понимается двумя сторонами по-разному.
+			r, err := units.MetersToDistance(prim.Radius)
+			if err != nil {
+				return nil, fmt.Errorf("track: горизонтальный примитив[%d] arc radius: %w", i, err)
+			}
+			l, err := units.MetersToDistance(prim.Radius * prim.Angle)
+			if err != nil {
+				return nil, fmt.Errorf("track: горизонтальный примитив[%d] arc length: %w", i, err)
+			}
+			p = append(p, HSegment{LengthU: l, Radius: r})
+		default:
+			return nil, fmt.Errorf("track: горизонтальный примитив[%d]: неизвестный вид %q", i, prim.Kind)
+		}
+	}
+	return p, nil
+}
+
+// LengthU возвращает длину профиля в авторской координате.
+func (p HProfile) LengthU() units.Distance {
+	var u units.Distance
+	for _, s := range p {
+		u += s.LengthU
+	}
+	return u
+}
+
+// At возвращает радиус кривой на смещении u авторской координаты.
+//
+// # Координата здесь u, и переход из s делает вызывающий
+//
+// План записан автором в u, и радиус — свойство именно плана, поэтому запрос по
+// u прямой и без потерь. Физика стоит в s и переводит своё место обратно через
+// Profile.SToU; собирает оба конца CompiledElement.AlignmentAt, и спрашивать
+// этот метод напрямую вызывающему из физики не нужно.
+//
+// Здесь стояла запись «обратного перевода в проекте НЕ СУЩЕСТВУЕТ, подключить
+// нечем». Она была верна ровно до появления SToU и снята вместе с причиной.
+//
+// # Границы звеньев
+//
+// Интервалы ПОЛУОТКРЫТЫЕ, [u_i-1, u_i): точка на стыке принадлежит СЛЕДУЮЩЕМУ
+// звену. Это не выбор этой функции, а соглашение проекта (ClearAhead-5zd),
+// применённое здесь так же, как в match.extentS: при целых микрометрах
+// равенство достижимо, и «какой из двух сторон границы принадлежит точка» не
+// имеет естественного ответа — поэтому он назначен один раз и на всё.
+//
+// Исключение ровно одно и оно на самом конце: u, равное полной длине,
+// принадлежит последнему звену. Иначе конец элемента не имел бы радиуса вовсе.
+func (p HProfile) At(u units.Distance) (units.Distance, error) {
+	if u < 0 {
+		return 0, fmt.Errorf("track: отрицательное смещение %s", u)
+	}
+	left := u
+	for _, seg := range p {
+		if left < seg.LengthU {
+			return seg.Radius, nil
+		}
+		left -= seg.LengthU
+	}
+	// На самой последней границе (u равно полной длине) — проверим особо.
+	if u == p.LengthU() && len(p) > 0 {
+		return p[len(p)-1].Radius, nil
+	}
+	return 0, fmt.Errorf("track: смещение %s выходит за длину горизонтального профиля %s", u, p.LengthU())
+}

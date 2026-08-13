@@ -290,3 +290,138 @@ func TestCompileConstructionWire(t *testing.T) {
 			len(rg2.TrackTypes), len(rg2.ConstructionRuns), len(rg2.Features))
 	}
 }
+
+// TestCompileHorizontalProfile проверяет, что CompiledElement содержит
+// горизонтальный профиль (радиусы кривых) и что At() правильно возвращает
+// радиус по авторской координате.
+//
+// E_MAIN затравочной карты: straight 50м + arc R=500 angle 0.2 + straight 80м.
+// Длина дуги: L = R·φ = 500·0.2 = 100м. Общая длина: 50+100+80 = 230м.
+func TestCompileHorizontalProfile(t *testing.T) {
+	cn, _, err := Compile(seedmap.Station())
+	if err != nil {
+		t.Fatalf("компиляция: %v", err)
+	}
+
+	main := cn.Elements[seedmap.StationMain]
+	if main.HProf == nil || len(main.HProf) == 0 {
+		t.Fatalf("горизонтальный профиль E_MAIN отсутствует")
+	}
+	if len(main.HProf) != 3 {
+		t.Fatalf("горизонтальный профиль E_MAIN: %d сегментов, ожидалось 3", len(main.HProf))
+	}
+
+	// Проверим радиусы каждого сегмента.
+	if main.HProf[0].Radius != 0 {
+		t.Fatalf("радиус[0] (прямая): %s, ожидалось 0", main.HProf[0].Radius)
+	}
+	if main.HProf[1].Radius != 500*units.Meter {
+		t.Fatalf("радиус[1] (дуга): %s, ожидалось 500m", main.HProf[1].Radius)
+	}
+	if main.HProf[2].Radius != 0 {
+		t.Fatalf("радиус[2] (прямая): %s, ожидалось 0", main.HProf[2].Radius)
+	}
+
+	// Проверим длины сегментов.
+	if main.HProf[0].LengthU != 50*units.Meter {
+		t.Fatalf("длина[0]: %s, ожидалось 50m", main.HProf[0].LengthU)
+	}
+	if main.HProf[1].LengthU != 100*units.Meter {
+		t.Fatalf("длина[1] (L=R·φ=500·0.2): %s, ожидалось 100m", main.HProf[1].LengthU)
+	}
+	if main.HProf[2].LengthU != 80*units.Meter {
+		t.Fatalf("длина[2]: %s, ожидалось 80m", main.HProf[2].LengthU)
+	}
+
+	// Проверим At() на границах и внутри сегментов.
+	tests := []struct {
+		u    units.Distance
+		want units.Distance
+		name string
+	}{
+		// На первой прямой [0, 50).
+		{0 * units.Meter, 0, "начало прямой 1"},
+		{25 * units.Meter, 0, "середина прямой 1"},
+		// На дуге [50, 150).
+		{50 * units.Meter, 500 * units.Meter, "граница на дугу"},
+		{100 * units.Meter, 500 * units.Meter, "середина дуги"},
+		// На третьей прямой [150, 230].
+		{150 * units.Meter, 0, "граница на прямую 3"},
+		{190 * units.Meter, 0, "середина прямой 3"},
+		{230 * units.Meter, 0, "конец прямой 3"},
+	}
+
+	for _, tt := range tests {
+		got, err := main.HProf.At(tt.u)
+		if err != nil {
+			t.Errorf("%s (u=%s): %v", tt.name, tt.u, err)
+			continue
+		}
+		if got != tt.want {
+			t.Errorf("%s (u=%s): радиус %s, ожидалось %s", tt.name, tt.u, got, tt.want)
+		}
+	}
+
+	// Запрос за границей должен дать ошибку.
+	_, err = main.HProf.At(231 * units.Meter)
+	if err == nil {
+		t.Errorf("запрос за границей (u=231m): ошибка не возвращена")
+	}
+}
+
+// TestAlignmentAtAnswersInPhysicsCoordinate — сквозная проверка того звена,
+// ради которого заводились и горизонтальный профиль, и обратный перевод: физика
+// спрашивает по s и получает уклон и радиус.
+//
+// Элемент E_MAIN затравки: прямая 50 м, дуга R = 500 при угле 0.2 рад (то есть
+// 100 м), прямая 80 м; профиль плоский. Плоскость профиля здесь ВАЖНА и делает
+// проверку слабее в одном месте — при нулевом уклоне s тождественно равно u, и
+// ошибку перевода этот тест не поймал бы. Она ловится отдельно, на наклонном
+// профиле (profile_test.go, TestSToUInvertsUToS); здесь проверяется СБОРКА.
+func TestAlignmentAtAnswersInPhysicsCoordinate(t *testing.T) {
+	cn, _, err := Compile(seedmap.Station())
+	if err != nil {
+		t.Fatalf("компиляция: %v", err)
+	}
+	el, ok := cn.Elements["E_MAIN"]
+	if !ok {
+		t.Fatal("в сети нет элемента E_MAIN")
+	}
+	cases := []struct {
+		name       string
+		atM        float64
+		wantRadius float64 // метры; 0 — прямая
+	}{
+		{"начало прямой", 0, 0},
+		{"середина первой прямой", 25, 0},
+		{"первый метр дуги", 51, 500},
+		{"середина дуги", 100, 500},
+		{"последний метр дуги", 149, 500},
+		{"вторая прямая", 200, 0},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s, err := units.MetersToDistance(c.atM)
+			if err != nil {
+				t.Fatalf("%v м: %v", c.atM, err)
+			}
+			grade, radius, err := el.AlignmentAt(s)
+			if err != nil {
+				t.Fatalf("на %s: %v", s, err)
+			}
+			// Станция затравки горизонтальна: уклон обязан быть ровно нулевым, а
+			// не «около нуля». Ненулевой означал бы, что float просочился в
+			// целочисленный ответ через округление.
+			if grade != 0 {
+				t.Fatalf("уклон %d, а станция затравки горизонтальна", grade)
+			}
+			want, err := units.MetersToDistance(c.wantRadius)
+			if err != nil {
+				t.Fatalf("радиус: %v", err)
+			}
+			if radius != want {
+				t.Fatalf("радиус %s, ожидался %s", radius, want)
+			}
+		})
+	}
+}

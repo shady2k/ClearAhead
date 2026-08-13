@@ -180,3 +180,104 @@ func TestProfileUToSAgainstNumericIntegration(t *testing.T) {
 		}
 	}
 }
+
+// slopedProfile — профиль с уклоном и переломом: две площадки и кривая между
+// ними. Плоский профиль для проверки обратного перевода не годится вовсе — на
+// нём s тождественно равно u, и любая ошибка перевода прошла бы незамеченной.
+func slopedProfile(t *testing.T) Profile {
+	t.Helper()
+	m := func(v float64) units.Distance {
+		d, err := units.MetersToDistance(v)
+		if err != nil {
+			t.Fatalf("%v м: %v", v, err)
+		}
+		return d
+	}
+	return Profile{
+		{LengthU: m(120), StartSlope: 0.012, EndSlope: 0.012},
+		{LengthU: m(80), StartSlope: 0.012, EndSlope: -0.018},
+		{LengthU: m(150), StartSlope: -0.018, EndSlope: -0.018},
+	}
+}
+
+// TestSToUInvertsUToS — обратный перевод возвращает туда же, откуда прямой увёл.
+//
+// Допуск ОДИН МИКРОМЕТР, то есть младший разряд представления: обратный перевод
+// ищет наименьшее u, при котором длина достигнута, и на этом разряде обязан
+// сходиться. Больший допуск скрыл бы ошибку в интеграле, меньший требовал бы
+// точности, которой у целых чисел нет.
+func TestSToUInvertsUToS(t *testing.T) {
+	p := slopedProfile(t)
+	for _, meters := range []float64{0, 0.5, 60, 120, 121, 160, 200, 275, 350} {
+		u, err := units.MetersToDistance(meters)
+		if err != nil {
+			t.Fatalf("%v м: %v", meters, err)
+		}
+		s, err := p.UToS(u)
+		if err != nil {
+			t.Fatalf("u = %s: %v", u, err)
+		}
+		back, err := p.SToU(s)
+		if err != nil {
+			t.Fatalf("s = %s: %v", s, err)
+		}
+		if diff := back - u; diff > units.Micrometer || diff < -units.Micrometer {
+			t.Errorf("u = %s → s = %s → u = %s, разошлось на %s", u, s, back, diff)
+		}
+	}
+}
+
+// TestSToUOnFlatProfileIsIdentity — на горизонтали ось равна проекции, и перевод
+// обязан быть тождеством. Проверка отделяет ошибку интеграла от ошибки поиска:
+// здесь интегрировать нечего.
+func TestSToUOnFlatProfileIsIdentity(t *testing.T) {
+	flat := Profile{{LengthU: 230 * units.Meter}}
+	for _, s := range []units.Distance{0, units.Meter, 115 * units.Meter, 230 * units.Meter} {
+		u, err := flat.SToU(s)
+		if err != nil {
+			t.Fatalf("s = %s: %v", s, err)
+		}
+		if u != s {
+			t.Errorf("на горизонтали s = %s дало u = %s", s, u)
+		}
+	}
+}
+
+// TestSToUGrowsWithS — перевод монотонен, потому что монотонна сама ось.
+// Немонотонность означала бы, что поезд, проехав вперёд по s, уехал назад по
+// плану — и радиус кривой под ним прыгнул бы.
+func TestSToUGrowsWithS(t *testing.T) {
+	p := slopedProfile(t)
+	total, err := p.LengthS()
+	if err != nil {
+		t.Fatalf("длина оси: %v", err)
+	}
+	prev := units.Distance(-1)
+	for s := units.Distance(0); s <= total; s += total / 200 {
+		u, err := p.SToU(s)
+		if err != nil {
+			t.Fatalf("s = %s: %v", s, err)
+		}
+		if u < prev {
+			t.Fatalf("s = %s дало u = %s, предыдущее было %s", s, u, prev)
+		}
+		prev = u
+	}
+}
+
+// TestSToURefusesBeyondAxis — за концом оси перевода нет, и это отказ, а не
+// зажим к концу: точка за пределами элемента означает, что вызывающий потерял
+// границу, и молчаливый зажим спрятал бы это.
+func TestSToURefusesBeyondAxis(t *testing.T) {
+	p := slopedProfile(t)
+	total, err := p.LengthS()
+	if err != nil {
+		t.Fatalf("длина оси: %v", err)
+	}
+	if _, err := p.SToU(total + units.Meter); err == nil {
+		t.Fatal("смещение за концом оси принято")
+	}
+	if _, err := p.SToU(-units.Micrometer); err == nil {
+		t.Fatal("отрицательное смещение принято")
+	}
+}
