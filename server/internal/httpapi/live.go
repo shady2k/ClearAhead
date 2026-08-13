@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Живое состояние партии: GET /regions/{region}/live.
@@ -33,25 +35,45 @@ import (
 //
 // # Чего в теле нет
 //
-// Ни времени, ни скорости, ни ускорения, ни горизонта прогноза. Клиенту сегодня
-// нечего экстраполировать, и поля, которых никто не считает, поехали бы нулями
-// — то есть ложью, неотличимой от «не заполнено».
+// Ни скорости, ни ускорения, ни горизонта прогноза. Клиенту сегодня нечего
+// экстраполировать, и поля, которых никто не считает, поехали бы нулями — то
+// есть ложью, неотличимой от «не заполнено».
+//
+// ВРЕМЯ ИЗ ЭТОГО СПИСКА ВЫБЫЛО 2026-08-13: у мира появился ход (engine), и
+// модельное время — единственная величина, которую сегодня действительно
+// считают. Оно и едет.
+//
+// # Почему обработчик спрашивает движок, а не держит партию
+//
+// Здесь стояло `m *match.Match`, и поля читались прямо в ServeHTTP. Пока партия
+// неподвижна, это законно; движок делает её подвижной, и указатель на состояние,
+// которое правит другая горутина, — это гонка. Читатель получает КОПИЮ на
+// границе тика (шов 4: единственный владелец состояния).
 type liveAPI struct {
-	m *match.Match
+	e *engine.Engine
 }
 
 // NewLiveHandler собирает ручку живого состояния.
-func NewLiveHandler(m *match.Match) http.Handler { return &liveAPI{m: m} }
+//
+// Принимает движок, а не партию, и это не удобство вызова: партию у движка
+// нельзя взять иначе как снимком, и обработчик, которому дали бы её напрямую,
+// имел бы способ прочитать состояние мимо замка.
+func NewLiveHandler(e *engine.Engine) http.Handler { return &liveAPI{e: e} }
 
 // wireLive — тело ответа.
 //
 // Поле match называет партию, которой в адресе ещё нет: сущность объявлена
 // раньше, чем адресована. Когда партий станет две, клиент уже знает слово и
 // поле, а не узнаёт о них вместе со сменой адреса.
+// Поле time — МОДЕЛЬНОЕ время партии, микросекунды строкой (units.SimTime).
+// Номер тика рядом не едет нарочно: это внутренний счётчик координации, время
+// выводится из него, и два написания одной величины на проводе разошлись бы у
+// первого же клиента, который выбрал не то.
 type wireLive struct {
-	Region string       `json:"region"`
-	Match  string       `json:"match"`
-	Units  []match.Unit `json:"units"`
+	Region string        `json:"region"`
+	Match  string        `json:"match"`
+	Time   units.SimTime `json:"time"`
+	Units  []match.Unit  `json:"units"`
 }
 
 func (a *liveAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -65,17 +87,25 @@ func (a *liveAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "только GET и HEAD", http.StatusMethodNotAllowed)
 		return
 	}
-	if parts[1] != a.m.Region {
+	// Снимок берётся ПОСЛЕ проверок адреса и метода: копировать состояние ради
+	// ответа 404 незачем.
+	snap := a.e.Snapshot()
+	if parts[1] != snap.Match.Region {
 		http.NotFound(w, r)
 		return
 	}
 	// Единиц может не быть вовсе — это законное состояние мира, и отвечать на
 	// него надо пустым списком, а не 404: партия существует, состава в ней нет.
-	units := a.m.Units
-	if units == nil {
-		units = []match.Unit{}
+	//
+	// Переменная названа placed, а не units: имя units занято ПАКЕТОМ единиц
+	// измерения, и локальная переменная затенила бы его ровно в том месте, где
+	// рядом стоит units.SimTime.
+	placed := snap.Match.Units
+	if placed == nil {
+		placed = []match.Unit{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
-	_ = json.NewEncoder(w).Encode(wireLive{Region: a.m.Region, Match: a.m.ID, Units: units})
+	_ = json.NewEncoder(w).Encode(wireLive{
+		Region: snap.Match.Region, Match: snap.Match.ID, Time: snap.Time, Units: placed})
 }

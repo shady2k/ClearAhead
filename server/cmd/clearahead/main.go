@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"log"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/content"
+	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/httpapi"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
@@ -192,6 +194,23 @@ func main() {
 		log.Printf("партия %s: подвижных единиц %d", game.ID, n)
 	}
 
+	// ХОД ВРЕМЕНИ. С этой строки партия перестаёт быть неподвижной картинкой:
+	// движок берёт её во владение, и читать её по указателю `game` дальше
+	// нельзя — отсюда он никуда больше не передаётся.
+	//
+	// Петля пускается ДО HTTP-сервера, а не после: иначе первый запрос,
+	// пришедший в ту же миллисекунду, увидел бы мир, в котором время ещё стоит,
+	// и разница была бы не в числах, а в объяснении — «у вас сервер иногда
+	// отдаёт нулевое время» ловится потом днями.
+	//
+	// Контекст здесь Background и отмены не имеет НАРОЧНО: у сервера нет мягкого
+	// завершения вовсе (разбор — у ключа -quit-after ниже), и заводить его ради
+	// одной петли значило бы городить остановку для процесса, который гасится
+	// os.Exit. Отмена нужна тем, кто крутит движок в тестах, и там она есть.
+	sim := engine.New(game)
+	go sim.Run(context.Background())
+	log.Printf("время партии %s идёт: тик %s", game.ID, engine.TickDuration)
+
 	mux := http.NewServeMux()
 	// Каталог регионов — БЕЗ косой черты, и это не опечатка рядом со строкой
 	// ниже: у ServeMux "/regions" адресует один ресурс, "/regions/" — поддерево.
@@ -207,7 +226,7 @@ func main() {
 		// принимает тот, кто собирает сервер, а не тот, кто отдаёт байты.
 		httpapi.NewChunksHandler(world, lazy),
 		httpapi.NewObjectsHandler(store),
-		httpapi.NewLiveHandler(game),
+		httpapi.NewLiveHandler(sim),
 	))
 	// Набор контента и байты ассетов — БЕЗ региона в адресе, и это решение, а не
 	// экономия: «ВЛ80 — общий контент, к карте отношения не имеет» (владелец,

@@ -6,15 +6,21 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
-func liveFixture() *match.Match {
-	return &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
+// liveFixture — движок с одной поставленной единицей.
+//
+// Отдаётся именно ДВИЖОК, а не партия: с 2026-08-13 состоянием владеет он, и
+// тест, собирающий партию мимо него, проверял бы форму, которой в сервере нет.
+func liveFixture() *engine.Engine {
+	return engine.New(&match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
 		ID: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: "E_MAIN", U: 150, Direction: netloc.DirForward},
-	}}}
+	}}})
 }
 
 func TestLiveServesUnits(t *testing.T) {
@@ -29,8 +35,9 @@ func TestLiveServesUnits(t *testing.T) {
 		t.Fatalf("Cache-Control %q, ожидалось no-store", cc)
 	}
 	var got struct {
-		Region string `json:"region"`
-		Match  string `json:"match"`
+		Region string        `json:"region"`
+		Match  string        `json:"match"`
+		Time   units.SimTime `json:"time"`
 		Units  []struct {
 			ID   string        `json:"id"`
 			Type string        `json:"type"`
@@ -55,11 +62,42 @@ func TestLiveServesUnits(t *testing.T) {
 	}
 }
 
+// TestLiveCarriesModelTime — время партии доезжает до клиента и РАСТЁТ.
+//
+// Проверка сквозная нарочно: движок, у которого время идёт, но наружу не
+// выходит, снаружи неотличим от стоящего. Шаги подаются напрямую (engine.Step),
+// а не ожиданием настенных часов, — ровно затем, чтобы тест не зависел от
+// таймингов.
+func TestLiveCarriesModelTime(t *testing.T) {
+	e := liveFixture()
+	h := NewLiveHandler(e)
+	read := func() units.SimTime {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
+		var got struct {
+			Time units.SimTime `json:"time"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("разбор: %v", err)
+		}
+		return got.Time
+	}
+	if now := read(); now != 0 {
+		t.Fatalf("непрокрученная партия отдаёт время %s, ожидался ноль", now)
+	}
+	for range 7 {
+		e.Step()
+	}
+	if now, want := read(), 7*engine.TickDuration; now != want {
+		t.Fatalf("после семи тиков отдано %s, ожидалось %s", now, want)
+	}
+}
+
 // TestLiveEmptyMatchIsNotFound404 — партия без состава отвечает ПУСТЫМ СПИСКОМ,
 // а не 404: партия существует, состава в ней нет. 404 означал бы, что мира нет.
 func TestLiveEmptyMatchIsNotFound404(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewLiveHandler(&match.Match{ID: "M1", Region: "ST_A"}).
+	NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: "ST_A"})).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d, ожидался 200", rec.Code)
