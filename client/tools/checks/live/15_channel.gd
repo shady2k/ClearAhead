@@ -77,6 +77,7 @@ func run() -> void:
 			"%d -> %d мкс" % [first.time_us, last.time_us])
 
 	await _check_reconnect(ch, snaps, breaks)
+	await _check_controls(ch, doc, snaps)
 	ch.stop()
 	ch.queue_free()
 	await _check_refusal(doc)
@@ -103,6 +104,89 @@ func _check_reconnect(ch: LiveChannel, snaps: Array, breaks: Array) -> void:
 	# что после каждого разрыва пропусков как будто не было.
 	_ok("счётчик снапшотов продолжился", ch.last_snapshot_seq > was_seq,
 		"%d -> %d" % [was_seq, ch.last_snapshot_seq])
+
+
+## РУКОЯТКИ — первая доменная команда, через настоящий сокет.
+##
+## Проверяется вся дорога: команда ушла, положение встало на сервере, ответ
+## разобран клиентом, и следом САМ пришёл снапшот с новым положением — потому
+## что состояние изменилось, а не потому что настал срок биения.
+func _check_controls(ch: LiveChannel, doc, snaps: Array) -> void:
+	var unit_id := ""
+	var limits := {}
+	var last: LiveChannel.Snapshot = snaps[snaps.size() - 1]
+	for raw in last.units:
+		var u := raw as Dictionary
+		if (u.get("controls", null)) != null:
+			unit_id = String(u.get("id", ""))
+			break
+	_ok("в партии есть машина с органами управления", unit_id != "")
+	if unit_id == "":
+		return
+
+	# ПРЕДЕЛЫ — ИЗ ПАСПОРТА, а не из головы проверки: клиент их тоже берёт
+	# оттуда, и проверка, зашившая своё число, разошлась бы с обоими.
+	var set_res := await ctx.api.content()
+	_ok("набор контента получен", not set_res.failed(), set_res.reason)
+	if set_res.failed():
+		return
+	var type_id := ""
+	for raw in last.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) == unit_id:
+			type_id = String(u.get("type", ""))
+	for raw in (set_res.data.get("stock", []) as Array):
+		var t := raw as Dictionary
+		if String(t.get("id", "")) == type_id:
+			limits = (t.get("controls", {})) as Dictionary
+	_ok("паспорт машины называет ступени", not limits.is_empty(), type_id)
+	if limits.is_empty():
+		return
+	var notches := int(limits.get("traction_notches", 0))
+	_ok("ступеней тяги больше нуля", notches > 0, str(notches))
+
+	var accepted: Array[Dictionary] = []
+	var refused: Array[String] = []
+	ch.controls_set.connect(func(_u: String, c: Dictionary) -> void: accepted.append(c))
+	ch.controls_refused.connect(func(reason: String, _t: String) -> void: refused.append(reason))
+
+	var before := snaps.size()
+	ch.set_controls(unit_id, 7, 0, "forward")
+	var answered := await _until(func() -> bool: return not accepted.is_empty() or not refused.is_empty())
+	_ok("сервер ответил на команду органов", answered, str(refused))
+	if not answered or accepted.is_empty():
+		return
+	var stood: Dictionary = accepted[0]
+	var bad: String = doc.validate("controls", stood)
+	_ok("положение в ответе сходится с договором", bad == "", bad)
+	_ok("встало то, что просили",
+		int(stood.get("traction", -1)) == 7 and String(stood.get("reverser", "")) == "forward",
+		str(stood))
+
+	# СНАПШОТ ПРИХОДИТ ОТ КОМАНДЫ: состояние изменилось — рассылка не ждёт биения.
+	var came := await _until(func() -> bool: return snaps.size() > before)
+	_ok("снапшот принёс новое положение сам", came)
+	if came:
+		var fresh: LiveChannel.Snapshot = snaps[snaps.size() - 1]
+		var seen := {}
+		for raw in fresh.units:
+			var u := raw as Dictionary
+			if String(u.get("id", "")) == unit_id:
+				seen = (u.get("controls", {})) as Dictionary
+		_ok("в снапшоте органы той же машины", int(seen.get("traction", -1)) == 7, str(seen))
+
+	# СТУПЕНЬ ЗА ПРЕДЕЛОМ ПАСПОРТА — отказ с объявленной причиной.
+	ch.set_controls(unit_id, notches + 1, 0, "forward")
+	var said := await _until(func() -> bool: return not refused.is_empty())
+	_ok("ступень за пределом отказана", said, str(accepted.size()))
+	if said:
+		_ok("причина отказа объявлена договором", doc.refusal_reasons.has(refused[0]), refused[0])
+		_ok("причина именно про ступень", refused[0] == "notch_out_of_range", refused[0])
+
+	# И ВОЗВРАЩАЕМ МАШИНУ В НОЛЬ: проверка не оставляет мир в тяге, иначе
+	# следующий прогон начинался бы не с того состояния, о котором он думает.
+	ch.set_controls(unit_id, 0, 0, "neutral")
+	await _until(func() -> bool: return accepted.size() > 1)
 
 
 ## ОТКАЗ — тоже часть договора: клиент разбирает его машинно.

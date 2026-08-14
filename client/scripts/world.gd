@@ -256,6 +256,13 @@ var _stock_signature := ""
 ## Загрузка кончилась — экран собран целиком и его можно перерисовывать снаружи.
 var _loaded := false
 
+## КАБИНА — рукоятки под рукой машиниста (ClearAhead-6ygr).
+##
+## Живёт всё время, а не только в кабине: пустая кабина отвечает «я не в
+## кабине» одной проверкой, а создавать её на посадке значило бы иметь два
+## состояния «нет объекта» и «объект без машины» вместо одного.
+var cab := Cab.new()
+
 var stats := {}
 var errors: Array[String] = []
 var report_lines: Array[String] = []
@@ -954,6 +961,8 @@ func _open_channel() -> LiveChannel.Snapshot:
 	channel.region = region
 	channel.snapshot.connect(_on_snapshot)
 	channel.broke.connect(_on_channel_broke)
+	channel.controls_set.connect(_on_controls_set)
+	channel.controls_refused.connect(_on_controls_refused)
 	add_child(channel)
 	channel.start()
 
@@ -994,6 +1003,49 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 	stats["channel_note"] = ""
 	var signature := JSON.stringify(snap.units)
 	stats["channel_stock_changed"] = _stock_signature != "" and signature != _stock_signature
+	# Кабина берёт положение рукояток из снапшота: истина о машине приходит
+	# оттуда, а не остаётся тем, что игрок в последний раз выставил.
+	if cab.aboard():
+		cab.confirm(_controls_of(cab.unit_id))
+		_cab_stats()
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+## _on_controls_set — сервер принял команду и вернул положение, КОТОРОЕ ВСТАЛО.
+func _on_controls_set(unit: String, controls: Dictionary) -> void:
+	if cab.unit_id != unit:
+		return
+	cab.answered(controls)
+	_cab_stats()
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+## _on_controls_refused — сервер не принял команду.
+##
+## Рукоятка возвращается туда, где она на самом деле, а причина идёт НА ЭКРАН:
+## отказ, обработанный молча, оставил бы игрока дёргать рукоятку, которая не
+## двигается, без единого слова о том, почему.
+func _on_controls_refused(reason: String, text: String) -> void:
+	cab.refused(text)
+	stats["cab_refusal_reason"] = reason
+	_cab_stats()
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+## _send_controls — отправить положение рукояток серверу.
+func _send_controls() -> void:
+	if channel == null or not cab.aboard():
+		return
+	if channel.set_controls(cab.unit_id, cab.traction, cab.brake, cab.reverser) < 0:
+		# Канал закрыт — команда не ушла. Рукоятка откатывается: показывать её
+		# набранной значило бы обещать тягу, о которой сервер не услышал.
+		cab.refused("канал закрыт — команда не ушла")
+		return
+	cab.sent()
+	_cab_stats()
 	if _loaded and ui_label != null:
 		_refresh_ui()
 
@@ -2321,7 +2373,92 @@ func _stock_posts() -> Array[Driver.Post]:
 ## это не поломка, а состояние.
 func _on_boarding(note: String) -> void:
 	stats["driver_board"] = note
+	_bind_cab()
 	_refresh_ui()
+
+
+## _bind_cab — связать кабину с машиной, в которую сел человек.
+##
+## ПРЕДЕЛЫ БЕРУТСЯ ИЗ ПАСПОРТА, а положение — из последнего снапшота: клиент не
+## выдумывает ни числа ступеней, ни того, где сейчас стоят рукоятки. Нет
+## паспорта или нет органов — кабина остаётся пустой, и рукоятки не двигаются:
+## машина без объявленных органов управления не управляется, а не управляется
+## «как-нибудь».
+func _bind_cab() -> void:
+	if _driver == null or not _driver.is_boarded():
+		cab.leave()
+		return
+	var unit_id := _driver.boarded_unit()
+	var type_id := ""
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		if u.id == unit_id:
+			type_id = u.type_id
+			break
+	var limits: Dictionary = ((_stock_types.get(type_id, {}) as Dictionary).get("controls", {})) as Dictionary
+	if limits.is_empty():
+		cab.leave()
+		errors.append("у машины %s нет объявленных органов управления — рукоятки не двигаются" % type_id)
+		return
+	cab.bind(unit_id, limits, _controls_of(unit_id))
+	_cab_stats()
+	_look_at_machine(unit_id)
+
+
+## _look_at_machine — навести обзорную камеру на машину, которой управляют.
+##
+## КАБИНА НЕ ОТРИСОВАНА (решение владельца, разговор 2026-08-14): в ассете есть
+## кузов и стёкла, пульта нет. Поэтому машинист смотрит на свою машину СНАРУЖИ, а
+## рукоятки читает в HUD.
+##
+## Фокус приходит камере СНАРУЖИ — это её собственное правило: «точки фокуса
+## константой здесь нет, фокус приходит из габаритов того, что приехало с
+## сервера». Габарит берётся у машины: кадр в полторы её длины показывает машину
+## целиком и немного пути под ней.
+func _look_at_machine(unit_id: String) -> void:
+	var orbit := camera as OrbitCamera
+	if orbit == null:
+		return
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		if u.id != unit_id or u.node == null:
+			continue
+		# Возвышение небольшое: сверху машина читается пятном, а с уровня земли
+		# видно и её саму, и путь, по которому она поедет.
+		orbit.configure(u.node.global_position, maxf(u.length_m * 1.5, 40.0),
+			orbit.azimuth_deg, 14.0, false)
+		return
+
+
+## _cab_stats — числа кабины в отчёт.
+##
+## В ОТЧЁТ, а не только на экран: положение рукояток — это то, что проверяющий
+## обязан прочитать числом. Снимок показывает кабину, но «тяга 7» на нём глазами
+## от «тяги 1» отличается плохо, а в отчёте это разные строки.
+func _cab_stats() -> void:
+	if not cab.aboard():
+		stats.erase("cab_unit")
+		return
+	stats["cab_unit"] = cab.unit_id
+	stats["cab_traction"] = "%d/%d" % [cab.traction, cab.traction_notches]
+	stats["cab_brake"] = "%d/%d" % [cab.brake, cab.brake_notches]
+	stats["cab_reverser"] = cab.reverser
+	stats["cab_pending"] = cab.pending
+	stats["cab_on_machine"] = "%d/%d/%s" % [cab.set_traction, cab.set_brake, cab.set_reverser]
+
+
+## _controls_of — положение органов машины из последнего снапшота.
+func _controls_of(unit_id: String) -> Dictionary:
+	if channel == null or channel.last_snapshot == null:
+		return {}
+	for raw in channel.last_snapshot.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) == unit_id:
+			var c: Variant = u.get("controls", {})
+			if typeof(c) == TYPE_DICTIONARY:
+				return c as Dictionary
+			return {}
+	return {}
 
 
 ## _on_prompt — подсказка подошедшему. Пустая строка гасит её целиком.
@@ -2431,15 +2568,56 @@ func _role_bbox(elements: Array[TrackGeom.Element]) -> Rect2:
 ## Слушается ВСЕГДА, в том числе когда ввод у мира отобран паузой: числа
 ## отладки — не действие в мире, и посмотреть их из-под меню законно. Тем эта
 ## клавиша и отличается от E, V и F, которые гаснут вместе с вводом.
+## РУКОЯТКИ НА ЦИФРАХ, и это вынужденный выбор, а не вкус: буквы и стрелки уже
+## заняты ходьбой (WASD), камерой (стрелки), посадкой (E), видом (V, F), паузой
+## показа (P) и панелью (H). Цифры свободны и ложатся парами.
+##
+##   1 / 2 — контроллер тяги на ступень вниз / вверх
+##   3 / 4 — тормоз на ступень вниз / вверх
+##   R     — реверсор вперёд, Shift+R — назад (только при нулевой тяге)
+##   0     — всё в ноль: тяга сброшена, тормоз полный, реверсор в ноль
+const CAB_KEYS := {
+	KEY_1: "traction-",
+	KEY_2: "traction+",
+	KEY_3: "brake-",
+	KEY_4: "brake+",
+	KEY_R: "reverser",
+	KEY_0: "release",
+}
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
-	if not key.pressed or key.echo or key.keycode != KEY_H:
+	if not key.pressed or key.echo:
 		return
-	if ui_label != null:
-		ui_label.visible = not ui_label.visible
+	if key.keycode == KEY_H:
+		if ui_label != null:
+			ui_label.visible = not ui_label.visible
+		get_viewport().set_input_as_handled()
+		return
+	if not cab.aboard() or not CAB_KEYS.has(key.keycode):
+		return
+	# Клавиша съедается ТОЛЬКО когда игрок в кабине: иначе цифры перестали бы
+	# доходить до всех прочих, кто их ждёт, ради рукояток, которых нет.
 	get_viewport().set_input_as_handled()
+	var moved := false
+	match String(CAB_KEYS[key.keycode]):
+		"traction-":
+			moved = cab.notch_traction(-1)
+		"traction+":
+			moved = cab.notch_traction(1)
+		"brake-":
+			moved = cab.notch_brake(-1)
+		"brake+":
+			moved = cab.notch_brake(1)
+		"reverser":
+			moved = cab.shift_reverser(-1 if key.shift_pressed else 1)
+		"release":
+			moved = cab.release_all()
+	if moved:
+		_send_controls()
 
 
 func _refresh_ui() -> void:
@@ -2465,6 +2643,11 @@ func _hud_text() -> String:
 			String(stats.get("channel_session", "")).left(8)])
 	if String(stats.get("channel_note", "")) != "":
 		l.append("  [color=#ff8080]канал: %s[/color]" % stats["channel_note"])
+	# КАБИНА — сразу под каналом: рукоятки едут тем же каналом, и когда он
+	# сломан, видно, почему рукоятка не слушается.
+	if cab.aboard():
+		l.append(cab.text())
+		l.append("  [i]1/2 тяга, 3/4 тормоз, R реверсор (Shift+R назад), 0 всё в ноль[/i]")
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
 			stats.get("epoch"), stats.get("revision"), stats.get("network_model_hash"),
@@ -2644,6 +2827,10 @@ func _print_report() -> void:
 			# единого запроса, и есть доказательство, что состояние ПРИХОДИТ.
 			# Глазами на снимке этого не увидеть — цифра меняется между кадрами.
 			"channel_session", "channel_seq", "channel_time_us", "channel_stock_changed", "channel_note",
+			# КАБИНА: положение рукояток числами. Снимок показывает, что кабина
+			# есть; отчёт — что в ней выставлено.
+			"cab_unit", "cab_traction", "cab_brake", "cab_reverser", "cab_pending",
+			"cab_on_machine", "cab_refusal_reason",
 			"structures_received", "features_received", "runs_received", "track_types_received",
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",

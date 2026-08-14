@@ -31,16 +31,26 @@
 ## «сервер перезапустился», и держаться за старый ключ значило бы считать
 ## защищёнными повторы, которых никто не защищает.
 ##
-## # Чего здесь нет
+## # Команды вверх появились
 ##
-## Команд вверх. Канал их принимает, но первая доменная команда — органы
-## управления кабины (ClearAhead-6ygr): контроллер тяги, реверсор, кран
-## машиниста. Здесь клиент только здоровается и слушает.
+## Здесь была строка «команд вверх нет: первая доменная команда — органы
+## управления кабины (ClearAhead-6ygr)». Она пришла: set_controls шлёт
+## положение всех органов разом и получает то, ЧТО ВСТАЛО.
+##
+## Чего по-прежнему нет: стрелок, маршрутов и целей ведения. Первые две —
+## диспетчерская половина (ClearAhead-duf), третья — автопилот В6.
 class_name LiveChannel
 extends Node
 
 ## Пришёл разобранный снимок партии.
 signal snapshot(snap: Snapshot)
+
+## Команда органов управления принята: положение, КОТОРОЕ ВСТАЛО на сервере.
+signal controls_set(unit: String, controls: Dictionary)
+
+## Команда органов управления отказана. reason — машинная причина (её сравнивает
+## машина), text — человеческая (её читает игрок).
+signal controls_refused(reason: String, text: String)
 
 ## Канал перестал быть живым и вот почему. Строка для человека: HUD показывает
 ## её как есть, а не переводит обратно в код.
@@ -55,6 +65,9 @@ const PROTOCOL_VERSION := 1
 
 ## Метод уведомления сверху вниз.
 const SNAPSHOT_METHOD := "snapshot"
+
+## Имя команды органов управления.
+const CONTROLS_METHOD := "controls.set"
 
 ## Причины отказа, НА КОТОРЫЕ КЛИЕНТ ДЕЙСТВУЕТ по-разному.
 ##
@@ -115,6 +128,14 @@ var greeted := false
 
 var _pipe: NetChannel = null
 var _hello_id := -1
+## _commands — id запроса -> command_id, чтобы ответ нашёл свою команду.
+var _commands := {}
+## _next_command — счётчик ключей идемпотентности.
+##
+## Ключ обязан быть уникален в пределах сессии и ОДИНАКОВ у повтора: сервер по
+## нему узнаёт, что это та же команда. Счётчик клиента даёт и то, и другое, а
+## случайный ключ у повтора дал бы второе применение.
+var _next_command := 0
 var _retry_left := 0.0
 ## _closed_by_us — признак «мы уходим сами»: тогда переподключаться не надо.
 var _closed_by_us := false
@@ -193,7 +214,68 @@ func _on_closed(reason: String) -> void:
 	_retry_left = RETRY_DELAY_S
 
 
+## set_controls — поставить органы управления машины.
+##
+## СТАВЯТСЯ ВСЕ ОРГАНЫ РАЗОМ — так объявлено договором: частичная правка не
+## отличима от постановки нуля. Возвращает id запроса или -1, если канал закрыт.
+##
+## Отклик рукоятки НА ЭКРАНЕ клиент показывает сам и немедленно (cab.gd); сюда
+## приходит истина, и она может отличаться — тогда рукоятка встанет туда, куда
+## её поставил сервер.
+func set_controls(unit: String, traction: int, brake: int, reverser: String) -> int:
+	if not greeted:
+		return -1
+	_next_command += 1
+	var id := _pipe.send(CONTROLS_METHOD,
+		controls_params("c%d" % _next_command, unit, traction, brake, reverser))
+	if id >= 0:
+		_commands[id] = unit
+	return id
+
+
+## controls_params — params команды органов управления.
+##
+## Отдельной функцией и статической РАДИ ПРОВЕРКИ: чистая проверка контракта
+## сверяет с договором ровно то, что клиент отправляет, а не свой пересказ этого.
+## Собранный в проверке заново, он согласился бы с клиентом в любой общей
+## ошибке — той самой, из-за которой клиент однажды читал переименованное поле и
+## не падал.
+static func controls_params(command_id: String, unit: String,
+		traction: int, brake: int, reverser: String) -> Dictionary:
+	return {
+		"command_id": command_id,
+		"unit": unit,
+		"traction": traction,
+		"brake": brake,
+		"reverser": reverser,
+	}
+
+
 func _on_answered(id: int, result: Variant, error: Dictionary) -> void:
+	if _commands.has(id):
+		var unit := String(_commands[id])
+		_commands.erase(id)
+		if not error.is_empty():
+			var data: Variant = error.get("data", {})
+			var reason := ""
+			if typeof(data) == TYPE_DICTIONARY:
+				reason = String((data as Dictionary).get("reason", ""))
+			# ОТКАЗ КОМАНДЫ — НЕ ПОЛОМКА КАНАЛА. Сервер сказал «так нельзя»
+			# (ступень за пределом, тяга при нулевом реверсоре), и разговор
+			# продолжается: рвать соединение из-за неверной команды значило бы
+			# наказывать игрока за то, что он подёргал рукоятку.
+			controls_refused.emit(reason, String(error.get("message", "команда отказана")))
+			return
+		if typeof(result) != TYPE_DICTIONARY:
+			_fail("ответ команды органов не объект")
+			return
+		var res := result as Dictionary
+		var c: Variant = res.get("controls")
+		if typeof(c) != TYPE_DICTIONARY:
+			_fail("ответ команды органов без положения")
+			return
+		controls_set.emit(unit, c as Dictionary)
+		return
 	if id != _hello_id:
 		# Ответ не на наш запрос. Сегодня клиент шлёт единственный запрос, и
 		# такой ответ означал бы расхождение с сервером, а не чужой разговор.
