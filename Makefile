@@ -129,6 +129,34 @@ FRAME  ?= network
 REACH ?=
 REACH_ARG := $(if $(REACH),--reach=$(REACH))
 
+## PROBE_REACH — УКОРОЧЕННЫЙ ВЗГЛЯД ДЛЯ ЗОНДОВ, и это ответ на «тесты идут
+## долго» (владелец, 2026-08-15), данный ЗАМЕРОМ, а не на глаз.
+##
+## Замер (машина владельца, сервер на петле, зонд кабины целиком):
+##
+##   взгляд 2000 м (умолчание)   24.8 с, чанков 80, рельеф 18.2 с
+##   взгляд 500 м                14.7 с, чанков 31, рельеф  8.8 с
+##
+## Двенадцать замеров зонда при этом те же самые: он нажимает клавиши и читает
+## ответ сервера, а дальний лес в этом не участвует. То же у зонда ходьбы (12 м
+## пути под ногами) и зонда постановки (габарит одной машины).
+##
+## УМЕНЬШАЕТСЯ ВЗГЛЯД, А НЕ МИР. Второй файл карты «поменьше» в проекте уже был и
+## снесён 2026-08-12 с записанным доводом: размер мира — свойство карты, а
+## «сделай поменьше» означало бы мир, которого нет ни в одном файле. Вопрос «как
+## далеко видно» — к ВЗГЛЯДУ, и отвечает на него клиент.
+##
+## ЧЕГО ЭТО НЕ ЛЕЧИТ, и это главное число здесь: из 24.8 с восемнадцать — ожидание
+## сети, потому что клиент просит чанки ПО ОДНОМУ (бида ClearAhead-s42: 260
+## запросов подряд по ~90 мс на петле, где round-trip — десятки микросекунд).
+## Укороченный взгляд убирает половину времени, починка s42 убрала бы почти всё —
+## и в игре, а не только в зондах.
+##
+## Снимок (client-shot) умолчания НЕ получает: он единственное доказательство,
+## что мир нарисован, и укоротить ему взгляд значило бы доказывать меньшее.
+PROBE_REACH ?= 500
+PROBE_REACH_ARG := $(if $(REACH),--reach=$(REACH),--reach=$(PROBE_REACH))
+
 ## BOARD — посадить машиниста в кабину сразу, не подводя его к машине пешком.
 ##
 ## Ключ снимка и зонда, а не игрока: игрок жмёт E, подойдя к локомотиву, а
@@ -174,7 +202,7 @@ help:
 	@echo '  make client-fixtures    переснять снимок сети с живого сервера'
 	@echo '  make client-shot        снимок экрана в $(SHOT), окно за экраном'
 	@echo
-	@echo 'Переменные: MAP, CONTENT, PLACEMENT, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH, BOARD'
+	@echo 'Переменные: MAP, CONTENT, PLACEMENT, DB, DEV_RESEED, SERVER_ADDR, GODOT, REGION, SHOT, ROLE, FRAME, REACH, PROBE_REACH, BOARD'
 	@echo 'BOARD=1 сажает машиниста в кабину сразу: клавишу E снимку нажимать некому.'
 	@echo 'NOHUD=1 снимает кадр без панели отладки — для того, что смотрят, а не читают.'
 	@echo 'CONTENT — набор: какие машины бывают. PLACEMENT — расстановка партии: что где стоит.'
@@ -383,7 +411,7 @@ WALK_ARGS := $(if $(TRACE),--trace)
 walk-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/walk_probe.gd -- \
-		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(REACH_ARG) $(WALK_ARGS)
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG) $(WALK_ARGS)
 
 
 ## stock-probe — СТОИТ ЛИ МАШИНА НА РЕЛЬСАХ. Сервер должен быть уже поднят.
@@ -403,7 +431,7 @@ walk-probe: client-import
 stock-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/stock_probe.gd -- \
-		--server=$(SERVER_URL) --region=$(REGION) --role=builder $(REACH_ARG)
+		--server=$(SERVER_URL) --region=$(REGION) --role=builder $(PROBE_REACH_ARG)
 
 
 ## cab-probe — ДОХОДИТ ЛИ КЛАВИША ДО РУКОЯТКИ. Сервер должен быть уже поднят.
@@ -422,7 +450,7 @@ stock-probe: client-import
 cab-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/cab_probe.gd -- \
-		--server=$(SERVER_URL) --region=$(REGION) --role=driver --board $(REACH_ARG)
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver --board $(PROBE_REACH_ARG)
 
 
 ## client-fixtures — переснять снимок сети с живого сервера.
