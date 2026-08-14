@@ -93,7 +93,24 @@ func _run() -> void:
 		seq_frames, float(seq_frames) / addrs.size(),
 		(seq_us / 1000.0) / maxf(1.0, float(seq_frames))])
 
-	# 2. ПАРАЛЛЕЛЬНО — несколько узлов HTTPRequest в полёте разом.
+	# 2. ПАРАЛЛЕЛЬНО — развёрткой по числу запросов в полёте: константу
+	#    выбирают замером, а не на глаз.
+	for n in [2, 4, 8, 16, 32]:
+		var s0 := Time.get_ticks_usec()
+		var d := [0]
+		var k := 0
+		while k < addrs.size():
+			var b := mini(n, addrs.size() - k)
+			for i in range(b):
+				_fetch_async(addrs[k + i], d)
+			k += b
+			while d[0] < k:
+				await process_frame
+		var us := Time.get_ticks_usec() - s0
+		print("  в полёте %2d: %.0f мс (в %.1f раза быстрее последовательного)" % [
+			n, us / 1000.0, float(seq_us) / float(us)])
+
+	# 2б. ПАРАЛЛЕЛЬНО — несколько узлов HTTPRequest в полёте разом.
 	t0 = Time.get_ticks_usec()
 	f0 = Engine.get_process_frames()
 	var done := [0]

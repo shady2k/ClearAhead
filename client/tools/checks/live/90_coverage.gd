@@ -65,11 +65,17 @@ func run() -> void:
 	var hollow: Array[String] = []
 	var tiles := {}
 	var t0 := Time.get_ticks_usec()
+	# АДРЕСА ЕДУТ РАЗОМ (ClearAhead-s42): запрос из Godot стоит пять оборотов
+	# главного цикла, и последовательный обход платил их за каждый чанк.
+	# Проверка ходит той же дорогой, что игра, — значит и параллель у неё та же,
+	# слоя, а не своя.
 	for level in range(0, rule.max_level + 1):
-		for c_raw in rule.cells_for_level(axis, bbox, level):
-			var a: Dictionary = c_raw
+		var cells: Array = rule.cells_for_level(axis, bbox, level)
+		var heights: Array = await ctx.api.chunks(ctx.region, cells)
+		for i in range(cells.size()):
+			var a: Dictionary = cells[i]
 			requested += 1
-			var r := await ctx.api.chunk(ctx.region, int(a["level"]), int(a["cx"]), int(a["cz"]))
+			var r: WorldApi.Heights = heights[i]
 			if r.failed():
 				_ok("покрытие: чанк %d/%d/%d доехал" % [a["level"], a["cx"], a["cz"]], false,
 					r.reason)
@@ -412,12 +418,14 @@ func _check_short_view(axis: PackedVector2Array, bbox: Rect2, full_requested: in
 	var above: Array[String] = []
 	var t0 := Time.get_ticks_usec()
 	for level in range(0, rule.view_max_level + 1):
-		for c_raw in rule.cells_for_level(axis, bbox, level):
-			var a: Dictionary = c_raw
+		var cells: Array = rule.cells_for_level(axis, bbox, level)
+		var heights: Array = await ctx.api.chunks(ctx.region, cells)
+		for i in range(cells.size()):
+			var a: Dictionary = cells[i]
 			requested += 1
 			if int(a["level"]) > rule.view_max_level:
 				above.append(ChunkRule.key_of(int(a["level"]), int(a["cx"]), int(a["cz"])))
-			var r := await ctx.api.chunk(ctx.region, int(a["level"]), int(a["cx"]), int(a["cz"]))
+			var r: WorldApi.Heights = heights[i]
 			if r.failed():
 				_ok("сокращённый взгляд: чанк %d/%d/%d доехал" % [a["level"], a["cx"], a["cz"]],
 					false, r.reason)
