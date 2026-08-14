@@ -237,6 +237,25 @@ var camera: Camera3D
 ## а не адресами. Ни кода ответа, ни имени заголовка отсюда не видно (WorldApi).
 var api: WorldApi
 
+## КАНАЛ — живое состояние партии, приходящее САМО.
+##
+## Второй слой рядом с api, и деление между ними по природе, а не по удобству:
+## api отвечает на ВОПРОСЫ (манифест, сеть, рельеф — то, что клиент спрашивает
+## сам), канал ПРИСЫЛАЕТ (положение состава — то, что меняет сервер). Спрашивать
+## живое состояние по кругу нельзя: темп опроса стал бы темпом мира.
+##
+## Держится всё время игры, а не на время загрузки: разрыв переживается сам
+## (LiveChannel), и клиент возвращается в ту же сессию.
+var channel: LiveChannel
+
+## Подпись состава на последнем применённом снапшоте. По ней решается,
+## перестраивать ли постановку: биение приходит не реже раза в секунду
+## модельного времени и обычно несёт ровно то же состояние.
+var _stock_signature := ""
+
+## Загрузка кончилась — экран собран целиком и его можно перерисовывать снаружи.
+var _loaded := false
+
 var stats := {}
 var errors: Array[String] = []
 var report_lines: Array[String] = []
@@ -810,12 +829,15 @@ func _load_world() -> void:
 	# 1а. МАТЧ — раньше сети: версионные адреса мира идут через /matches/{m}/,
 	#     и имя матча клиент узнаёт из живого состояния партии, а не из
 	#     манифеста (матч->регион заводит серверная композиция, main.go).
-	var live_res: WorldApi.Live = await api.live(region)
-	if live_res.failed():
-		_fail("живое состояние: %s" % live_res.reason)
+	#
+	# С 2026-08-14 состояние приходит КАНАЛОМ, а не разовым GET /live: рукопожатие
+	# отдаёт полный снапшот, и он же служит первым состоянием мира. Загрузка ждёт
+	# его так же, как ждала ответа, — без матча версионных адресов не собрать.
+	var first := await _open_channel()
+	if first == null:
 		_refresh_ui()
 		return
-	_match_id = String(live_res.data.get("match", ""))
+	_match_id = first.match_id
 	if _match_id == "":
 		_fail("живое состояние не назвало матч — версионные адреса мира не собрать")
 		_refresh_ui()
@@ -850,7 +872,7 @@ func _load_world() -> void:
 	# поверхности катания, отметку которой несёт сам элемент. Ждать рельеф,
 	# чтобы показать локомотив, значило бы поставить показ в зависимость от
 	# двухсот запросов чанков.
-	await _load_rolling_stock(elements, live_res)
+	await _load_rolling_stock(elements, first)
 
 	# 3. Рельеф. Адреса чанков клиент выводит САМ, из правила манифеста и
 	#    собственной оси.
@@ -893,6 +915,13 @@ func _load_world() -> void:
 	# двадцать мегабайт против килобайтов всего остального; поставь его в
 	# начало — и первый кадр ждал бы вида машины, которую уже видно коробкой.
 	await _load_stock_meshes()
+	# С этой строки экран вправе перерисовываться СНАРУЖИ загрузки — снапшотом
+	# канала. Раньше нельзя: HUD собирается из набора чисел, который загрузка
+	# заполняет по частям, и перерисовка на середине читала бы половину набора.
+	# Это не догадка — так и вышло: снапшот, пришедший во время загрузки
+	# рельефа, уронил сборку строки на ключе chunks_by_level, которого ещё не
+	# было.
+	_loaded = true
 	_refresh_ui()
 
 
@@ -906,7 +935,82 @@ func _load_world() -> void:
 ## законен и рисуется целиком. Причина уезжает в отказы на экране, а не в лог,
 ## потому что записанная в проекте грабля звучит так: отказ обработан штатно, в
 ## логе пусто, а на экране пусто тоже.
-func _load_rolling_stock(elements: Array[TrackGeom.Element], live_res: WorldApi.Live) -> void:
+## ОЖИДАНИЕ ПЕРВОГО СНАПШОТА — столько же, сколько прежде ждали ответа GET /live.
+##
+## Секунды здесь настенные, и это единственное место канала, где они уместны: мир
+## ещё не идёт, ждём мы соединения, а не модельного времени.
+const CHANNEL_HELLO_WAIT_S := 5.0
+
+
+## _open_channel — открыть канал и дождаться первого состояния партии.
+##
+## Возвращает первый снапшот или null, если канал не поднялся: без матча
+## версионных адресов мира не собрать, и загрузка на этом кончается — ровно как
+## кончалась на отказе GET /live.
+func _open_channel() -> LiveChannel.Snapshot:
+	channel = LiveChannel.new()
+	channel.name = "live_channel"
+	channel.base_url = server_url
+	channel.region = region
+	channel.snapshot.connect(_on_snapshot)
+	channel.broke.connect(_on_channel_broke)
+	add_child(channel)
+	channel.start()
+
+	var deadline := Time.get_ticks_msec() + int(CHANNEL_HELLO_WAIT_S * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+		if channel.last_snapshot != null:
+			return channel.last_snapshot
+	# Причина берётся у канала, а не сочиняется здесь: он уже сказал, что
+	# случилось (не открылся сокет, отказ версии, разрыв), и второе объяснение
+	# рядом с первым означало бы два разных ответа на один вопрос.
+	_fail("канал живого состояния не поднялся за %.0f с%s" % [
+		CHANNEL_HELLO_WAIT_S,
+		"" if String(stats.get("channel_note", "")) == "" else ": " + String(stats["channel_note"])])
+	return null
+
+
+## _on_snapshot — состояние партии приехало САМО.
+##
+## ЧТО ЗДЕСЬ ДЕЛАЕТСЯ: обновляются числа канала на экране. ЧЕГО НЕ ДЕЛАЕТСЯ:
+## постановка состава не перестраивается.
+##
+## Это не забывчивость и не «сделаем потом». Сегодня состояние партии не меняется
+## вовсе — двигать нечему, — и перестройка была бы кодом без единого случая, на
+## котором её можно проверить. А главное, она была бы НЕВЕРНОЙ формой: когда
+## локомотив поедет (ClearAhead-fcy), снапшоты пойдут при каждом изменении, и
+## сносить с пересборкой сцену десять раз в секунду нельзя — узлы надо ДВИГАТЬ, и
+## двигать с экстраполяцией между снапшотами (ClearAhead-t5h). То есть написанное
+## сейчас пришлось бы удалить целиком, а не дописать.
+##
+## Подпись состава считается всё равно: она стоит один stringify на снапшот и
+## служит сторожем — если состояние однажды поедет, а сцена останется прежней,
+## расхождение будет видно числом на экране, а не догадкой.
+func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
+	stats["channel_session"] = channel.session_id
+	stats["channel_seq"] = snap.snapshot_seq
+	stats["channel_time_us"] = snap.time_us
+	stats["channel_note"] = ""
+	var signature := JSON.stringify(snap.units)
+	stats["channel_stock_changed"] = _stock_signature != "" and signature != _stock_signature
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+## _on_channel_broke — канал перестал быть живым.
+##
+## Строка идёт НА ЭКРАН, а не в лог: записанная в проекте грабля (bd recall
+## godot-client-check) звучит так — отказ обработан штатно, в логе пусто, а на
+## экране пусто тоже. Здесь она особенно уместна: канал переподключается сам, и
+## молчаливый разрыв выглядел бы как замерший мир.
+func _on_channel_broke(reason: String) -> void:
+	stats["channel_note"] = reason
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+func _load_rolling_stock(elements: Array[TrackGeom.Element], snap: LiveChannel.Snapshot) -> void:
 	var set_res: WorldApi.Content = await api.content()
 	if set_res.failed():
 		_fail("набор контента: %s" % set_res.reason)
@@ -923,12 +1027,13 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element], live_res: WorldApi.
 	# Живое состояние УЖЕ приехало: матч нужен раньше сети (версионные адреса
 	# мира идут через /matches/{m}/), и спрашивать его второй раз — запрос за
 	# тем, что в руках. Здесь живому состоянию остаётся постановка коробок.
-	stats["match"] = String(live_res.data.get("match", ""))
+	stats["match"] = snap.match_id
 
 	_stock_root = Node3D.new()
 	_stock_root.name = "rolling_stock"
 	world.add_child(_stock_root)
-	var res := RollingStock.place(_stock_root, live_res.data, _stock_types, _stock_assets, elements)
+	var res := RollingStock.place(_stock_root, {"units": snap.units}, _stock_types, _stock_assets, elements)
+	_stock_signature = JSON.stringify(snap.units)
 	_stock_units = res["units"]
 	stats["stock_units"] = _stock_units.size()
 	for note in (res["skipped"] as Array):
@@ -2349,6 +2454,17 @@ func _hud_text() -> String:
 		l.append("[b]%s[/b]   %s   регион %s" % [role_name, server_url, region])
 	else:
 		l.append("[b]ClearAhead — клиент В1[/b]   %s   регион %s" % [server_url, region])
+	# КАНАЛ — ВТОРОЙ СТРОКОЙ, сразу под адресом сервера: это про связь, а не про
+	# содержимое мира, и стоять ему рядом с адресом. Номер снапшота на экране и
+	# есть доказательство, что состояние ПРИХОДИТ САМО: он растёт, пока игрок
+	# ничего не спрашивает. Внизу списка эту строку не видно вовсе — HUD длиннее
+	# экрана, и проверено это снимком, а не прикидкой.
+	if stats.has("channel_seq"):
+		l.append("канал (сокет, JSON-RPC 2.0): снапшот #%d, время партии %.1f с, сессия %s…" % [
+			int(stats.get("channel_seq", 0)), float(stats.get("channel_time_us", 0)) / 1e6,
+			String(stats.get("channel_session", "")).left(8)])
+	if String(stats.get("channel_note", "")) != "":
+		l.append("  [color=#ff8080]канал: %s[/color]" % stats["channel_note"])
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
 			stats.get("epoch"), stats.get("revision"), stats.get("network_model_hash"),
@@ -2465,8 +2581,8 @@ func _hud_text() -> String:
 		else:
 			l.append("  [color=#ffc060]вид: габаритной коробкой у %d из %d — ассет не доехал[/color]" % [
 				total - shown, total])
-		l.append("  [i]ни скорости, ни времени в состоянии нет: тика не существует,")
-		l.append("  машина стоит. Появятся вместе с тем, что их считает.[/i]")
+		l.append("  [i]скорости в состоянии по-прежнему нет: машина стоит. Время — есть,")
+		l.append("  оно идёт тиком сервера и приходит каналом (строка ниже).[/i]")
 	else:
 		l.append("[i]подвижного состава в партии нет — это законный мир, а не отказ[/i]")
 	l.append("[i]не рисуется: решётка стрелки (переводные брусья) — не отдаётся вовсе.[/i]")
@@ -2524,6 +2640,10 @@ func _print_report() -> void:
 			"axis_points", "axis_bbox", "view",
 			"solid_bodies", "solid_triangles", "solid_ms", "driver_stand", "driver",
 			"stock_types", "stock_assets", "stock_units", "stock_meshes", "stock_asset_bytes", "match",
+			# Канал — в отчёте наравне с остальным: номер снапшота, растущий без
+			# единого запроса, и есть доказательство, что состояние ПРИХОДИТ.
+			# Глазами на снимке этого не увидеть — цифра меняется между кадрами.
+			"channel_session", "channel_seq", "channel_time_us", "channel_stock_changed", "channel_note",
 			"structures_received", "features_received", "runs_received", "track_types_received",
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",

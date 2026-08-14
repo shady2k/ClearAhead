@@ -7,7 +7,21 @@ extends "res://tools/check_suite.gd"
 
 ## Файлы транспортного слоя. Всё остальное в client/scripts/ — игра и рендер, и
 ## им про провод знать нечем.
-const TRANSPORT_FILES := ["net_client.gd", "world_api.gd"]
+##
+## С 2026-08-14 их четыре, а не два: у клиента появился ВТОРОЙ ТРАНСПОРТ —
+## сокет канала команд (ClearAhead-wa51). Деление внутри него то же, что было у
+## первого, и не случайно: net_channel.gd — механика (кадры, соединение,
+## корреляция ответа), live_channel.gd — смысл (версия конверта, рукопожатие,
+## сессия, снапшот, причины отказа). Пара NetClient/WorldApi доказала, что
+## граница проходит именно здесь, и второй транспорт повторяет её, а не
+## изобретает свою.
+const TRANSPORT_FILES := ["net_client.gd", "world_api.gd", "net_channel.gd", "live_channel.gd"]
+
+## Имена труб. Назвал трубу вне слоя — значит достал до провода мимо слоя.
+##
+## Их тоже две, и вторая добавлена вместе с сокетом: правило «рендер не знает
+## транспорта» не имеет смысла, если сторожит только один из них.
+const PIPE_NAMES := ["NetClient", "NetChannel"]
 
 ## Коды, которыми говорит HTTP. Список закрытый нарочно: «любое трёхзначное
 ## число» ловило бы азимут камеры 205°, дальность тени 900 м и полуширину панели
@@ -85,10 +99,11 @@ func run() -> void:
 		# договора там, где договор знать не положено.
 		if text.contains("X-Chunk") or text.contains(WorldApi.HEADER_BASE_Z):
 			headers.append(file_name)
-		# Имя трубы — то же самое, но структурно: назвал NetClient — значит достал
+		# Имя трубы — то же самое, но структурно: назвал трубу — значит достал
 		# до провода мимо слоя.
-		if text.contains("NetClient"):
-			pipes.append(file_name)
+		for pipe_name in PIPE_NAMES:
+			if text.contains(pipe_name):
+				pipes.append("%s (%s)" % [file_name, pipe_name])
 		var line_no := 0
 		for line in text.split("\n"):
 			line_no += 1
@@ -104,6 +119,6 @@ func run() -> void:
 	_ok("вне транспортного слоя нет ни одного шаблона адреса", addresses.is_empty(), str(addresses))
 	_ok("вне транспортного слоя нет ни одного кода HTTP", numbers.is_empty(), str(numbers))
 	_ok("вне транспортного слоя нет имени заголовка", headers.is_empty(), str(headers))
-	_ok("вне транспортного слоя не назван NetClient", pipes.is_empty(), str(pipes))
+	_ok("вне транспортного слоя не названа ни одна труба", pipes.is_empty(), str(pipes))
 	_ok("проверка не пустая: в самом слое коды найдены", codes_in_layer > 0,
 		"%d вхождений в %s" % [codes_in_layer, str(TRANSPORT_FILES)])
