@@ -16,14 +16,17 @@ import (
 // скомпилированной форме — файл карты такое устройство пока не записывает, и
 // это разные вопросы: обобщена форма, которую видит код.
 func TestCompiledDeviceIsNotThreePorted(t *testing.T) {
+	// diamondID — глухое пересечение теста. UUID взят из таблицы
+	// mapfmt/helpers_test.go (tID06, метка SW): фикстура свой UUID не выдумывает.
+	const diamondID = "01a3185c-5007-7242-8242-000006424242"
 	diamond := CompiledDevice{
-		ID:    "ST_A_DK_1",
-		Ports: []string{"ST_A_DK_1.A", "ST_A_DK_1.B", "ST_A_DK_1.C", "ST_A_DK_1.D"},
+		ID:    diamondID,
+		Ports: []string{diamondID + ".A", diamondID + ".B", diamondID + ".C", diamondID + ".D"},
 		Traversals: []Traversal{
-			{Passage: "ST_A_DK_1:ab", From: "ST_A_DK_1.A", To: "ST_A_DK_1.B"},
-			{Passage: "ST_A_DK_1:cd", From: "ST_A_DK_1.C", To: "ST_A_DK_1.D"},
+			{Passage: diamondID + ":ab", From: diamondID + ".A", To: diamondID + ".B"},
+			{Passage: diamondID + ":cd", From: diamondID + ".C", To: diamondID + ".D"},
 		},
-		Resource: "RES_ST_A_DK_1",
+		Resource: "RES_" + diamondID,
 	}
 
 	if len(diamond.Ports) != 4 {
@@ -51,7 +54,7 @@ func TestCompiledDeviceIsNotThreePorted(t *testing.T) {
 	var sb strings.Builder
 	writeDevice(&sb, diamond)
 	body := sb.String()
-	for _, want := range []string{"ST_A_DK_1.D", "ST_A_DK_1:cd"} {
+	for _, want := range []string{diamondID + ".D", diamondID + ":cd"} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("в теле хеша нет %q:\n%s", want, body)
 		}

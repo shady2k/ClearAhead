@@ -9,7 +9,9 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/geom"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/units"
+	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 )
 
 // applyIntent применяет правку к копии карты и валидирует результат.
@@ -18,21 +20,25 @@ import (
 // Run'ы решётки обновляются внутри операций хирургически: решётка —
 // авторитетный факт о физике, а не производная от нарезки на элементы
 // (требование 6), см. runs.go.
-func applyIntent(cur *mapfmt.Map, i Intent) (Result, error) {
+func applyIntent(cur *mapfmt.Map, ids uuidv7.Source, i Intent) (Result, error) {
 	m := cloneMap(cur)
 	var prev *ErasePreview
 	var err error
 	switch i.Op {
 	case OpExtend:
-		err = applyExtend(&m, i.Extend)
+		err = applyExtend(&m, ids, i.Extend)
 	case OpBranch:
-		err = applyBranch(&m, i.Branch)
+		err = applyBranch(&m, ids, i.Branch)
 	case OpCap:
 		err = applyCap(&m, i.Cap)
 	case OpPlace:
-		err = applyPlace(&m, i.Place)
+		err = applyPlace(&m, ids, i.Place)
 	case OpErase:
 		prev, err = applyErase(&m, i.Erase)
+	case OpGrade:
+		// Правка высот карту не трогает: она исходник рядом с картой, и её
+		// состояние живёт в Service.grading (tx.go), а не в mapfmt.Map.
+		err = applyGrade(i.Grade)
 	default:
 		return Result{}, fmt.Errorf("edit: неизвестная правка %d", i.Op)
 	}
@@ -42,12 +48,10 @@ func applyIntent(cur *mapfmt.Map, i Intent) (Result, error) {
 	if err := mapfmt.Validate(&m); err != nil {
 		return Result{}, fmt.Errorf("edit: результат правки не проходит валидацию: %w", err)
 	}
-	// Ревизия — следующая за текущей. Отдельный счётчик «максимальной когда-либо
-	// бывшей» ревизии был нужен только отмене: она возвращала карту назад, и без
-	// счётчика следующая правка переиспользовала бы уже выданный номер. Отмены
-	// нет — карта только вперёд, и номер берётся из неё же.
-	m.MapRevision = cur.MapRevision + 1
-	return Result{Map: m, Revision: m.MapRevision, Cascade: prev}, nil
+	// Мировая ревизия здесь не двигается: макет — не принятое состояние, и
+	// номер растёт только на коммите (tx.go). Вернуть номер назад нечем —
+	// отмены нет.
+	return Result{Map: m, Cascade: prev}, nil
 }
 
 // ---- Общие помощники ----
@@ -80,9 +84,25 @@ func turnoutPorts(t *mapfmt.Turnout) []string {
 	return []string{t.ID + "." + t.Ports.Common, t.ID + "." + t.Ports.Straight, t.ID + "." + t.Ports.Diverging}
 }
 
-// allocID — свободный ID из общего пространства имён карты: prefix, затем
-// prefix2, prefix3, … Коллизий с существующими элементами не бывает.
-func allocID(m *mapfmt.Map, prefix string) string {
+// allocID — UUIDv7 нового элемента из источника тождества. name — читаемая
+// метка элемента, тождеством не является: две правки могут выдать одинаковые
+// метки, и это законно (mapfmt.ValidName). Коллизия UUID с существующим
+// элементом практически невозможна, но проверяется: валидатор после правки
+// всё равно отверг бы повтор, а здесь отказ приходит раньше и внятнее.
+func allocID(m *mapfmt.Map, ids uuidv7.Source, name string) (string, error) {
+	for {
+		id, err := ids()
+		if err != nil {
+			return "", fmt.Errorf("edit: источник тождества: %w", err)
+		}
+		if !mapHasID(m, id) {
+			return id, nil
+		}
+	}
+}
+
+// mapHasID — занят ли идентификатор в общем пространстве имён карты.
+func mapHasID(m *mapfmt.Map, id string) bool {
 	used := map[string]bool{}
 	for _, e := range m.Topology.Edges {
 		used[e.ID] = true
@@ -96,8 +116,6 @@ func allocID(m *mapfmt.Map, prefix string) string {
 	for _, st := range m.Topology.Structures {
 		used[st.ID] = true
 	}
-	// Run'ы и типы решётки — тоже занятые имена. Без них allocID мог выдать
-	// идентификатор, уже занятый в блоке construction.
 	if m.Construction != nil {
 		for _, r := range m.Construction.Runs {
 			used[r.ID] = true
@@ -106,15 +124,7 @@ func allocID(m *mapfmt.Map, prefix string) string {
 			used[tt.ID] = true
 		}
 	}
-	if !used[prefix] {
-		return prefix
-	}
-	for i := 2; ; i++ {
-		cand := fmt.Sprintf("%s%d", prefix, i)
-		if !used[cand] {
-			return cand
-		}
-	}
+	return used[id]
 }
 
 // chainToAlignments переводит цепочку примитивов решателя в выравнивания
@@ -182,7 +192,7 @@ func checkEndPurpose(purpose string) error {
 
 // ---- Продлить путь от порта ----
 
-func applyExtend(m *mapfmt.Map, in ExtendIntent) error {
+func applyExtend(m *mapfmt.Map, ids uuidv7.Source, in ExtendIntent) error {
 	if in.Port == "" {
 		return fmt.Errorf("edit: продление: не указан порт")
 	}
@@ -225,11 +235,18 @@ func applyExtend(m *mapfmt.Map, in ExtendIntent) error {
 		purpose = "buffer_stop"
 	}
 
-	edgeID := allocID(m, "E_EXT")
-	nodeID := allocID(m, "N_EXT")
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: edgeID, Kind: kind, From: in.Port, To: nodeID + ".P1"})
+	edgeID, err := allocID(m, ids, "E_EXT")
+	if err != nil {
+		return err
+	}
+	nodeID, err := allocID(m, ids, "N_EXT")
+	if err != nil {
+		return err
+	}
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: edgeID, Name: "E_EXT", Kind: kind, From: in.Port, To: nodeID + ".P1"})
 	m.Topology.Nodes = append(m.Topology.Nodes, mapfmt.Node{
 		ID:    nodeID,
+		Name:  "N_EXT",
 		Ports: []mapfmt.Port{{ID: "P1", Purpose: purpose}},
 	})
 	if m.Geometry.Edges == nil {
@@ -246,10 +263,7 @@ func applyExtend(m *mapfmt.Map, in ExtendIntent) error {
 	}
 	return nil
 }
-
-// ---- Ответвиться от существующего элемента ----
-
-func applyBranch(m *mapfmt.Map, in BranchIntent) error {
+func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 	idx := -1
 	for i := range m.Topology.Edges {
 		if m.Topology.Edges[i].ID == in.Edge {
@@ -305,19 +319,26 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	if err != nil {
 		return fmt.Errorf("edit: ветвление: рез ребра %s: %w", edge.ID, err)
 	}
-
-	swID := allocID(m, "SW")
-	// Продолжение реза: суффикс описательный, а не порядковый. Прежний "@2"
-	// кодировал номер части внутри реза — идентификатор нёс след операции над
-	// логическим объектом, — и вдобавок содержал символ, запрещённый в
-	// идентификаторе (mapfmt.ValidID). Столкновения разрешает allocID.
-	//
-	// Глубже это не чинит: один логический путь после реза представлен двумя
-	// ID без таблицы соответствия. Устойчивое тождество приезжает вместе с
-	// нарезкой мира (ClearAhead-mks).
-	contID := allocID(m, edge.ID+"_CONT")
-	branchID := allocID(m, swID+"_BR")
-	endNode := allocID(m, "N_"+swID+"_BR")
+	// Метки новых элементов описательные, тождество — UUIDv7 из источника.
+	// Прежний «@2» кодировал номер части внутри реза — идентификатор нёс след
+	// операции над логическим объектом; теперь это имя, а не адрес, и
+	// столкновения меток законны.
+	swID, err := allocID(m, ids, "SW")
+	if err != nil {
+		return err
+	}
+	contID, err := allocID(m, ids, edge.Name+"_CONT")
+	if err != nil {
+		return err
+	}
+	branchID, err := allocID(m, ids, "SW_BR")
+	if err != nil {
+		return err
+	}
+	endNode, err := allocID(m, ids, "N_SW_BR")
+	if err != nil {
+		return err
+	}
 
 	// Стрелка и её геометрия. Вид у стрелки, продолжения и ветви — вид
 	// разрезанного ребра: ветвление порождает продолжение ТОЙ ЖЕ сети, и
@@ -326,6 +347,7 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	// ни правил.
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
 		ID:   swID,
+		Name: "SW",
 		Kind: edge.Kind,
 		Hand: in.Hand,
 		Ports: mapfmt.TurnoutPorts{
@@ -344,12 +366,13 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 	m.Topology.Edges[idx].To = swID + ".C"
 	m.Geometry.Edges[edge.ID] = mapfmt.Alignments{Horizontal: head}
 
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: contID, Kind: edge.Kind, From: swID + ".S", To: edge.To})
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: contID, Name: edge.Name + "_CONT", Kind: edge.Kind, From: swID + ".S", To: edge.To})
 	m.Geometry.Edges[contID] = mapfmt.Alignments{Horizontal: tail}
 
-	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: branchID, Kind: edge.Kind, From: swID + ".D", To: endNode + ".P1"})
+	m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: branchID, Name: "SW_BR", Kind: edge.Kind, From: swID + ".D", To: endNode + ".P1"})
 	m.Topology.Nodes = append(m.Topology.Nodes, mapfmt.Node{
 		ID:    endNode,
+		Name:  "N_SW_BR",
 		Ports: []mapfmt.Port{{ID: "P1", Purpose: purpose}},
 	})
 	m.Geometry.Edges[branchID] = branchAL
@@ -360,7 +383,7 @@ func applyBranch(m *mapfmt.Map, in BranchIntent) error {
 		if m.Construction.Runs, err = splitRuns(m, m.Construction.Runs, edge.ID, contID); err != nil {
 			return fmt.Errorf("edit: ветвление: run'ы: %w", err)
 		}
-		brRun, err := newRunForEdge(m, branchID)
+		brRun, err := newRunForEdge(m, ids, branchID)
 		if err != nil {
 			return fmt.Errorf("edit: ветвление: run ветви: %w", err)
 		}
@@ -453,7 +476,7 @@ func applyCap(m *mapfmt.Map, in CapIntent) error {
 
 // ---- Положить платформу на участок ----
 
-func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
+func applyPlace(m *mapfmt.Map, ids uuidv7.Source, in PlaceIntent) error {
 	al, ok := m.Alignments(in.Element)
 	if !ok {
 		return fmt.Errorf("edit: платформа: элемент %s не найден", in.Element)
@@ -492,8 +515,13 @@ func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
 		return fmt.Errorf("edit: платформа: slab_thickness %v вне [%v, %v]", in.SlabThickness, mapfmt.MinPlatformSlabThick, mapfmt.MaxPlatformSlabThick)
 	}
 
+	platID, err := allocID(m, ids, "PLAT")
+	if err != nil {
+		return err
+	}
 	m.Topology.Structures = append(m.Topology.Structures, mapfmt.Structure{
-		ID:            allocID(m, "PLAT"),
+		ID:            platID,
+		Name:          "PLAT",
 		Kind:          "platform",
 		Span:          []netloc.IntervalU{{Element: in.Element, From: in.From, To: in.To}},
 		Side:          in.Side,
@@ -505,34 +533,14 @@ func applyPlace(m *mapfmt.Map, in PlaceIntent) error {
 	return nil
 }
 
-// ---- Стереть ----
-
-func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
-	if in.Target == "" {
-		return nil, fmt.Errorf("edit: стирка: не указана цель")
-	}
-	targetIsEdge := false
-	for _, e := range m.Topology.Edges {
-		if e.ID == in.Target {
-			targetIsEdge = true
-			break
-		}
-	}
-	targetIsTurnout := false
-	for _, t := range m.Topology.Turnouts {
-		if t.ID == in.Target {
-			targetIsTurnout = true
-			break
-		}
-	}
-	if !targetIsEdge && !targetIsTurnout {
-		return nil, fmt.Errorf("edit: стирка: цель %s не ребро и не стрелка", in.Target)
-	}
-
-	// Каскад — фиксированная точка: стрелка уходит, если любое её внешнее
-	// ребро ушло (порт стрелки без ребра валидатор отвергает); ребро уходит,
-	// если оно инцидентно ушедшей стрелке или это цель.
-	removed := map[string]bool{in.Target: true}
+// eraseClosure — фиксированная точка стирки: цель плюс всё, что осиротеет
+// вместе с ней. Стрелка уходит, если любое её внешнее ребро ушло (порт
+// стрелки без ребра валидатор отвергает); ребро уходит, если оно инцидентно
+// ушедшей стрелке. Чистое чтение карты: применение каскада идёт по этому
+// множеству (applyErase), и затронутое множество коммита (tx.go) строится
+// тем же расчётом — предпросмотр и факт не могут разойтись.
+func eraseClosure(m *mapfmt.Map, target string) map[string]bool {
+	removed := map[string]bool{target: true}
 	for changed := true; changed; {
 		changed = false
 		for i := range m.Topology.Turnouts {
@@ -566,7 +574,76 @@ func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
 			}
 		}
 	}
+	return removed
+}
 
+// ---- Прямой терраморфинг ----
+
+// applyGrade проверяет правку высот. Карту она не меняет: правка — исходник
+// рядом с картой (Service.grading), и её применение — решение о множестве
+// клеток, а не мутация топологии. Проверяются три вещи: правка не пуста;
+// клетки уровня 0 (terrain.Grading.Validate — только уровень 0 даёт
+// пространственно непересекающиеся клетки, и только на нём конфликт «по
+// клетке» однозначен); внутри одной правки нет двух отметок одной клетки.
+// Несовместимость правки с ПРЕЖНИМИ правками макета проверяет applyJournal
+// (tx.go): там виден весь журнал, а не одна операция.
+func applyGrade(in GradeIntent) error {
+	if len(in.Cells) == 0 {
+		return fmt.Errorf("edit: правка высот без клеток")
+	}
+	g := terrain.Grading{Cells: in.Cells}
+	if err := g.Validate(); err != nil {
+		return err
+	}
+	seen := make(map[gradeCellRef]int16, len(in.Cells))
+	for _, c := range in.Cells {
+		k := gradeCellRef{cx: c.CX, cz: c.CZ}
+		if h, ok := seen[k]; ok && h != c.HeightCm {
+			return fmt.Errorf("edit: правка высот: клетка (%d, %d): в одной правке две отметки — %d и %d см (спека §5); отказ",
+				c.CX, c.CZ, h, c.HeightCm)
+		}
+		seen[k] = c.HeightCm
+	}
+	return nil
+}
+
+// gradingCells — клетки правки как множество адресов: предмет конфликта на
+// коммите. Высоты в затронутое множество не входят — конфликтует сама клетка,
+// а не её отметка.
+func gradingCells(in GradeIntent) map[gradeCellRef]bool {
+	out := make(map[gradeCellRef]bool, len(in.Cells))
+	for _, c := range in.Cells {
+		out[gradeCellRef{cx: c.CX, cz: c.CZ}] = true
+	}
+	return out
+}
+
+// ---- Стереть ----
+
+func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
+	if in.Target == "" {
+		return nil, fmt.Errorf("edit: стирка: не указана цель")
+	}
+	targetIsEdge := false
+	for _, e := range m.Topology.Edges {
+		if e.ID == in.Target {
+			targetIsEdge = true
+			break
+		}
+	}
+	targetIsTurnout := false
+	for _, t := range m.Topology.Turnouts {
+		if t.ID == in.Target {
+			targetIsTurnout = true
+			break
+		}
+	}
+
+	if !targetIsEdge && !targetIsTurnout {
+		return nil, fmt.Errorf("edit: стирка: цель %s не ребро и не стрелка", in.Target)
+	}
+
+	removed := eraseClosure(m, in.Target)
 	if in.Mode == EraseSelection && len(removed) > 1 {
 		extra := make([]string, 0, len(removed)-1)
 		for id := range removed {

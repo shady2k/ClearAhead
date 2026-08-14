@@ -1,13 +1,16 @@
 package terrain
 
 import (
+	"bytes"
 	"math"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
+	"github.com/shady2k/ClearAhead/server/internal/vegetation"
 )
 
 // Карта строится фабрикой, а не читается файлом: тест не должен зависеть от
@@ -252,7 +255,10 @@ func TestGroundUnderBridgeStaysNatural(t *testing.T) {
 			}
 
 			withStructure, _ := buildField(t, singleEdge(t, &mapfmt.Structure{
-				ID:   "SOORUZHENIE",
+				// UUID из таблицы несущих сооружений seedmap (MOST/TONNEL):
+				// тождество не выдумывается, метка — прежняя читаемая строка.
+				ID:   "018bcfe5-683b-7242-8242-00003b424242",
+				Name: "SOORUZHENIE",
 				Kind: kind,
 				Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: seedmap.LineLengthM}},
 			}))
@@ -282,3 +288,100 @@ func singleEdge(t *testing.T, st *mapfmt.Structure) *mapfmt.Map {
 }
 
 func nearlyEqual(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
+
+// findForestChunk — первый чанк уровня 0 с лесом: покров, лес рецепта.
+//
+// Ищет перебором по окрестности оси: чанк нужен любой, лишь бы лес в нём был,
+// иначе проверкам нечего срубить. Возвращает также пару ячеек с деревьями,
+// чтобы тесту не догадываться, где лес.
+func findForestChunk(t *testing.T, f *Field) (chunk.Address, []byte, []byte, [][2]int) {
+	t.Helper()
+	for cz := -3; cz <= 3; cz++ {
+		for cx := -3; cx <= 3; cx++ {
+			a := chunk.Address{Level: chunk.ForestLevel, CX: cx, CZ: cz}
+			cover, err := f.ChunkCover(a)
+			if err != nil {
+				t.Fatalf("покров чанка (%d,%d): %v", cx, cz, err)
+			}
+			if cover == nil {
+				continue
+			}
+			recipe := f.ChunkForest(a, cover)
+			var trees [][2]int
+			for j := range chunk.CoverCells {
+				for i := range chunk.CoverCells {
+					if chunk.ForestOccupied(recipe, i, j) {
+						trees = append(trees, [2]int{i, j})
+					}
+				}
+			}
+			if len(trees) > 0 {
+				return a, cover, recipe, trees
+			}
+		}
+	}
+	t.Fatal("леса в окрестности оси не нашлось ни в одном чанке уровня 0")
+	return chunk.Address{}, nil, nil, nil
+}
+
+// Лес рецепта — чистая функция адреса: два прохода дают байт в байт один блоб,
+// биты стоят только в ячейках лесного класса, и выше уровня 0 леса нет. Это
+// фундамент проекции: компилятор растительности вычитает и складывает, и если
+// рецепт недетерминирован, «срубленное не воскресает» недоказуемо.
+func TestChunkForestRecipeIsStableAndClassPure(t *testing.T) {
+	f, _ := buildField(t, loadMap(t))
+	a, cover, recipe, _ := findForestChunk(t, f)
+	again := f.ChunkForest(a, cover)
+	if !bytes.Equal(recipe, again) {
+		t.Fatal("два прохода ChunkForest дали разные блобы — рецепт недетерминирован")
+	}
+	for j := range chunk.CoverCells {
+		for i := range chunk.CoverCells {
+			if !chunk.ForestOccupied(recipe, i, j) {
+				continue
+			}
+			class, _ := chunk.UnpackCover(cover[chunk.CoverIndex(i, j)])
+			if class != chunk.SurfaceForestConifer && class != chunk.SurfaceForestBroad {
+				t.Fatalf("бит в ячейке (%d,%d) класса %d — не лес", i, j, class)
+			}
+		}
+	}
+	if got := f.ChunkForest(chunk.Address{Level: 1, CX: a.CX, CZ: a.CZ}, cover); got != nil {
+		t.Fatalf("лес на уровне 1 дал %d байт, ожидался nil", len(got))
+	}
+}
+
+// ПРИЁМОЧНЫЙ КРИТЕРИЙ W2-B на настоящем рельефе: срубленное дерево не
+// воскресает после пересборки проекции из рецепта, а уцелевшие не сдвинулись —
+// проекция отличается от рецепта ровно одной ячейкой.
+func TestProjectionKeepsCutTreeCutOnRealField(t *testing.T) {
+	f, _ := buildField(t, loadMap(t))
+	a, cover, recipe, trees := findForestChunk(t, f)
+	cut := trees[0]
+	srcs := vegetation.Sources{Cuts: []vegetation.Cut{{CX: a.CX, CZ: a.CZ, I: cut[0], J: cut[1]}}}
+	first, err := vegetation.Project(a, recipe, cover, srcs)
+	if err != nil {
+		t.Fatalf("проекция: %v", err)
+	}
+	if chunk.ForestOccupied(first, cut[0], cut[1]) {
+		t.Fatal("срубленное дерево осталось в проекции")
+	}
+	second, err := vegetation.Project(a, recipe, cover, srcs)
+	if err != nil {
+		t.Fatalf("пересборка: %v", err)
+	}
+	if !bytes.Equal(first, second) {
+		t.Fatal("пересборка из рецепта изменила проекцию")
+	}
+	diff := 0
+	for j := range chunk.CoverCells {
+		for i := range chunk.CoverCells {
+			if chunk.ForestOccupied(first, i, j) != chunk.ForestOccupied(recipe, i, j) {
+				diff++
+			}
+		}
+	}
+	if diff != 1 {
+		t.Fatalf("проекция отличается от рецепта в %d ячейках, ожидалась 1 — соседи сдвинулись", diff)
+	}
+}

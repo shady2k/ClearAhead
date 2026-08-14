@@ -52,8 +52,8 @@ type Option func(*mapfmt.Map)
 // edge — ребро фабрики. Единственное место, где фикстуры называют вид пути:
 // фабрика порождает рельсовую сеть, и когда в перечень видов войдёт второй,
 // «а какого вида фикстура» будет спрошено здесь, а не в пяти литералах.
-func edge(id, from, to string) mapfmt.Edge {
-	return mapfmt.Edge{ID: id, Kind: mapfmt.KindRail, From: from, To: to}
+func edge(id, name, from, to string) mapfmt.Edge {
+	return mapfmt.Edge{ID: id, Name: name, Kind: mapfmt.KindRail, From: from, To: to}
 }
 
 // WithID задаёт идентификатор карты.
@@ -85,7 +85,12 @@ func WithTerrain() Option {
 			// другом мире. Числа не «по умолчанию» — умолчания у охвата нет
 			// вовсе, валидатор отвергает карту без блока extent.
 			Extent: mapfmt.Extent{Level0RadiusM: 512, Levels: 5},
-			// Покров. Числа ПРЕДВАРИТЕЛЬНЫЕ, происхождение названо: длины волн
+			// Домен — обязательное поле рецепта (W1-C): прямоугольник, из
+			// которого мир прогревается чанками. Числа — тот же домен, что у
+			// боевой карты: выведен из габарита оси плюс reach 8192 и округлён
+			// НАРУЖУ до сетки самого грубого уровня (4096 м), разбор — в
+			// worldgen (wave W1-C).
+			Domain: mapfmt.Domain{MinX: -8192, MinZ: -12288, MaxX: 12288, MaxZ: 12288},
 			// и пороги сняты с констант снесённого спайка (разбор §1.2, §1.3) —
 			// маска леса с периодом около 312 м, низовой покров около 45 м,
 			// порода около 180 м, вырубка 34 м вдоль оси. У спайка это были
@@ -145,14 +150,27 @@ func WithStructure(st mapfmt.Structure) Option {
 	return func(m *mapfmt.Map) { m.Topology.Structures = append(m.Topology.Structures, st) }
 }
 
-// WithCarryingStructure объявляет участок пути несомым: мостом или тоннелем. На
-// его протяжении рельеф с осью не примиряется (terrain.carriedSpans).
+// WithCarryingStructure объявляет участок пути несомым: мостом или тоннелем.
+// Переданный id — это МЕТКА сооружения; UUID берётся из фиксированной таблицы
+// (фабрика детерминирована). Неизвестная метка — паника: у фабрики один
+// потребитель (тесты), и молча выдуманный UUID развёл бы фикстуру с эталоном.
 func WithCarryingStructure(kind, id, element string, fromM, toM float64) Option {
+	uuid, ok := carryingIDs[id]
+	if !ok {
+		panic("seedmap: нет UUID для несущего сооружения " + id)
+	}
 	return WithStructure(mapfmt.Structure{
-		ID:   id,
+		ID:   uuid,
+		Name: id,
 		Kind: kind,
 		Span: netloc.LinearU{{Element: element, From: fromM, To: toM}},
 	})
+}
+
+// carryingIDs — UUID'ы несущих сооружений тестов (метки MOST, TONNEL в name).
+var carryingIDs = map[string]string{
+	"MOST":   "018bcfe5-683b-7242-8242-00003b424242",
+	"TONNEL": "018bcfe5-683c-7242-8242-00003c424242",
 }
 
 // Mutate — точка для порчи карты в тестах валидатора. Отдельное имя нужно
@@ -169,8 +187,19 @@ func apply(m *mapfmt.Map, opts []Option) *mapfmt.Map {
 // LineLengthM — длина перегона, порождаемого Line.
 const LineLengthM = 200.0
 
-// LineEdgeID — единственный элемент перегона.
-const LineEdgeID = "E1"
+// Идентификаторы фикстур — UUIDv7 (решение владельца 2026-08-13 «UUIDv7
+// везде»): тождество элемента — UUID, читаемая метка — отдельное поле name.
+// Константы держат UUID'ы, прежние читаемые строки (E1, N_BOUNDARY, …) живут
+// в name соответствующих элементов. Таблица фиксирована: фабрика
+// детерминирована, эталоны тестов не зависят от времени и случайности.
+
+// Идентификаторы перегона Line.
+const (
+	LineEdgeID   = "018bcfe5-6803-7242-8242-000003424242" // метка E1
+	LineNodeWest = "018bcfe5-6801-7242-8242-000001424242" // метка NA
+	LineNodeEast = "018bcfe5-6802-7242-8242-000002424242" // метка NB
+	LineRunID    = "018bcfe5-6804-7242-8242-000004424242" // метка RUN_E1
+)
 
 // Line — минимальная валидная карта: прямой перегон между двумя границами.
 //
@@ -180,13 +209,13 @@ func Line(opts ...Option) *mapfmt.Map {
 		FormatVersion: mapfmt.FormatVersion,
 		MapID:         "LINE",
 		MapRevision:   1,
-		Anchors:       map[string]mapfmt.Anchor{"NA.P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
+		Anchors:       map[string]mapfmt.Anchor{LineNodeWest + ".P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
 		Topology: mapfmt.Topology{
 			Nodes: []mapfmt.Node{
-				{ID: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: LineNodeWest, Name: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: LineNodeEast, Name: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 			},
-			Edges: []mapfmt.Edge{edge(LineEdgeID, "NA.P1", "NB.P1")},
+			Edges: []mapfmt.Edge{edge(LineEdgeID, "E1", LineNodeWest+".P1", LineNodeEast+".P1")},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{},
@@ -195,7 +224,7 @@ func Line(opts ...Option) *mapfmt.Map {
 			},
 		},
 		Construction: construction([]mapfmt.ConstructionRun{
-			run("RUN_E1", span(LineEdgeID, 0, LineLengthM)),
+			run(LineRunID, "RUN_E1", span(LineEdgeID, 0, LineLengthM)),
 		}),
 	}
 	return apply(m, opts)
@@ -204,13 +233,28 @@ func Line(opts ...Option) *mapfmt.Map {
 // Идентификаторы станции. Вынесены константами: тесты ссылаются на элементы по
 // имени, и опечатка в строковом литерале дала бы отказ не по той причине.
 const (
-	StationApproach = "E_APPROACH"
-	StationMain     = "E_MAIN"
-	StationCross    = "E_CROSS"
-	StationSiding   = "E_SIDING"
-	StationStub     = "E_STUB"
-	StationSW1      = "SW1"
-	StationSW2      = "SW2"
+	StationApproach = "018bcfe5-680c-7242-8242-00000c424242" // метка E_APPROACH
+	StationMain     = "018bcfe5-680d-7242-8242-00000d424242" // метка E_MAIN
+	StationCross    = "018bcfe5-680e-7242-8242-00000e424242" // метка E_CROSS
+	StationSiding   = "018bcfe5-680f-7242-8242-00000f424242" // метка E_SIDING
+	StationStub     = "018bcfe5-6810-7242-8242-000010424242" // метка E_STUB
+	StationSW1      = "018bcfe5-680a-7242-8242-00000a424242" // метка SW1
+	StationSW2      = "018bcfe5-680b-7242-8242-00000b424242" // метка SW2
+
+	// Узлы и сооружения станции.
+	StationBoundaryNode     = "018bcfe5-6806-7242-8242-000006424242" // метка N_BOUNDARY
+	StationStopMainNode     = "018bcfe5-6807-7242-8242-000007424242" // метка N_STOP_MAIN
+	StationStopSidingNode   = "018bcfe5-6808-7242-8242-000008424242" // метка N_STOP_SIDING
+	StationStopStubNode     = "018bcfe5-6809-7242-8242-000009424242" // метка N_STOP_STUB
+	StationPlatformID       = "018bcfe5-6811-7242-8242-000011424242" // метка PLAT_MAIN
+	StationBufferMainID     = "018bcfe5-6812-7242-8242-000012424242" // метка BS_MAIN
+	StationBufferSidingID   = "018bcfe5-6813-7242-8242-000013424242" // метка BS_SIDING
+	StationBufferStubID     = "018bcfe5-6814-7242-8242-000014424242" // метка BS_STUB
+	StationRunApproachCross = "018bcfe5-6815-7242-8242-000015424242" // метка RUN_APPROACH_CROSS
+	StationRunMain          = "018bcfe5-6816-7242-8242-000016424242" // метка RUN_MAIN
+	StationRunSiding        = "018bcfe5-6817-7242-8242-000017424242" // метка RUN_SIDING
+	StationRunStub          = "018bcfe5-6818-7242-8242-000018424242" // метка RUN_STUB
+	StationRiverID          = "018bcfe5-6819-7242-8242-000019424242" // метка RIV_MAIN
 )
 
 // Station — горловина: подход, две стрелки, главный путь с кривой, боковой
@@ -230,27 +274,28 @@ func Station(opts ...Option) *mapfmt.Map {
 		// отвесной стеной на границе досягаемости откоса (ClearAhead-27n).
 		// Согласованность этой отметки с базой рельефа держится не соглашением,
 		// а тестом земляных работ в internal/terrain.
-		Anchors: map[string]mapfmt.Anchor{"N_BOUNDARY.P1": {X: 0, Y: 0, Z: 142, Heading: 0}},
+		Anchors: map[string]mapfmt.Anchor{StationBoundaryNode + ".P1": {X: 0, Y: 0, Z: 142, Heading: 0}},
 		Topology: mapfmt.Topology{
 			Nodes: []mapfmt.Node{
-				{ID: "N_BOUNDARY", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-				{ID: "N_STOP_MAIN", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
-				{ID: "N_STOP_SIDING", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
-				{ID: "N_STOP_STUB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
+				{ID: StationBoundaryNode, Name: "N_BOUNDARY", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: StationStopMainNode, Name: "N_STOP_MAIN", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
+				{ID: StationStopSidingNode, Name: "N_STOP_SIDING", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
+				{ID: StationStopStubNode, Name: "N_STOP_STUB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
 			Turnouts: []mapfmt.Turnout{
-				turnout(StationSW1), turnout(StationSW2),
+				turnout(StationSW1, "SW1"), turnout(StationSW2, "SW2"),
 			},
 			Edges: []mapfmt.Edge{
-				edge(StationApproach, "N_BOUNDARY.P1", StationSW1+".C"),
-				edge(StationMain, StationSW1+".S", "N_STOP_MAIN.P1"),
-				edge(StationCross, StationSW1+".D", StationSW2+".C"),
-				edge(StationSiding, StationSW2+".S", "N_STOP_SIDING.P1"),
-				edge(StationStub, StationSW2+".D", "N_STOP_STUB.P1"),
+				edge(StationApproach, "E_APPROACH", StationBoundaryNode+".P1", StationSW1+".C"),
+				edge(StationMain, "E_MAIN", StationSW1+".S", StationStopMainNode+".P1"),
+				edge(StationCross, "E_CROSS", StationSW1+".D", StationSW2+".C"),
+				edge(StationSiding, "E_SIDING", StationSW2+".S", StationStopSidingNode+".P1"),
+				edge(StationStub, "E_STUB", StationSW2+".D", StationStopStubNode+".P1"),
 			},
 			Structures: []mapfmt.Structure{
 				{
-					ID:   "PLAT_MAIN",
+					ID:   StationPlatformID,
+					Name: "PLAT_MAIN",
 					Kind: "platform",
 					Span: netloc.LinearU{{Element: StationMain, From: 40, To: 100}},
 					Side: "right",
@@ -272,9 +317,9 @@ func Station(opts ...Option) *mapfmt.Map {
 				// снесённого спайка назвал это дырой Д8 и заодно объяснил,
 				// почему её не замечали: спайк выводил упоры ИЗ ТОПОЛОГИИ сам,
 				// то есть рисовал то, чего ему не присылали.
-				bufferStop("BS_MAIN", StationMain, 230),
-				bufferStop("BS_SIDING", StationSiding, 60),
-				bufferStop("BS_STUB", StationStub, 30),
+				bufferStop(StationBufferMainID, "BS_MAIN", StationMain, 230),
+				bufferStop(StationBufferSidingID, "BS_SIDING", StationSiding, 60),
+				bufferStop(StationBufferStubID, "BS_STUB", StationStub, 30),
 			},
 		},
 		Geometry: mapfmt.Geometry{
@@ -302,10 +347,10 @@ func Station(opts ...Option) *mapfmt.Map {
 		// которой станция здесь стоит». Размеры предварительные.
 		Objects: &mapfmt.Objects{Buildings: village(), Rivers: river()},
 		Construction: construction([]mapfmt.ConstructionRun{
-			run("RUN_APPROACH_CROSS", span(StationApproach, 0, 120), span(StationCross, 0, 20)),
-			run("RUN_MAIN", span(StationMain, 0, 230)),
-			run("RUN_SIDING", span(StationSiding, 0, 60)),
-			run("RUN_STUB", span(StationStub, 0, 30)),
+			run(StationRunApproachCross, "RUN_APPROACH_CROSS", span(StationApproach, 0, 120), span(StationCross, 0, 20)),
+			run(StationRunMain, "RUN_MAIN", span(StationMain, 0, 230)),
+			run(StationRunSiding, "RUN_SIDING", span(StationSiding, 0, 60)),
+			run(StationRunStub, "RUN_STUB", span(StationStub, 0, 30)),
 		}),
 	}
 	return apply(m, opts)
@@ -323,7 +368,7 @@ func Station(opts ...Option) *mapfmt.Map {
 // Обнаружилось при подгонке ассета: у ВЛ80 насадка колёс замерена по вершинам
 // в 1400 мм, то есть машина колеи около 1480 — на пути 1435 её колёса стоят
 // мимо рельсов, и в роли машиниста это видно. Бида ClearAhead-3ay.
-const TrackTypeID = "TRACK_MAIN_1520"
+const TrackTypeID = "018bcfe5-6805-7242-8242-000005424242" // метка TRACK_MAIN_1520
 
 // village — двенадцать домов посёлка.
 //
@@ -331,6 +376,24 @@ const TrackTypeID = "TRACK_MAIN_1520"
 // (chunk.ForestJitter): это не экономия байт — в карте они всё равно записаны
 // явно, — а способ получить правдоподобный разброс, не выдумывая двенадцать
 // троек чисел руками и не пряча выдумку за списком.
+// buildingIDs — UUID'ы двенадцати домов посёлка (метки BLD_01…BLD_12 в name).
+// Таблица фиксирована: фабрика детерминирована, и village() не зависит от
+// времени и случайности.
+var buildingIDs = []string{
+	"018bcfe5-681a-7242-8242-00001a424242",
+	"018bcfe5-681b-7242-8242-00001b424242",
+	"018bcfe5-681c-7242-8242-00001c424242",
+	"018bcfe5-681d-7242-8242-00001d424242",
+	"018bcfe5-681e-7242-8242-00001e424242",
+	"018bcfe5-681f-7242-8242-00001f424242",
+	"018bcfe5-6820-7242-8242-000020424242",
+	"018bcfe5-6821-7242-8242-000021424242",
+	"018bcfe5-6822-7242-8242-000022424242",
+	"018bcfe5-6823-7242-8242-000023424242",
+	"018bcfe5-6824-7242-8242-000024424242",
+	"018bcfe5-6825-7242-8242-000025424242",
+}
+
 func village() []mapfmt.Building {
 	spots := [][2]float64{
 		{70, -130}, {140, -112}, {206, -140}, {268, -116},
@@ -341,7 +404,8 @@ func village() []mapfmt.Building {
 	for i, p := range spots {
 		w, d, h := chunk.ForestJitter(0, 0, i, 4096)
 		out = append(out, mapfmt.Building{
-			ID:      fmt.Sprintf("BLD_%02d", i+1),
+			ID:      buildingIDs[i],
+			Name:    fmt.Sprintf("BLD_%02d", i+1),
 			X:       p[0],
 			Y:       p[1],
 			Heading: (d - 0.5) * 0.6,
@@ -414,7 +478,8 @@ func river() []mapfmt.River {
 		})
 	}
 	return []mapfmt.River{{
-		ID:         "RIV_MAIN",
+		ID:         StationRiverID,
+		Name:       "RIV_MAIN",
 		Axis:       axis,
 		HalfWidthM: riverHalfWidthM,
 		BankM:      riverBankM,
@@ -436,9 +501,10 @@ func river() []mapfmt.River {
 // 1.8 м — константы снесённого спайка (BUFFER_H, gauge/2 + 0.20 на сторону),
 // замеренные брифом разбора §1.5. Происхождение не есть норма, и когда источник
 // норм появится, числа поменяются вместе с профилем, а не поодиночке.
-func bufferStop(id, element string, atU float64) mapfmt.Structure {
+func bufferStop(id, name, element string, atU float64) mapfmt.Structure {
 	return mapfmt.Structure{
 		ID:     id,
+		Name:   name,
 		Kind:   "buffer_stop",
 		Span:   netloc.LinearU{{Element: element, From: atU, To: atU}},
 		Height: 1.10,
@@ -446,9 +512,10 @@ func bufferStop(id, element string, atU float64) mapfmt.Structure {
 	}
 }
 
-func turnout(id string) mapfmt.Turnout {
+func turnout(id, name string) mapfmt.Turnout {
 	return mapfmt.Turnout{
 		ID:    id,
+		Name:  name,
 		Kind:  mapfmt.KindRail,
 		Hand:  "right",
 		Frog:  "1/9",
@@ -511,6 +578,7 @@ func construction(runs []mapfmt.ConstructionRun) *mapfmt.Construction {
 		// недосмотру.
 		Types: []mapfmt.TrackType{{
 			ID:      TrackTypeID,
+			Name:    "TRACK_MAIN_1520",
 			Gauge:   1.520,
 			Rail:    mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075},
 			Sleeper: mapfmt.TrackSleeper{Pitch: 0.543, Length: 2.75, Width: 0.28, Height: 0.20},
@@ -525,8 +593,8 @@ func construction(runs []mapfmt.ConstructionRun) *mapfmt.Construction {
 	}
 }
 
-func run(id string, spans ...netloc.IntervalU) mapfmt.ConstructionRun {
-	return mapfmt.ConstructionRun{ID: id, Coordinate: "u", Phase: 0, Spans: spans}
+func run(id, name string, spans ...netloc.IntervalU) mapfmt.ConstructionRun {
+	return mapfmt.ConstructionRun{ID: id, Name: name, Coordinate: "u", Phase: 0, Spans: spans}
 }
 
 // span — направленный интервал. Направление у run'а решётки обязательно: она
@@ -548,6 +616,19 @@ const RingRadiusM = 300.0
 //
 // Порт N1.P1 обслуживает два конца, поэтому якорь обязан назвать элемент,
 // внутрь которого смотрит heading.
+// Идентификаторы кольца.
+const (
+	RingNodeN1 = "018bcfe5-6826-7242-8242-000026424242" // метка N1
+	RingNodeN2 = "018bcfe5-6827-7242-8242-000027424242" // метка N2
+	RingNodeN3 = "018bcfe5-6828-7242-8242-000028424242" // метка N3
+	RingNodeN4 = "018bcfe5-6829-7242-8242-000029424242" // метка N4
+	RingEdge1  = "018bcfe5-682a-7242-8242-00002a424242" // метка E1
+	RingEdge2  = "018bcfe5-682b-7242-8242-00002b424242" // метка E2
+	RingEdge3  = "018bcfe5-682c-7242-8242-00002c424242" // метка E3
+	RingEdge4  = "018bcfe5-682d-7242-8242-00002d424242" // метка E4
+	RingRunID  = "018bcfe5-682e-7242-8242-00002e424242" // метка RUN_RING
+)
+
 func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
 	arc := func(radius float64) mapfmt.Alignments {
 		return mapfmt.Alignments{Horizontal: []mapfmt.HPrim{
@@ -558,28 +639,28 @@ func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
 		FormatVersion: mapfmt.FormatVersion,
 		MapID:         "RING",
 		MapRevision:   1,
-		Anchors:       map[string]mapfmt.Anchor{"N1.P1": {Element: "E1"}},
+		Anchors:       map[string]mapfmt.Anchor{RingNodeN1 + ".P1": {Element: RingEdge1}},
 		Topology: mapfmt.Topology{
 			Nodes: []mapfmt.Node{
-				{ID: "N1", Ports: []mapfmt.Port{{ID: "P1"}}},
-				{ID: "N2", Ports: []mapfmt.Port{{ID: "P1"}}},
-				{ID: "N3", Ports: []mapfmt.Port{{ID: "P1"}}},
-				{ID: "N4", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: RingNodeN1, Name: "N1", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: RingNodeN2, Name: "N2", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: RingNodeN3, Name: "N3", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: RingNodeN4, Name: "N4", Ports: []mapfmt.Port{{ID: "P1"}}},
 			},
 			Turnouts:   []mapfmt.Turnout{},
 			Structures: []mapfmt.Structure{},
 			Edges: []mapfmt.Edge{
-				edge("E1", "N1.P1", "N2.P1"),
-				edge("E2", "N2.P1", "N3.P1"),
-				edge("E3", "N3.P1", "N4.P1"),
-				edge("E4", "N4.P1", "N1.P1"),
+				edge(RingEdge1, "E1", RingNodeN1+".P1", RingNodeN2+".P1"),
+				edge(RingEdge2, "E2", RingNodeN2+".P1", RingNodeN3+".P1"),
+				edge(RingEdge3, "E3", RingNodeN3+".P1", RingNodeN4+".P1"),
+				edge(RingEdge4, "E4", RingNodeN4+".P1", RingNodeN1+".P1"),
 			},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{},
 			Edges: map[string]mapfmt.Alignments{
-				"E1": arc(RingRadiusM), "E2": arc(RingRadiusM),
-				"E3": arc(RingRadiusM), "E4": arc(lastRadius),
+				RingEdge1: arc(RingRadiusM), RingEdge2: arc(RingRadiusM),
+				RingEdge3: arc(RingRadiusM), RingEdge4: arc(lastRadius),
 			},
 		},
 	}
@@ -588,10 +669,10 @@ func Ring(lastRadius float64, opts ...Option) *mapfmt.Map {
 
 // Идентификаторы перегона из двух рёбер.
 const (
-	CorridorFirst  = "E1"
-	CorridorSecond = "E2"
+	CorridorFirst  = "018bcfe5-682f-7242-8242-00002f424242" // метка E1
+	CorridorSecond = "018bcfe5-6830-7242-8242-000030424242" // метка E2
 	// CorridorJoint — обычный порт, где сходятся два ребра.
-	CorridorJoint = "N_MID.P1"
+	CorridorJoint = "018bcfe5-6833-7242-8242-000033424242" + ".P1" // метка N_MID
 )
 
 // Corridor — перегон из ДВУХ рёбер, сходящихся на обычном порту.
@@ -606,16 +687,16 @@ func Corridor(opts ...Option) *mapfmt.Map {
 		FormatVersion: mapfmt.FormatVersion,
 		MapID:         "CORRIDOR",
 		MapRevision:   1,
-		Anchors:       map[string]mapfmt.Anchor{"NA.P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
+		Anchors:       map[string]mapfmt.Anchor{"018bcfe5-6831-7242-8242-000031424242" + ".P1": {X: 0, Y: 0, Z: 150, Heading: 0}},
 		Topology: mapfmt.Topology{
 			Nodes: []mapfmt.Node{
-				{ID: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
-				{ID: "N_MID", Ports: []mapfmt.Port{{ID: "P1"}}},
-				{ID: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: "018bcfe5-6831-7242-8242-000031424242", Name: "NA", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
+				{ID: "018bcfe5-6833-7242-8242-000033424242", Name: "N_MID", Ports: []mapfmt.Port{{ID: "P1"}}},
+				{ID: "018bcfe5-6832-7242-8242-000032424242", Name: "NB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 			},
 			Edges: []mapfmt.Edge{
-				edge(CorridorFirst, "NA.P1", CorridorJoint),
-				edge(CorridorSecond, CorridorJoint, "NB.P1"),
+				edge(CorridorFirst, "E1", "018bcfe5-6831-7242-8242-000031424242"+".P1", CorridorJoint),
+				edge(CorridorSecond, "E2", CorridorJoint, "018bcfe5-6832-7242-8242-000032424242"+".P1"),
 			},
 		},
 		Geometry: mapfmt.Geometry{
@@ -626,7 +707,7 @@ func Corridor(opts ...Option) *mapfmt.Map {
 			},
 		},
 		Construction: construction([]mapfmt.ConstructionRun{
-			run("RUN_CORRIDOR", span(CorridorFirst, 0, halfM), span(CorridorSecond, 0, halfM)),
+			run("018bcfe5-6834-7242-8242-000034424242", "RUN_CORRIDOR", span(CorridorFirst, 0, halfM), span(CorridorSecond, 0, halfM)),
 		}),
 	}
 	return apply(m, opts)
@@ -634,9 +715,10 @@ func Corridor(opts ...Option) *mapfmt.Map {
 
 // Идентификаторы заготовки новой карты.
 const (
-	BlankEdgeID = "E_MAIN"
-	BlankWest   = "N_WEST"
-	BlankEast   = "N_EAST"
+	BlankEdgeID = "018bcfe5-6837-7242-8242-000037424242" // метка E_MAIN
+	BlankWest   = "018bcfe5-6835-7242-8242-000035424242" // метка N_WEST
+	BlankEast   = "018bcfe5-6836-7242-8242-000036424242" // метка N_EAST
+	BlankRunID  = "018bcfe5-6838-7242-8242-000038424242" // метка RUN_E_MAIN
 )
 
 // Blank — заготовка НОВОЙ карты, с которой начинает автор.
@@ -657,7 +739,7 @@ func Blank(opts ...Option) *mapfmt.Map {
 				{ID: BlankWest, Ports: []mapfmt.Port{{ID: "P1", Purpose: "map_boundary"}}},
 				{ID: BlankEast, Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
-			Edges: []mapfmt.Edge{edge(BlankEdgeID, BlankWest+".P1", BlankEast+".P1")},
+			Edges: []mapfmt.Edge{edge(BlankEdgeID, "E_MAIN", BlankWest+".P1", BlankEast+".P1")},
 		},
 		Geometry: mapfmt.Geometry{
 			Turnouts: map[string]mapfmt.TurnoutGeometry{},
@@ -666,7 +748,7 @@ func Blank(opts ...Option) *mapfmt.Map {
 			},
 		},
 		Construction: construction([]mapfmt.ConstructionRun{
-			run("RUN_"+BlankEdgeID, span(BlankEdgeID, 0, lengthM)),
+			run(BlankRunID, "RUN_E_MAIN", span(BlankEdgeID, 0, lengthM)),
 		}),
 	}
 	return apply(m, opts)

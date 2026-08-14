@@ -46,7 +46,11 @@ type wireNetwork struct {
 }
 
 type wireTrackType struct {
-	ID      string      `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка типа решётки (карта; решение владельца «UUIDv7
+	// везде»): тождеством не является, но клиент показывает её игроку вместо
+	// UUID. Отсутствует у типов без метки.
+	Name    string      `json:"name,omitempty"`
 	Gauge   float64     `json:"gauge"`
 	Rail    wireRail    `json:"rail"`
 	Sleeper wireSleeper `json:"sleeper"`
@@ -76,7 +80,9 @@ type wireBallast struct {
 }
 
 type wireRun struct {
-	ID         string        `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка run'а (карта). Тождеством не является.
+	Name       string        `json:"name,omitempty"`
 	Type       string        `json:"type"`
 	Coordinate string        `json:"coordinate"`
 	Phase      float64       `json:"phase"`
@@ -109,7 +115,11 @@ type wireAddress struct {
 }
 
 type wireElement struct {
-	ID      string          `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка элемента (карта; решение владельца «UUIDv7
+	// везде»): тождеством не является, но её клиент показывает игроку вместо
+	// непроизносимого UUID. Отсутствует у элементов без метки.
+	Name    string          `json:"name,omitempty"`
 	Kind    string          `json:"kind"`
 	Start   wireStart       `json:"start"`
 	Prims   []wirePrimitive `json:"primitives"`
@@ -133,7 +143,10 @@ type wireRole struct {
 }
 
 type wireStructure struct {
-	ID            string     `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка сооружения: клиент показывает её игроку вместо
+	// UUID. Тождеством не является.
+	Name          string     `json:"name,omitempty"`
 	Kind          string     `json:"kind"`
 	Side          string     `json:"side"`
 	Offset        float64    `json:"offset,omitempty"`

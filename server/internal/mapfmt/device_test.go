@@ -4,7 +4,8 @@ import "testing"
 
 func swFixture() Turnout {
 	return Turnout{
-		ID:    "ST_A_SW_1",
+		ID:    uIDSW,
+		Name:  "SW",
 		Kind:  KindRail,
 		Hand:  "right",
 		Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
@@ -21,8 +22,8 @@ func TestTurnoutPassages(t *testing.T) {
 	}
 
 	want := []Passage{
-		{ID: "ST_A_SW_1:straight", From: "ST_A_SW_1.C", To: "ST_A_SW_1.S", Branch: "straight"},
-		{ID: "ST_A_SW_1:diverging", From: "ST_A_SW_1.C", To: "ST_A_SW_1.D", Branch: "diverging"},
+		{ID: uIDSW + ":straight", From: uIDSW + ".C", To: uIDSW + ".S", Branch: "straight"},
+		{ID: uIDSW + ":diverging", From: uIDSW + ".C", To: uIDSW + ".D", Branch: "diverging"},
 	}
 	for i, w := range want {
 		if ps[i] != w {
@@ -55,7 +56,7 @@ func TestPassageOrderIsStable(t *testing.T) {
 func TestElementEndsCoversEdgesAndPassages(t *testing.T) {
 	m := &Map{
 		Topology: Topology{
-			Edges:    []Edge{{ID: "E1", Kind: KindRail, From: "N1.P1", To: "ST_A_SW_1.C"}},
+			Edges:    []Edge{{ID: uIDE1, Name: "E1", Kind: KindRail, From: uIDN1 + ".P1", To: uIDSW + ".C"}},
 			Turnouts: []Turnout{swFixture()},
 		},
 	}
@@ -63,10 +64,10 @@ func TestElementEndsCoversEdgesAndPassages(t *testing.T) {
 	if len(ends) != 3 {
 		t.Fatalf("элементов %d, ожидалось три: ребро и два прохода", len(ends))
 	}
-	if got := ends["E1"]; got != [2]string{"N1.P1", "ST_A_SW_1.C"} {
+	if got := ends[uIDE1]; got != [2]string{uIDN1 + ".P1", uIDSW + ".C"} {
 		t.Fatalf("концы ребра %v", got)
 	}
-	if got := ends["ST_A_SW_1:diverging"]; got != [2]string{"ST_A_SW_1.C", "ST_A_SW_1.D"} {
+	if got := ends[uIDSW+":diverging"]; got != [2]string{uIDSW + ".C", uIDSW + ".D"} {
 		t.Fatalf("концы бокового прохода %v", got)
 	}
 }

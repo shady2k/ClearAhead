@@ -9,9 +9,12 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/match"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
+	"github.com/shady2k/ClearAhead/server/internal/worldgen"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -30,8 +33,16 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		t.Fatalf("новая карта: %v", err)
 	}
 	world := newChunksTestStore(t)
-	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7, Rule: testRule}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: "{}", Epoch: 7, Rule: testRule, Domain: testDomain}); err != nil {
 		t.Fatalf("регион: %v", err)
+	}
+	// Голова проекций — часть манифеста: регион без неё отвечает 500, а не
+	// половинчатым манифестом. Засевается фикстуре тем же шагом, что и в
+	// боевом потоке (worldgen.Bootstrap через worldstore.Seed).
+	if err := world.PutProjectionHead(st.Manifest.MapID, worldstore.ProjectionHead{
+		WorldVersion: 3, SourceJournalSeq: 7, NetworkVersion: 2, RegionRecipeHash: "r3",
+	}); err != nil {
+		t.Fatalf("голова: %v", err)
 	}
 	h := NewRegionsHandler(
 		NewRegionManifestHandler(world, maps),
@@ -74,6 +85,10 @@ func TestRegionManifestCarriesDetailRuleNumbers(t *testing.T) {
 	if got.Epoch != 7 {
 		t.Fatalf("эпоха %d, в базе 7", got.Epoch)
 	}
+	if got.ProjectionHead.WorldVersion != 3 || got.ProjectionHead.SourceJournalSeq != 7 ||
+		got.ProjectionHead.NetworkVersion != 2 || got.ProjectionHead.RegionRecipeHash != "r3" {
+		t.Fatalf("голова проекций %+v, ожидались мир 3, журнал 7, сеть 2, рецепт r3", got.ProjectionHead)
+	}
 	// Ревизия — то единственное число, без которого нечего подставить в адрес
 	// сети.
 	if got.Revision != st.Manifest.Revision {
@@ -104,6 +119,12 @@ func TestRegionManifestCarriesDetailRuleNumbers(t *testing.T) {
 	// круга другой уровень. Поле обязано быть непустым, а не просто присутствовать.
 	if got.Chunks.AxisStepM <= 0 {
 		t.Fatalf("шаг выборки оси %v — клиенту нечем повторить расстояние до оси", got.Chunks.AxisStepM)
+	}
+	// Домен — граница мира, и манифест обязан назвать её числом РЕГИОНА: за ней
+	// клиент не спрашивает чанки вовсе, и любое другое число развело бы
+	// манифест с базой.
+	if got.Domain != testDomain {
+		t.Fatalf("домен %+v, у региона %+v", got.Domain, testDomain)
 	}
 	// Числа обязаны быть теми же, по которым сервер сам порождает чанки: не
 	// «похожими», а буквально теми, что записаны у региона. Отдельно проверяется, что клиент
@@ -229,7 +250,7 @@ func TestRegionGeoreferenceArrivesAsIs(t *testing.T) {
 	}
 
 	const frame = `{"datum":"WGS84","origin":{"lat":45.03,"lon":38.97,"h":25}}`
-	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: frame, Epoch: 7, Rule: testRule}); err != nil {
+	if err := world.PutRegion(worldstore.Region{ID: st.Manifest.MapID, Frame: frame, Epoch: 7, Rule: testRule, Domain: testDomain}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	var with map[string]json.RawMessage
@@ -290,5 +311,59 @@ func TestRegionRootRoutesSubresources(t *testing.T) {
 				t.Fatalf("%s (%s %s): код %d, ожидалось 404", name, method, p, rec.Code)
 			}
 		}
+	}
+}
+
+// TestNatureOnlyRegionServesManifest — третья половина приёмочного критерия
+// sqym.2: карта БЕЗ ЕДИНОГО элемента пути, заведённая бутстрапом, отдаёт
+// манифест. Манифест берёт ревизию и хеши сети у mapstore, а домен и правило —
+// у записи региона, и обе половины обязаны пережить пустую сеть: карта без
+// пути проходит вход сети (mapstore.Set), а регион заводится (worldgen.Bootstrap).
+// Без этого клиент не получил бы ни одного адреса, по которому можно спросить
+// мир, в котором ещё ничего не построено.
+func TestNatureOnlyRegionServesManifest(t *testing.T) {
+	m := seedmap.Line(
+		seedmap.WithID("NATURE"),
+		seedmap.WithTerrain(),
+		seedmap.Mutate(func(m *mapfmt.Map) {
+			m.Anchors = nil
+			m.Topology.Edges = nil
+			m.Geometry = mapfmt.Geometry{}
+			m.Construction = nil
+		}),
+	)
+	maps := mapstore.Open()
+	st, err := maps.Set(m)
+	if err != nil {
+		t.Fatalf("карта без пути не проходит вход сети: %v", err)
+	}
+	world := newChunksTestStore(t)
+	if _, created, err := worldgen.Bootstrap(world, m, int64(st.Manifest.Revision), `{"source":"seedmap","kind":"fixture"}`); err != nil || !created {
+		t.Fatalf("бутстрап: created=%v, err=%v", created, err)
+	}
+	h := NewRegionsHandler(
+		NewRegionManifestHandler(world, maps),
+		NewNetworkHandler(maps),
+		NewChunksHandler(world, nil),
+		NewObjectsHandler(maps),
+		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID})),
+	)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest("GET", "/regions/"+st.Manifest.MapID, nil))
+	if w.Code != 200 {
+		t.Fatalf("код %d, ожидалось 200", w.Code)
+	}
+	dec := json.NewDecoder(w.Body)
+	dec.DisallowUnknownFields()
+	var got regionManifest
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("манифест не укладывается в объявленную форму: %v", err)
+	}
+	if got.Region != st.Manifest.MapID || got.Revision != st.Manifest.Revision {
+		t.Fatalf("манифест называет регион %q ревизию %d, карта — %q и %d",
+			got.Region, got.Revision, st.Manifest.MapID, st.Manifest.Revision)
+	}
+	if got.Domain != m.Terrain.Domain {
+		t.Fatalf("домен манифеста %+v, у карты %+v", got.Domain, m.Terrain.Domain)
 	}
 }

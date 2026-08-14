@@ -5,6 +5,28 @@ import (
 	"testing"
 )
 
+// Зеркало таблицы tID* из helpers_test.go (пакет mapfmt_test) для тестов
+// ВНУТРЕННЕГО пакета: внешний пакет не виден, а значения обязаны совпадать —
+// два одинаковых UUID в одной карте дали бы отказ не по предмету теста.
+// Номера строк в комментариях повторяют строки внешней таблицы.
+const (
+	uIDN1  = "01a3185c-5001-7242-8242-000000424242" // метка N1 (tID00)
+	uIDSW  = "01a3185c-5007-7242-8242-000006424242" // метка SW (tID06)
+	uIDEA  = "01a3185c-5010-7242-8242-00000f424242" // метка EA (tID15)
+	uIDEB  = "01a3185c-5011-7242-8242-000010424242" // метка EB (tID16)
+	uIDEC  = "01a3185c-5012-7242-8242-000011424242" // метка EC (tID17)
+	uIDED  = "01a3185c-5013-7242-8242-000012424242" // метка ED (tID18)
+	uIDEE  = "01a3185c-5014-7242-8242-000013424242" // метка EE (tID19)
+	uIDEF  = "01a3185c-5015-7242-8242-000014424242" // метка EF (tID20)
+	uIDSW1 = "01a3185c-5016-7242-8242-000015424242" // метка SW1 (tID21)
+	uIDSW2 = "01a3185c-5017-7242-8242-000016424242" // метка SW2 (tID22)
+
+	// uIDE1 — зеркало seedmap.LineEdgeID (метка E1): внутренний пакет не
+	// может импортировать seedmap (цикл импорта), а значение обязано
+	// совпадать с фабрикой.
+	uIDE1 = "018bcfe5-6803-7242-8242-000003424242"
+)
+
 // Разделители составных адресов не бывают внутри имени. Каждый случай ниже —
 // не гипотеза, а закрытая дыра.
 func TestSeparatorsAreForbiddenInIdentifier(t *testing.T) {
@@ -55,28 +77,34 @@ func TestLegalIdentifiersAreAccepted(t *testing.T) {
 //
 // Раньше такая карта проходила сбор элементов (дубликат искался только среди
 // рёбер), а в общей таблице выравниваний проход МОЛЧА затирал геометрию
-// ребра: объявленное автором просто исчезало. Проверка держится на запрете
-// разделителя, поэтому тест стоит здесь, а не в валидаторе топологии.
+// ребра: объявленное автором просто исчезало. Защита была двухслойной — запрет
+// разделителя в авторском идентификаторе (ValidID) и сбор элементов.
+//
+// С решением «UUIDv7 везде» тождество элемента — UUID, и колонка в нём
+// невозможна: имя прохода (uuid:straight) отвергается уже проверкой формы
+// UUIDv7, раньше запрета разделителя. Тест закрепляет, что карта с ребром под
+// именем прохода всё ещё не проходит вход: причина изменилась, а дефект
+// (молчаливое затирание) остался недостижим.
 func TestEdgeNamedAsPassageIsRejected(t *testing.T) {
 	m := &Map{
 		FormatVersion: FormatVersion,
 		MapID:         "ST_A",
 		MapRevision:   1,
-		Anchors:       map[string]Anchor{"N1.P1": {}},
+		Anchors:       map[string]Anchor{uIDN1 + ".P1": {}},
 		Topology: Topology{
-			Nodes: []Node{{ID: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
+			Nodes: []Node{{ID: uIDN1, Name: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
 			Turnouts: []Turnout{
-				{ID: "SW", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+				{ID: uIDSW, Name: "SW", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
 			},
-			Edges: []Edge{{ID: "SW" + PassageStraight, Kind: KindRail, From: "N1.P1", To: "N1.P1"}},
+			Edges: []Edge{{ID: uIDSW + PassageStraight, Name: "E_FAKE", Kind: KindRail, From: uIDN1 + ".P1", To: uIDN1 + ".P1"}},
 		},
 		Geometry: Geometry{
-			Turnouts: map[string]TurnoutGeometry{"SW": {
+			Turnouts: map[string]TurnoutGeometry{uIDSW: {
 				Straight:  Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
 				Diverging: Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
 			}},
 			Edges: map[string]Alignments{
-				"SW" + PassageStraight: {Horizontal: []HPrim{{Kind: "straight", Length: 999}}},
+				uIDSW + PassageStraight: {Horizontal: []HPrim{{Kind: "straight", Length: 999}}},
 			},
 		},
 	}
@@ -84,7 +112,7 @@ func TestEdgeNamedAsPassageIsRejected(t *testing.T) {
 	if err == nil {
 		t.Fatal("карта с ребром под именем прохода принята")
 	}
-	if !strings.Contains(err.Error(), "запрещён в идентификаторе") {
+	if !strings.Contains(err.Error(), "не UUIDv7") {
 		t.Fatalf("отказ пришёл не по той причине: %v", err)
 	}
 }

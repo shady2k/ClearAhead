@@ -87,11 +87,11 @@ func (m *Map) validateConstruction() error {
 	seenRuns := make(map[string]bool, len(c.Runs))
 	for i := range c.Runs {
 		r := &c.Runs[i]
-		if err := ValidID("run решётки", r.ID); err != nil {
+		if err := checkEntity("run решётки", r.Name, r.ID); err != nil {
 			return fmt.Errorf("%s%w", prefix, err)
 		}
 		if seenRuns[r.ID] {
-			return fmt.Errorf("%srun %q объявлен дважды", prefix, r.ID)
+			return fmt.Errorf("%srun %q объявлен дважды", prefix, Labeled(r.Name, r.ID))
 		}
 		seenRuns[r.ID] = true
 		typ := r.Type
@@ -99,55 +99,55 @@ func (m *Map) validateConstruction() error {
 			typ = c.DefaultType
 		}
 		if _, ok := types[typ]; !ok {
-			return fmt.Errorf("%srun %q: неизвестный тип %q", prefix, r.ID, typ)
+			return fmt.Errorf("%srun %q: неизвестный тип %q", prefix, Labeled(r.Name, r.ID), typ)
 		}
 		if r.Coordinate != "u" {
-			return fmt.Errorf("%srun %q: coordinate %q, разрешено только \"u\"", prefix, r.ID, r.Coordinate)
+			return fmt.Errorf("%srun %q: coordinate %q, разрешено только \"u\"", prefix, Labeled(r.Name, r.ID), r.Coordinate)
 		}
 		// Фаза нормализована относительно шага РАЗРЕШЁННОГО типа run'а:
 		// полуоткрытое правило размещения phase + n·pitch ∈ [0, run_length).
 		pitch := types[typ].Sleeper.Pitch
 		if !(r.Phase >= 0 && r.Phase < pitch) {
-			return fmt.Errorf("%srun %q: phase %g вне [0, pitch=%g)", prefix, r.ID, r.Phase, pitch)
+			return fmt.Errorf("%srun %q: phase %g вне [0, pitch=%g)", prefix, Labeled(r.Name, r.ID), r.Phase, pitch)
 		}
 		if err := r.Spans.Structural(); err != nil {
-			return fmt.Errorf("%srun %q: %w", prefix, r.ID, err)
+			return fmt.Errorf("%srun %q: %w", prefix, Labeled(r.Name, r.ID), err)
 		}
 		if len(r.Spans) > MaxRunSpans {
-			return fmt.Errorf("%srun %q: спанов больше %d", prefix, r.ID, MaxRunSpans)
+			return fmt.Errorf("%srun %q: спанов больше %d", prefix, Labeled(r.Name, r.ID), MaxRunSpans)
 		}
 		// У run'а решётки направление ОБЯЗАТЕЛЬНО у каждого спана: решётка
 		// укладывается по ходу, и спан без направления в ней недоописан — в
 		// отличие от платформы, у которой направления нет по существу.
 		if !r.Spans.Directed() {
 			return fmt.Errorf("%srun %q: у каждого спана обязано быть направление forward или reverse",
-				prefix, r.ID)
+				prefix, Labeled(r.Name, r.ID))
 		}
 		for j := range r.Spans {
 			sp := &r.Spans[j]
 			dom, ok := domains[sp.Element]
 			if !ok {
-				return fmt.Errorf("%srun %q: спана %d: элемент %q не существует", prefix, r.ID, j, sp.Element)
+				return fmt.Errorf("%srun %q: спана %d: элемент %q не существует", prefix, Labeled(r.Name, r.ID), j, sp.Element)
 			}
 			if passages[sp.Element] {
 				return fmt.Errorf("%srun %q: спана %d покрывает проход устройства %q — решётка устройств нерегулярна, run'ы её не покрывают",
-					prefix, r.ID, j, sp.Element)
+					prefix, Labeled(r.Name, r.ID), j, sp.Element)
 			}
 			from, err := units.MetersToDistance(sp.From)
 			if err != nil {
-				return fmt.Errorf("%srun %q: спана %d: %w", prefix, r.ID, j, err)
+				return fmt.Errorf("%srun %q: спана %d: %w", prefix, Labeled(r.Name, r.ID), j, err)
 			}
 			to, err := units.MetersToDistance(sp.To)
 			if err != nil {
-				return fmt.Errorf("%srun %q: спана %d: %w", prefix, r.ID, j, err)
+				return fmt.Errorf("%srun %q: спана %d: %w", prefix, Labeled(r.Name, r.ID), j, err)
 			}
 			if !(from >= 0 && to > from) {
 				return fmt.Errorf("%srun %q: спана %d: интервал [%g, %g] вырожден",
-					prefix, r.ID, j, sp.From, sp.To)
+					prefix, Labeled(r.Name, r.ID), j, sp.From, sp.To)
 			}
 			if to > dom {
 				return fmt.Errorf("%srun %q: спана %d: конец %g за пределами элемента %q (длина %s)",
-					prefix, r.ID, j, sp.To, sp.Element, dom)
+					prefix, Labeled(r.Name, r.ID), j, sp.To, sp.Element, dom)
 			}
 			if other, dup := runFor[sp.Element]; dup && other != r.ID {
 				return fmt.Errorf("%sребро %q покрыто и run'ом %q, и run'ом %q — ровно один run на ребро",
@@ -165,26 +165,26 @@ func (m *Map) validateConstruction() error {
 	for _, e := range m.Topology.Edges {
 		spans, ok := spansFor[e.ID]
 		if !ok {
-			return fmt.Errorf("%sребро %q не покрыто ни одним run", prefix, e.ID)
+			return fmt.Errorf("%sребро %q не покрыто ни одним run", prefix, Labeled(e.Name, e.ID))
 		}
 		sort.Slice(spans, func(i, j int) bool { return spans[i].from < spans[j].from })
 		if spans[0].from > abutTolerance {
-			return fmt.Errorf("%sребро %q: покрытие начинается с %s, ожидается 0", prefix, e.ID, spans[0].from)
+			return fmt.Errorf("%sребро %q: покрытие начинается с %s, ожидается 0", prefix, Labeled(e.Name, e.ID), spans[0].from)
 		}
 		u := domains[e.ID]
 		if u-spans[len(spans)-1].to > abutTolerance {
 			return fmt.Errorf("%sребро %q: покрытие кончается на %s, ожидается %s",
-				prefix, e.ID, spans[len(spans)-1].to, u)
+				prefix, Labeled(e.Name, e.ID), spans[len(spans)-1].to, u)
 		}
 		for i := 1; i < len(spans); i++ {
 			gap := spans[i].from - spans[i-1].to
 			if gap < -abutTolerance {
 				return fmt.Errorf("%sребро %q: перекрытие спанов %s–%s и %s–%s",
-					prefix, e.ID, spans[i-1].from, spans[i-1].to, spans[i].from, spans[i].to)
+					prefix, Labeled(e.Name, e.ID), spans[i-1].from, spans[i-1].to, spans[i].from, spans[i].to)
 			}
 			if gap > abutTolerance {
 				return fmt.Errorf("%sребро %q: пропуск между спанами %s и %s",
-					prefix, e.ID, spans[i-1].to, spans[i].from)
+					prefix, Labeled(e.Name, e.ID), spans[i-1].to, spans[i].from)
 			}
 		}
 	}
@@ -201,11 +201,11 @@ type runSpanU struct {
 // диапазонах. Проверка !(v >= min && v <= max) отвергает и NaN, и бесконечность
 // наравне с выходом за границы — валидатор не обязан полагаться на checkFinite.
 func checkTrackType(prefix string, t *TrackType) error {
-	if err := ValidID("тип решётки", t.ID); err != nil {
+	if err := checkEntity("тип решётки", t.Name, t.ID); err != nil {
 		return fmt.Errorf("%s%w", prefix, err)
 	}
 	bad := func(what string, v, min, max float64) error {
-		return fmt.Errorf("%sтип %q: %s %g вне [%g, %g]", prefix, t.ID, what, v, min, max)
+		return fmt.Errorf("%sтип %q: %s %g вне [%g, %g]", prefix, Labeled(t.Name, t.ID), what, v, min, max)
 	}
 	if !(t.Gauge >= MinGauge && t.Gauge <= MaxGauge) {
 		return bad("gauge", t.Gauge, MinGauge, MaxGauge)

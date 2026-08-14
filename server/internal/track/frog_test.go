@@ -16,24 +16,32 @@ import (
 // боковой — дуга R=300, угол −0.1107 (правая стрелка, проход 33.21 м).
 func frogEls(straight, diverging geom.Chain) map[string]Element {
 	return map[string]Element{
-		"SW1:straight":  {ID: "SW1:straight", Start: PortPose{Plan: geom.Pose{}}, Plan: straight},
-		"SW1:diverging": {ID: "SW1:diverging", Start: PortPose{Plan: geom.Pose{}}, Plan: diverging},
+		seedmap.StationSW1 + mapfmt.PassageStraight: {
+			ID: seedmap.StationSW1 + mapfmt.PassageStraight, Start: PortPose{Plan: geom.Pose{}}, Plan: straight,
+		},
+		seedmap.StationSW1 + mapfmt.PassageDiverging: {
+			ID: seedmap.StationSW1 + mapfmt.PassageDiverging, Start: PortPose{Plan: geom.Pose{}}, Plan: diverging,
+		},
 	}
 }
 
 func frogTypes() map[string]mapfmt.TrackType {
 	return map[string]mapfmt.TrackType{
-		"TRACK_MAIN": {ID: "TRACK_MAIN", Gauge: 1.520},
+		seedmap.TrackTypeID: {ID: seedmap.TrackTypeID, Name: "TRACK_MAIN_1520", Gauge: 1.520},
 	}
 }
 
 func frogConstruction() *mapfmt.Construction {
-	return &mapfmt.Construction{DefaultType: "TRACK_MAIN"}
+	return &mapfmt.Construction{DefaultType: seedmap.TrackTypeID}
 }
 
 func sw1Right() mapfmt.Turnout {
-	return mapfmt.Turnout{ID: "SW1", Kind: mapfmt.KindRail, Hand: "right"}
+	return mapfmt.Turnout{ID: seedmap.StationSW1, Kind: mapfmt.KindRail, Hand: "right"}
 }
+
+// frogNarrowTypeID — ручной тип колеи 1.0 (метка NARROW). UUID взят из таблицы
+// mapfmt/helpers_test.go (tID12, метка TYPE_X): фикстура свой UUID не выдумывает.
+const frogNarrowTypeID = "01a3185c-500d-7242-8242-00000c424242"
 
 func mustChain(t *testing.T, prims ...geom.Primitive) geom.Chain {
 	t.Helper()
@@ -62,14 +70,14 @@ func TestFrogST_A_SW_1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("крестовина: %v", err)
 	}
-	if f.Owner != "SW1" || f.Kind != "frog" {
-		t.Fatalf("особенность %+v, ожидалась frog стрелки SW1", f)
+	if f.Owner != seedmap.StationSW1 || f.Kind != "frog" {
+		t.Fatalf("особенность %+v, ожидалась frog стрелки %s", f, seedmap.StationSW1)
 	}
 	if len(f.Addresses) != 2 {
 		t.Fatalf("адресов %d, ожидалось 2", len(f.Addresses))
 	}
 	a0, a1 := f.Addresses[0], f.Addresses[1]
-	if a0.Element != "SW1:straight" || a1.Element != "SW1:diverging" {
+	if a0.Element != seedmap.StationSW1+mapfmt.PassageStraight || a1.Element != seedmap.StationSW1+mapfmt.PassageDiverging {
 		t.Fatalf("порядок адресов не «прямой, затем боковой»: %s, %s", a0.Element, a1.Element)
 	}
 	// Принятое число: u бокового прохода ≈ 30.21 м, допуск 0.05 м.
@@ -160,9 +168,9 @@ func TestFrogDeviceType(t *testing.T) {
 	diverging := mustChain(t, primArc(t, 300, -0.1107))
 	els := frogEls(straight, diverging)
 	types := frogTypes()
-	types["NARROW"] = mapfmt.TrackType{ID: "NARROW", Gauge: 1.0}
+	types[frogNarrowTypeID] = mapfmt.TrackType{ID: frogNarrowTypeID, Name: "NARROW", Gauge: 1.0}
 	c := frogConstruction()
-	c.DefaultType = "NARROW"
+	c.DefaultType = frogNarrowTypeID
 	turnout := sw1Right()
 	f, err := frogFeature(els, types, c, turnout)
 	if err != nil {
@@ -173,7 +181,7 @@ func TestFrogDeviceType(t *testing.T) {
 		t.Fatalf("крестовина посчитана по чужой колее: u=%g при gauge=1.0", f.Addresses[1].U)
 	}
 	// Явный type устройства перебивает умолчание.
-	turnout.Type = "TRACK_MAIN"
+	turnout.Type = seedmap.TrackTypeID
 	f, err = frogFeature(els, types, c, turnout)
 	if err != nil {
 		t.Fatalf("крестовина: %v", err)

@@ -15,6 +15,15 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
+// Идентификаторы локомотивов ручных расстановок — UUIDv7 (решение владельца
+// «UUIDv7 везде»): у боевой расстановки (maps/st_a_placement.json) LOCO_1 =
+// 01a3185c-6001-…, и фикстура продолжает тот же ряд; LOCO_2 в боевой
+// расстановке нет, и его имя живёт в name.
+const (
+	loco1ID = "01a3185c-6001-7242-8242-000000424242" // метка LOCO_1
+	loco2ID = "01a3185c-6002-7242-8242-000001424242" // метка LOCO_2
+)
+
 // station компилирует карту фабрики: расстановка проверяется об элементы и их
 // длины, и брать их надо оттуда же, откуда берёт сервер.
 func station(t *testing.T) *track.CompiledNetwork {
@@ -87,8 +96,8 @@ func good() map[string]any {
 		"format_version": FormatVersion,
 		"region":         "ST_A",
 		"units": []any{map[string]any{
-			"id": "LOCO_1", "type": "VL80",
-			"at": map[string]any{"element": "E_MAIN", "u": 150.0, "direction": "forward"},
+			"id": loco1ID, "name": "LOCO_1", "type": "VL80",
+			"at": map[string]any{"element": seedmap.StationMain, "u": 150.0, "direction": "forward"},
 		}},
 	}
 }
@@ -98,7 +107,7 @@ func TestStartPlacesUnit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("расстановка: %v", err)
 	}
-	if len(m.Units) != 1 || m.Units[0].ID != "LOCO_1" {
+	if len(m.Units) != 1 || m.Units[0].ID != loco1ID || m.Units[0].Name != "LOCO_1" {
 		t.Fatalf("единицы %+v", m.Units)
 	}
 	if m.Region != "ST_A" || m.ID != "M1" {
@@ -137,7 +146,9 @@ func TestPlacementRefusals(t *testing.T) {
 			unit(d)["type"] = "ЧМЭ3"
 		}},
 		{"элемента нет", "в сети нет", func(d map[string]any) {
-			at(d)["element"] = "E_НЕТУ"
+			// Чужой, но настоящий UUIDv7: ребро E1 карты Line в сети станции
+			// не существует.
+			at(d)["element"] = seedmap.LineEdgeID
 		}},
 		{"направление не задано", "направление не задано", func(d map[string]any) {
 			delete(at(d), "direction")
@@ -154,8 +165,8 @@ func TestPlacementRefusals(t *testing.T) {
 			at(d)["u"] = 400.0
 		}},
 		{"две единицы в одном месте", "накладывается", func(d map[string]any) {
-			u2 := map[string]any{"id": "LOCO_2", "type": "VL80",
-				"at": map[string]any{"element": "E_MAIN", "u": 160.0, "direction": "forward"}}
+			u2 := map[string]any{"id": loco2ID, "name": "LOCO_2", "type": "VL80",
+				"at": map[string]any{"element": seedmap.StationMain, "u": 160.0, "direction": "forward"}}
 			d["units"] = append(d["units"].([]any), u2)
 		}},
 		{"два одинаковых имени", "объявлена дважды", func(d map[string]any) {
@@ -193,9 +204,9 @@ func TestUnitsTouchingEndsAllowed(t *testing.T) {
 	d := good()
 	at(d)["u"] = 100.0
 	d["units"] = append(d["units"].([]any), map[string]any{
-		"id": "LOCO_2", "type": "VL80",
+		"id": loco2ID, "name": "LOCO_2", "type": "VL80",
 		// Ровно длина машины дальше: хвост первой и голова второй в одной точке.
-		"at": map[string]any{"element": "E_MAIN", "u": 134.18, "direction": "forward"},
+		"at": map[string]any{"element": seedmap.StationMain, "u": 134.18, "direction": "forward"},
 	})
 	if _, err := Start("M1", write(t, d), station(t), set(t)); err != nil {
 		t.Fatalf("машины впритык отвергнуты: %v", err)

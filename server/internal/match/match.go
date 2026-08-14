@@ -60,6 +60,10 @@ const MaxDocumentBytes = 1 << 20
 // Unit — подвижная единица в партии: экземпляр, а не тип.
 type Unit struct {
 	ID string `json:"id"`
+	// Name — читаемая метка единицы (расстановка; решение владельца «UUIDv7
+	// везде»): тождеством не является, но её клиент показывает игроку вместо
+	// UUID.
+	Name string `json:"name,omitempty"`
 	// Type — идентификатор паспорта в наборе контента.
 	Type string `json:"type"`
 	// At — ТОЧКА ОТСЧЁТА единицы: середина между плоскостями автосцепок.
@@ -146,34 +150,34 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			return fmt.Errorf("match: единица %d: %w", i, err)
 		}
 		if seen[u.ID] {
-			return fmt.Errorf("match: единица %s объявлена дважды", u.ID)
+			return fmt.Errorf("match: единица %s объявлена дважды", mapfmt.Labeled(u.Name, u.ID))
 		}
 		seen[u.ID] = true
 		if err := u.At.Structural(); err != nil {
-			return fmt.Errorf("match: единица %s: %w", u.ID, err)
+			return fmt.Errorf("match: единица %s: %w", mapfmt.Labeled(u.Name, u.ID), err)
 		}
 		// Направление у подвижной единицы ОБЯЗАТЕЛЬНО: пустое значение в
 		// netloc означает «объект направления не имеет», и это правда для
 		// платформы, но не для машины — у неё есть перёд.
 		if !u.At.Direction.Directed() {
 			return fmt.Errorf("match: единица %s: направление не задано; "+
-				"у машины есть перёд, и пустое направление означало бы обратное", u.ID)
+				"у машины есть перёд, и пустое направление означало бы обратное", mapfmt.Labeled(u.Name, u.ID))
 		}
 		st, ok := set.StockType(u.Type)
 		if !ok {
-			return fmt.Errorf("match: единица %s: тип %s в наборе контента не объявлен", u.ID, u.Type)
+			return fmt.Errorf("match: единица %s: тип %s в наборе контента не объявлен", mapfmt.Labeled(u.Name, u.ID), u.Type)
 		}
 		el, ok := net.Elements[u.At.Element]
 		if !ok {
-			return fmt.Errorf("match: единица %s: элемента %s в сети нет", u.ID, u.At.Element)
+			return fmt.Errorf("match: единица %s: элемента %s в сети нет", mapfmt.Labeled(u.Name, u.ID), u.At.Element)
 		}
 		if math.IsNaN(u.At.U) || math.IsInf(u.At.U, 0) || u.At.U < 0 {
-			return fmt.Errorf("match: единица %s: u = %v", u.ID, u.At.U)
+			return fmt.Errorf("match: единица %s: u = %v", mapfmt.Labeled(u.Name, u.ID), u.At.U)
 		}
 
 		from, to, err := extentS(u, st, el)
 		if err != nil {
-			return fmt.Errorf("match: единица %s: %w", u.ID, err)
+			return fmt.Errorf("match: единица %s: %w", mapfmt.Labeled(u.Name, u.ID), err)
 		}
 		for _, busy := range occupied[u.At.Element] {
 			// Полуоткрытые интервалы: касание концами наложением НЕ считается.
@@ -184,7 +188,7 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			if from < busy[1] && busy[0] < to {
 				return fmt.Errorf("match: единица %s накладывается на уже стоящую "+
 					"на элементе %s: [%s, %s) против [%s, %s)",
-					u.ID, u.At.Element, from, to, busy[0], busy[1])
+					mapfmt.Labeled(u.Name, u.ID), u.At.Element, from, to, busy[0], busy[1])
 			}
 		}
 		occupied[u.At.Element] = append(occupied[u.At.Element], [2]units.Distance{from, to})

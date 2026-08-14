@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/worldgen"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -30,6 +32,11 @@ const testBaseZmm = 143_720
 // можно сослаться, больше не существует. Регион без правила не записывается
 // вовсе (worldstore.PutRegion), поэтому его называет каждая проверка.
 var testRule = chunk.Rule{Level0RadiusM: 512, MaxLevel: 4}
+
+// testDomain — домен тестового региона: прямоугольник вокруг начала координат,
+// где лежит тестовый чанк. Регион без домена не записывается
+// (worldstore.PutRegion) — без него нельзя сказать, где мир кончается.
+var testDomain = mapfmt.Domain{MinX: -8192, MinZ: -12288, MaxX: 12288, MaxZ: 12288}
 
 // testHeights — отсчёты тестового чанка.
 //
@@ -59,14 +66,20 @@ func newChunksTestStore(t *testing.T) *worldstore.Store {
 		t.Fatalf("база мира: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1, Rule: testRule}); err != nil {
+	if err := s.PutRegion(worldstore.Region{ID: testRegion, Frame: "{}", Epoch: 1, Rule: testRule, Domain: testDomain}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
+	// Голова проекций обязана существовать: неверсионная ручка читает её,
+	// чтобы отдать ТЕКУЩУЮ версию мира.
+	if err := s.PutProjectionHead(testRegion, worldstore.ProjectionHead{WorldVersion: 1, SourceJournalSeq: 0, NetworkVersion: 1, RegionRecipeHash: ""}); err != nil {
+		t.Fatalf("голова: %v", err)
+	}
 	if err := s.PutChunk(worldstore.Chunk{
-		Address:  chunk.Address{Region: testRegion, Level: 0, CX: 0, CZ: 0},
-		Revision: 1,
-		BaseZmm:  testBaseZmm,
-		Heights:  testHeights(),
+		Address:      chunk.Address{Region: testRegion, Level: 0, CX: 0, CZ: 0},
+		WorldVersion: 1,
+		Revision:     1,
+		BaseZmm:      testBaseZmm,
+		Heights:      testHeights(),
 	}); err != nil {
 		t.Fatalf("чанк: %v", err)
 	}
@@ -320,10 +333,11 @@ func TestChangedChunkReachesClientThatCachedIt(t *testing.T) {
 		dug[k] += 250
 	}
 	if err := s.PutChunk(worldstore.Chunk{
-		Address:  chunk.Address{Region: testRegion, Level: 0, CX: 0, CZ: 0},
-		Revision: 2,
-		BaseZmm:  testBaseZmm,
-		Heights:  dug,
+		Address:      chunk.Address{Region: testRegion, Level: 0, CX: 0, CZ: 0},
+		WorldVersion: 1,
+		Revision:     2,
+		BaseZmm:      testBaseZmm,
+		Heights:      dug,
 	}); err != nil {
 		t.Fatalf("перезапись чанка: %v", err)
 	}
@@ -362,9 +376,11 @@ func TestChangedChunkReachesClientThatCachedIt(t *testing.T) {
 // проверять её надо на том, что этот вопрос задаёт, а не на том, кто на него
 // отвечает по-настоящему. Байт в байт совпадение посчитанного с прогретым
 // проверяется там, где оно живёт, — в worldgen.
-type makerFunc func(a chunk.Address) (worldstore.Chunk, bool, error)
+type makerFunc func(a chunk.Address, worldVersion int64) (worldstore.Chunk, bool, error)
 
-func (f makerFunc) MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error) { return f(a) }
+func (f makerFunc) MakeChunk(a chunk.Address, worldVersion int64) (worldstore.Chunk, bool, error) {
+	return f(a, worldVersion)
+}
 
 // TestMissingChunkIsComputedAndCached — база стала кэшем.
 //
@@ -383,18 +399,18 @@ func TestMissingChunkIsComputedAndCached(t *testing.T) {
 	}
 
 	calls := 0
-	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
 		calls++
 		if a != addr {
 			return worldstore.Chunk{}, false, nil
 		}
 		// Ровно то, что делает настоящий счётчик: пишет и отдаёт прочитанное.
 		if err := s.PutChunk(worldstore.Chunk{
-			Address: a, Revision: 1, BaseZmm: testBaseZmm, Heights: made,
+			Address: a, WorldVersion: 1, Revision: 1, BaseZmm: testBaseZmm, Heights: made,
 		}); err != nil {
 			return worldstore.Chunk{}, false, err
 		}
-		c, ok, err := s.GetChunk(a)
+		c, ok, err := s.GetChunk(a, 1)
 		return c, ok, err
 	}))
 
@@ -440,7 +456,7 @@ func TestMissingChunkIsComputedAndCached(t *testing.T) {
 // спросили.
 func TestEmptinessBeyondTheWorldStays204(t *testing.T) {
 	s := newChunksTestStore(t)
-	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
 		return worldstore.Chunk{}, false, nil
 	}))
 	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 1_000_000, 0), nil)
@@ -449,6 +465,27 @@ func TestEmptinessBeyondTheWorldStays204(t *testing.T) {
 	}
 	if rec.Body.Len() != 0 {
 		t.Fatalf("204 с телом в %d байт", rec.Body.Len())
+	}
+}
+
+// TestQueueOverflowIsServed503 — переполнение очереди порождения — 503 с
+// Retry-After, а не 500 и не 204.
+//
+// Очередь полна — состояние ВРЕМЕННОЕ и честно названное (worldgen.ErrQueueFull):
+// клиенту сказано, когда повторить, и повтор не выглядит как «сломано
+// навсегда». 204 здесь был бы враньём — земля есть, её просто не успели
+// посчитать, — а 500 спутал бы загруженность с поломкой.
+func TestQueueOverflowIsServed503(t *testing.T) {
+	s := newChunksTestStore(t)
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
+		return worldstore.Chunk{}, false, worldgen.ErrQueueFull
+	}))
+	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 5, 5), nil)
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("код %d, ожидался 503", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "1" {
+		t.Fatalf("Retry-After %q, ожидался 1", got)
 	}
 }
 
@@ -461,7 +498,7 @@ func TestEmptinessBeyondTheWorldStays204(t *testing.T) {
 // мира.
 func TestChunkThatCannotBeComputedIsServed500(t *testing.T) {
 	s := newChunksTestStore(t)
-	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
 		return worldstore.Chunk{}, false, errors.New("рецепт не посчитан")
 	}))
 	rec := do(t, h, http.MethodGet, chunkURL(testRegion, 0, 5, 5), nil)
@@ -477,7 +514,7 @@ func TestChunkThatCannotBeComputedIsServed500(t *testing.T) {
 func TestStoredChunkIsNotRecomputed(t *testing.T) {
 	s := newChunksTestStore(t)
 	calls := 0
-	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
 		calls++
 		return worldstore.Chunk{}, false, nil
 	}))
@@ -498,7 +535,7 @@ func TestStoredChunkIsNotRecomputed(t *testing.T) {
 func TestNothingIsComputedForBadAddress(t *testing.T) {
 	s := newChunksTestStore(t)
 	calls := 0
-	h := NewChunksHandler(s, makerFunc(func(a chunk.Address) (worldstore.Chunk, bool, error) {
+	h := NewChunksHandler(s, makerFunc(func(a chunk.Address, _ int64) (worldstore.Chunk, bool, error) {
 		calls++
 		return worldstore.Chunk{}, false, nil
 	}))

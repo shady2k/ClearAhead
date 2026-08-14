@@ -120,3 +120,63 @@ func TestBlobOfWrongSizeIsRejected(t *testing.T) {
 		t.Fatal("неполный набор отсчётов принят")
 	}
 }
+
+// Бит занятости ставится и снимается, и только в пределах блоба.
+func TestForestBitSetAndClear(t *testing.T) {
+	blob := make([]byte, ForestBytes)
+	SetForestOccupied(blob, 3, 7)
+	if !ForestOccupied(blob, 3, 7) {
+		t.Fatal("бит не встал")
+	}
+	ClearForestOccupied(blob, 3, 7)
+	if ForestOccupied(blob, 3, 7) {
+		t.Fatal("бит не снялся")
+	}
+	// Соседние биты того же байта не задеты.
+	if blob[CoverIndex(3, 7)/8] != 0 {
+		t.Fatalf("байт изменился целиком: %#x", blob[CoverIndex(3, 7)/8])
+	}
+}
+
+// Вне сетки операции молчат: блоб остаётся прежним, ошибки нет.
+//
+// Молчание здесь — не подмена, а граница API: проверка диапазона ячейки — дело
+// валидатора исходника (vegetation), а не битовой операции, которую зовут с
+// уже проверенными координатами.
+func TestForestBitOutOfRangeIsNoop(t *testing.T) {
+	blob := make([]byte, ForestBytes)
+	SetForestOccupied(blob, CoverCells, 0)
+	SetForestOccupied(blob, 0, -1)
+	ClearForestOccupied(blob, CoverCells, 0)
+	for _, b := range blob {
+		if b != 0 {
+			t.Fatalf("блоб изменился: %#x", b)
+		}
+	}
+}
+
+// ForestJitter — КОНТРАКТ с клиентом, а не деталь сервера: смещение внутри
+// ячейки, высота ствола и поворот считаются от адреса одинаково на сервере и
+// клиенте (шапка функции). Числа ниже — замер текущей реализации, и правка
+// функции без правки теста означает разъезд двух рендереров.
+//
+// Сверка побитовая, без допуска: функция целочисленная, деление на 2^32 точно,
+// и любой другой результат — другой адрес.
+func TestForestJitterIsContract(t *testing.T) {
+	cases := []struct {
+		cx, cz, i, j int
+		dx, dz, h    float64
+	}{
+		{0, 0, 0, 0, 0.99702195799909532, 0.97566940705291927, 0.30519589595496655},
+		{1, -2, 5, 7, 0.22053048037923872, 0.60869828867726028, 0.30867270193994045},
+		{-3, 4, 63, 63, 0.28323475806973875, 0.054823124082759023, 0.85280528129078448},
+		{12, 34, 17, 3, 0.60489303478971124, 0.10970722115598619, 0.73523029452189803},
+	}
+	for _, c := range cases {
+		dx, dz, h := ForestJitter(c.cx, c.cz, c.i, c.j)
+		if dx != c.dx || dz != c.dz || h != c.h {
+			t.Fatalf("ForestJitter(%d, %d, %d, %d) = (%.17g, %.17g, %.17g), ожидалось (%.17g, %.17g, %.17g)",
+				c.cx, c.cz, c.i, c.j, dx, dz, h, c.dx, c.dz, c.h)
+		}
+	}
+}

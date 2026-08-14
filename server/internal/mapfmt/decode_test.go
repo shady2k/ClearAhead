@@ -15,18 +15,18 @@ const minimalMap = `{
   "format_version": 6,
   "map_id": "T",
   "map_revision": 1,
-  "anchors": { "N1.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
+  "anchors": { "01a3185c-5001-7242-8242-000000424242.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
   "topology": {
     "nodes": [
-      { "id": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
-      { "id": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
+      { "id": "01a3185c-5001-7242-8242-000000424242", "name": "N1", "ports": [ { "id": "P1", "purpose": "map_boundary" } ] },
+      { "id": "01a3185c-5002-7242-8242-000001424242", "name": "N2", "ports": [ { "id": "P1", "purpose": "buffer_stop" } ] }
     ],
     "turnouts": [], "structures": [],
-    "edges": [ { "id": "E1", "kind": "rail", "from": "N1.P1", "to": "N2.P1" } ]
+    "edges": [ { "id": "018bcfe5-6803-7242-8242-000003424242", "name": "E1", "kind": "rail", "from": "01a3185c-5001-7242-8242-000000424242.P1", "to": "01a3185c-5002-7242-8242-000001424242.P1" } ]
   },
   "geometry": {
     "turnouts": {},
-    "edges": { "E1": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] } }
+    "edges": { "018bcfe5-6803-7242-8242-000003424242": { "horizontal": [ { "kind": "straight", "length": 100.0 } ] } }
   }
 }`
 

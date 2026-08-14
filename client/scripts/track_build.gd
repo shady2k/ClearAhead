@@ -129,6 +129,8 @@ class Span:
 ## Полоса платформы вдоль одного спана.
 class PlatformStrip:
 	var id: String
+	## Читаемая метка сооружения из провода: игроку показывают её, а не UUID.
+	var label: String
 	var element_id: String
 	var side: String
 	var offset_m: float
@@ -178,6 +180,8 @@ class Frog:
 ## чтобы нехватка была названа устройством, а не четырьмя безымянными нитями.
 class Device:
 	var id: String
+	## Читаемая метка устройства из провода: игроку показывают её, а не UUID.
+	var label: String
 	var hand: String
 	var mark: String
 	var branches: Array[String] = []
@@ -494,6 +498,7 @@ static func platforms(network: Dictionary, by_id: Dictionary, max_seg_m: float, 
 				continue
 			var strip := PlatformStrip.new()
 			strip.id = sid
+			strip.label = String(st.get("name", sid))
 			strip.element_id = eid
 			strip.side = side
 			strip.offset_m = offset
@@ -609,6 +614,7 @@ static func devices(elements: Array[TrackGeom.Element]) -> Array[Device]:
 		if not by_turnout.has(tid):
 			var d := Device.new()
 			d.id = tid
+			d.label = el.name if el.name != "" else tid
 			d.hand = String(el.role.get("hand", ""))
 			d.mark = String(el.role.get("frog", ""))
 			by_turnout[tid] = d

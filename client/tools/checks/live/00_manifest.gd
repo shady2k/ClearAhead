@@ -23,7 +23,7 @@ func run() -> void:
 	var rule := await ctx.rule()
 	_ok("правило подробности заполнено", rule.valid(), rule.rule_text())
 
-	for f in ["region", "epoch", "revision", "network_model_hash", "network_hash", "chunks"]:
+	for f in ["region", "epoch", "revision", "network_model_hash", "network_hash", "chunks", "projection_head"]:
 		_ok("манифест несёт поле %s" % f, man.has(f))
 
 	# Шаг выборки оси — из манифеста, а не 5.0 числом у клиента: своя копия

@@ -1,11 +1,16 @@
 {
-  "format_version": 1,
-  "region": "ST_A",
-  "units": [
-    {
-      "id": "LOCO_1",
-      "type": "VL80",
-      "at": { "element": "E_MAIN", "u": 150.0, "direction": "forward" }
-    }
-  ]
+ "format_version": 1,
+ "region": "ST_A",
+ "units": [
+  {
+   "id": "01a3185c-6001-7242-8242-000000424242",
+   "name": "LOCO_1",
+   "type": "VL80",
+   "at": {
+    "element": "018bcfe5-680d-7242-8242-00000d424242",
+    "u": 150.0,
+    "direction": "forward"
+   }
+  }
+ ]
 }

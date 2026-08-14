@@ -192,11 +192,11 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 	// Run начинается у порта N_END.P1 (первый спад — E2 reverse) — форма,
 	// которую разворачивает extendRuns при продлении от порта.
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
-		ID: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
+		ID: eIDRUN21, Name: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
 		Spans: []netloc.IntervalU{
-			{Element: "E2", From: 0, To: 100, Direction: "reverse"},
-			{Element: "E1", From: 0, To: 100, Direction: "reverse"},
-			{Element: "E0", From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE2, From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE1, From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE0, From: 0, To: 100, Direction: "reverse"},
 		},
 	}
 	assertValid(t, m, "run, начинающийся у порта")
@@ -212,9 +212,9 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 	// Структура: порядок наоборот, направления перевёрнуты, ID сохранён,
 	// фаза нормализована по шагу: (300 − 0.2) mod 0.6 = 0.4.
 	wantSpans := []netloc.IntervalU{
-		{Element: "E0", From: 0, To: 100, Direction: "forward"},
-		{Element: "E1", From: 0, To: 100, Direction: "forward"},
-		{Element: "E2", From: 0, To: 100, Direction: "forward"},
+		{Element: eIDE0, From: 0, To: 100, Direction: "forward"},
+		{Element: eIDE1, From: 0, To: 100, Direction: "forward"},
+		{Element: eIDE2, From: 0, To: 100, Direction: "forward"},
 	}
 	assertJSONEqual(t, wantSpans, got.Spans, "спаны после разворота")
 	if math.Abs(got.Phase-0.4) > 1e-9 {
@@ -238,17 +238,21 @@ func TestReverseRunKeepsSleepersOnSamePhysicalSpots(t *testing.T) {
 func TestExtendReversesRunStartingAtPort(t *testing.T) {
 	m := testBaseMap()
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
-		ID: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
+		ID: eIDRUN21, Name: "RUN_E2_E1_E0", Coordinate: "u", Phase: 0.2,
 		Spans: []netloc.IntervalU{
-			{Element: "E2", From: 0, To: 100, Direction: "reverse"},
-			{Element: "E1", From: 0, To: 100, Direction: "reverse"},
-			{Element: "E0", From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE2, From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE1, From: 0, To: 100, Direction: "reverse"},
+			{Element: eIDE0, From: 0, To: 100, Direction: "reverse"},
 		},
 	}
-	st := newStore(t, m)
+	svc := newService(t, m)
+	sess, err := svc.OpenSession("a")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
 
-	res, err := st.Apply(Intent{Op: OpExtend, Extend: ExtendIntent{
-		Port:  "N_END.P1",
+	res, err := sess.Apply(Intent{Op: OpExtend, Extend: ExtendIntent{
+		Port:  eIDNEND + ".P1",
 		Chain: mustChain(t, 50),
 	}})
 	if err != nil {
@@ -261,11 +265,13 @@ func TestExtendReversesRunStartingAtPort(t *testing.T) {
 		t.Fatalf("run'ов %d, ожидался 1: %s", len(runs), jsonString(t, runs))
 	}
 	r := runs[0]
+	// Новое ребро получает UUID из источника тождества, метка E_EXT.
+	extID := edgeIDByName(t, &res.Map, "E_EXT")
 	wantSpans := []netloc.IntervalU{
-		{Element: "E0", From: 0, To: 100, Direction: "forward"},
-		{Element: "E1", From: 0, To: 100, Direction: "forward"},
-		{Element: "E2", From: 0, To: 100, Direction: "forward"},
-		{Element: "E_EXT", From: 0, To: 50, Direction: "forward"},
+		{Element: eIDE0, From: 0, To: 100, Direction: "forward"},
+		{Element: eIDE1, From: 0, To: 100, Direction: "forward"},
+		{Element: eIDE2, From: 0, To: 100, Direction: "forward"},
+		{Element: extID, From: 0, To: 50, Direction: "forward"},
 	}
 	assertJSONEqual(t, wantSpans, r.Spans, "run после продления")
 	if math.Abs(r.Phase-0.4) > 1e-9 {
@@ -286,7 +292,7 @@ func TestExtendReversesRunStartingAtPort(t *testing.T) {
 func splitTestMap(spans []netloc.IntervalU) *mapfmt.Map {
 	m := testBaseMap()
 	m.Construction.Runs[0] = mapfmt.ConstructionRun{
-		ID: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0.2, Spans: spans,
+		ID: eIDRUN, Name: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0.2, Spans: spans,
 	}
 	return m
 }
@@ -300,33 +306,33 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 		{
 			name: "forward",
 			spans: []netloc.IntervalU{
-				{Element: "E0", From: 0, To: 100, Direction: "forward"},
-				{Element: "E1", From: 0, To: 100, Direction: "forward"},
-				{Element: "E2", From: 0, To: 100, Direction: "forward"},
+				{Element: eIDE0, From: 0, To: 100, Direction: "forward"},
+				{Element: eIDE1, From: 0, To: 100, Direction: "forward"},
+				{Element: eIDE2, From: 0, To: 100, Direction: "forward"},
 			},
 			// Голова [0, 50] остаётся на E1, хвост [0, 50] переходит на E1_CONT;
 			// направление сохранено.
 			want: []netloc.IntervalU{
-				{Element: "E0", From: 0, To: 100, Direction: "forward"},
-				{Element: "E1", From: 0, To: 50, Direction: "forward"},
-				{Element: "E1_CONT", From: 0, To: 50, Direction: "forward"},
-				{Element: "E2", From: 0, To: 100, Direction: "forward"},
+				{Element: eIDE0, From: 0, To: 100, Direction: "forward"},
+				{Element: eIDE1, From: 0, To: 50, Direction: "forward"},
+				{Element: eIDE1CONT, From: 0, To: 50, Direction: "forward"},
+				{Element: eIDE2, From: 0, To: 100, Direction: "forward"},
 			},
 		},
 		{
 			name: "reverse",
 			spans: []netloc.IntervalU{
-				{Element: "E0", From: 0, To: 100, Direction: "reverse"},
-				{Element: "E1", From: 0, To: 100, Direction: "reverse"},
-				{Element: "E2", From: 0, To: 100, Direction: "reverse"},
+				{Element: eIDE0, From: 0, To: 100, Direction: "reverse"},
+				{Element: eIDE1, From: 0, To: 100, Direction: "reverse"},
+				{Element: eIDE2, From: 0, To: 100, Direction: "reverse"},
 			},
 			// Reverse проходится от хвоста к голове: въезд с конца ребра,
 			// поэтому порядок после реза — E1_CONT (хвост) перед E1 (голова).
 			want: []netloc.IntervalU{
-				{Element: "E0", From: 0, To: 100, Direction: "reverse"},
-				{Element: "E1_CONT", From: 0, To: 50, Direction: "reverse"},
-				{Element: "E1", From: 0, To: 50, Direction: "reverse"},
-				{Element: "E2", From: 0, To: 100, Direction: "reverse"},
+				{Element: eIDE0, From: 0, To: 100, Direction: "reverse"},
+				{Element: eIDE1CONT, From: 0, To: 50, Direction: "reverse"},
+				{Element: eIDE1, From: 0, To: 50, Direction: "reverse"},
+				{Element: eIDE2, From: 0, To: 100, Direction: "reverse"},
 			},
 		},
 	} {
@@ -338,16 +344,16 @@ func TestSplitRunsKeepsCumulativeLength(t *testing.T) {
 			// сдвинулось — тест изолирует splitRuns от устройства стрелки.
 			post := splitTestMap(tc.spans)
 			post.Topology.Edges = []mapfmt.Edge{
-				{ID: "E0", Kind: mapfmt.KindRail, From: "N_B.P1", To: "N1.P1"},
-				{ID: "E1", Kind: mapfmt.KindRail, From: "N1.P1", To: "N_X.P1"},
-				{ID: "E1_CONT", Kind: mapfmt.KindRail, From: "N_X.P1", To: "N2.P1"},
-				{ID: "E2", Kind: mapfmt.KindRail, From: "N2.P1", To: "N_END.P1"},
+				{ID: eIDE0, Name: "E0", Kind: mapfmt.KindRail, From: eIDN_B + ".P1", To: eIDN1 + ".P1"},
+				{ID: eIDE1, Name: "E1", Kind: mapfmt.KindRail, From: eIDN1 + ".P1", To: eIDNX + ".P1"},
+				{ID: eIDE1CONT, Name: "E1_CONT", Kind: mapfmt.KindRail, From: eIDNX + ".P1", To: eIDN2 + ".P1"},
+				{ID: eIDE2, Name: "E2", Kind: mapfmt.KindRail, From: eIDN2 + ".P1", To: eIDNEND + ".P1"},
 			}
-			post.Topology.Nodes = append(post.Topology.Nodes, mapfmt.Node{ID: "N_X", Ports: []mapfmt.Port{{ID: "P1"}}})
-			post.Geometry.Edges["E1"] = straightAlign(50)
-			post.Geometry.Edges["E1_CONT"] = straightAlign(50)
+			post.Topology.Nodes = append(post.Topology.Nodes, mapfmt.Node{ID: eIDNX, Name: "N_X", Ports: []mapfmt.Port{{ID: "P1"}}})
+			post.Geometry.Edges[eIDE1] = straightAlign(50)
+			post.Geometry.Edges[eIDE1CONT] = straightAlign(50)
 
-			got, err := splitRuns(post, post.Construction.Runs, "E1", "E1_CONT")
+			got, err := splitRuns(post, post.Construction.Runs, eIDE1, eIDE1CONT)
 			if err != nil {
 				t.Fatalf("splitRuns: %v", err)
 			}

@@ -1,11 +1,13 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
+	"github.com/shady2k/ClearAhead/server/internal/worldgen"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -38,7 +40,10 @@ const HeaderChunkBaseZ = "X-Chunk-Base-Z-Mm"
 //	(_, false, nil)    — законная пустота: земли по этому адресу нет ни для кого;
 //	(_, false, ошибка) — сбой: посчитать не смогли.
 type ChunkMaker interface {
-	MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error)
+	// MakeChunk считает чанк ПОД ВЕРСИЕЙ МИРА: строка обязана лечь ровно под
+	// неё (ключ хранилища несёт версию), иначе устаревший писатель дописал бы
+	// чужую версию в текущий мир.
+	MakeChunk(a chunk.Address, worldVersion int64) (worldstore.Chunk, bool, error)
 }
 
 // chunksAPI — отдача статического яруса чанков.
@@ -111,8 +116,21 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Уровень вне правила ЭТОГО региона — 404, а не 204, и решается это здесь, а
-	// не при разборе пути: с 2026-08-12 охват задаёт карта, поэтому у разных
+	// Текущая версия мира — из головы проекций: неверсионный адрес отдаёт
+	// ТЕКУЩИЙ мир, а не замороженную публикацию. Без головы ответить нечем —
+	// это база прежней сборки без бутстрапа, а не законное состояние.
+	head, ok, err := a.store.GetProjectionHead(addr.Region)
+	if err != nil {
+		http.Error(w, "хранилище недоступно", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "голова проекций не заведена", http.StatusInternalServerError)
+		return
+	}
+
+	// Уровень вне правила ЭТОГО региона — 404, а не 204, и решается это здесь,
+	// а не при разборе пути: с 2026-08-12 охват задаёт карта, поэтому у разных
 	// регионов последний уровень разный, и форма адреса о нём знать не может
 	// (chunkPath отвергает лишь заведомый мусор, chunk.MaxLevelLimit).
 	//
@@ -123,19 +141,29 @@ func (a *chunksAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	c, ok, err := a.store.GetChunk(addr)
+	c, ok, err := a.store.GetChunk(addr, head.WorldVersion)
 	if err != nil {
 		http.Error(w, "хранилище недоступно", http.StatusInternalServerError)
 		return
 	}
 	if !ok && a.maker != nil {
-		// Промах базы — не ответ, а повод посчитать. База здесь кэш: рельеф
-		// выводится из рецепта детерминированно, поэтому посчитанное сейчас
-		// байт в байт равно тому, что положил бы прогрев при старте, и разницы
-		// между «лежало» и «посчитали» для клиента не существует — она видна
-		// только по времени ответа.
-		c, ok, err = a.maker.MakeChunk(addr)
+		// Промах базы — не ответ, а повод посчитать ПОД ТЕКУЩЕЙ ВЕРСИЕЙ.
+		// База здесь кэш: рельеф выводится из рецепта детерминированно,
+		// поэтому посчитанное сейчас байт в байт равно тому, что положил бы
+		// прогрев при старте, и разницы между «лежало» и «посчитали» для
+		// клиента не существует — она видна только по времени ответа.
+		c, ok, err = a.maker.MakeChunk(addr, head.WorldVersion)
 		if err != nil {
+			if errors.Is(err, worldgen.ErrQueueFull) {
+				// 503 + Retry-After, а не 500: очередь порождения переполнена —
+				// состояние ВРЕМЕННОЕ и честно названное, и клиент повторит
+				// через секунду (дренаж очереди: 64 × 5.5 мс ≈ 350 мс, замер
+				// worldgen). 500 спутал бы «сейчас не могу» со «сломано
+				// навсегда», и клиент не знал бы, спрашивать ли снова.
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "очередь порождения переполнена", http.StatusServiceUnavailable)
+				return
+			}
 			// СБОЙ, А НЕ ПУСТОТА. Рецепт, который не удалось посчитать, — это
 			// поломка сервера, и 204 выдал бы её за край мира: клиент нарисовал
 			// бы базовую поверхность и никогда бы не переспросил. Тело отказа

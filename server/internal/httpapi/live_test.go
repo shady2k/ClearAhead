@@ -9,8 +9,13 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
+
+// loco1ID — идентификатор локомотива фикстуры: UUIDv7 боевой расстановки
+// (maps/st_a_placement.json, метка LOCO_1).
+const loco1ID = "01a3185c-6001-7242-8242-000000424242"
 
 // liveFixture — движок с одной поставленной единицей.
 //
@@ -18,8 +23,8 @@ import (
 // тест, собирающий партию мимо него, проверял бы форму, которой в сервере нет.
 func liveFixture() *engine.Engine {
 	return engine.New(&match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
-		ID: "LOCO_1", Type: "VL80",
-		At: netloc.PointU{Element: "E_MAIN", U: 150, Direction: netloc.DirForward},
+		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
+		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
 	}}})
 }
 
@@ -40,6 +45,7 @@ func TestLiveServesUnits(t *testing.T) {
 		Time   units.SimTime `json:"time"`
 		Units  []struct {
 			ID   string        `json:"id"`
+			Name string        `json:"name,omitempty"`
 			Type string        `json:"type"`
 			At   netloc.PointU `json:"at"`
 		} `json:"units"`
@@ -54,10 +60,10 @@ func TestLiveServesUnits(t *testing.T) {
 		t.Fatalf("единиц %d", len(got.Units))
 	}
 	u := got.Units[0]
-	if u.ID != "LOCO_1" || u.Type != "VL80" {
+	if u.ID != loco1ID || u.Name != "LOCO_1" || u.Type != "VL80" {
 		t.Fatalf("единица %+v", u)
 	}
-	if u.At.Element != "E_MAIN" || u.At.U != 150 || u.At.Direction != netloc.DirForward {
+	if u.At.Element != seedmap.StationMain || u.At.U != 150 || u.At.Direction != netloc.DirForward {
 		t.Fatalf("адрес %+v: положение обязано доехать целиком, включая направление", u.At)
 	}
 }

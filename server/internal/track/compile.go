@@ -162,6 +162,11 @@ type RenderRole struct {
 // от неё и ничего не пересчитывает.
 type RenderElement struct {
 	ID string `json:"id"`
+	// Name — читаемая метка элемента (карта; решение владельца «UUIDv7
+	// везде»): тождеством не является, в ссылках не участвует, но её клиент
+	// показывает игроку вместо непроизносимого UUID. Отсутствует у элементов
+	// без метки.
+	Name string `json:"name,omitempty"`
 	// Kind — вид пути: "rail" (mapfmt.KindRail). Ресурс network называет КЛАСС
 	// содержимого, а не вид, и автомобильные дороги приедут в этот же ответ —
 	// различать их клиенту нужно по полю, а не по адресу. Поле обязательное и
@@ -208,7 +213,10 @@ type RenderVPrim struct {
 // сооружение, тип решётки её размеры не определяет. Точечные виды (buffer_stop)
 // размеров не несут.
 type RenderStructure struct {
-	ID     string  `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка сооружения: клиент показывает её игроку вместо
+	// UUID. Тождеством не является, в ссылках не участвует.
+	Name   string  `json:"name,omitempty"`
 	Kind   string  `json:"kind"`
 	Side   string  `json:"side,omitempty"`
 	Offset float64 `json:"offset,omitempty"`
@@ -267,7 +275,9 @@ type RenderGeometry struct {
 // головки рельса (редакция 6 §2). Клиенту этого достаточно, чтобы построить
 // путь телом и не выдумать ни одного числа.
 type RenderTrackType struct {
-	ID      string        `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка типа решётки (карта). Тождеством не является.
+	Name    string        `json:"name,omitempty"`
 	Gauge   float64       `json:"gauge"`
 	Rail    RenderRail    `json:"rail"`
 	Sleeper RenderSleeper `json:"sleeper"`
@@ -324,7 +334,9 @@ type RenderBallast struct {
 // умолчание разрешил компилятор, клиент скрытого умолчания не применяет
 // никогда. Спаны — в авторском порядке прохождения.
 type RenderRun struct {
-	ID         string         `json:"id"`
+	ID string `json:"id"`
+	// Name — читаемая метка run'а (карта). Тождеством не является.
+	Name       string         `json:"name,omitempty"`
 	Type       string         `json:"type"`
 	Coordinate string         `json:"coordinate"`
 	Phase      float64        `json:"phase"`
@@ -434,6 +446,18 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 			passage[ps.ID] = passageRole{t, ps.Branch}
 		}
 	}
+	// Читаемые метки элементов: у ребра своя, у прохода стрелки — метка
+	// устройства. Идут в провод, чтобы клиент показывал игроку метку, а не
+	// непроизносимый UUID.
+	names := make(map[string]string, len(m.Topology.Edges)+2*len(m.Topology.Turnouts))
+	for _, e := range m.Topology.Edges {
+		names[e.ID] = e.Name
+	}
+	for _, t := range m.Topology.Turnouts {
+		for _, ps := range t.Passages() {
+			names[ps.ID] = t.Name
+		}
+	}
 	// Тип по умолчанию — единственное, что нужно от блока construction ДО его
 	// переноса в провод: им разрешается опущенный тип устройства (редакция 6
 	// §6). Карта без блока законна, и тогда строка пуста — это «типа нет ни у
@@ -458,7 +482,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		e := els[id]
 		lengthS, err := e.Prof.LengthS()
 		if err != nil {
-			return nil, nil, fmt.Errorf("track: %s: %w", id, err)
+			return nil, nil, fmt.Errorf("track: %s: %w", mapfmt.Labeled(names[id], id), err)
 		}
 		cn.Elements[id] = CompiledElement{
 			ID:      id,
@@ -472,6 +496,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		}
 		re := RenderElement{
 			ID:      id,
+			Name:    names[id],
 			Kind:    e.Kind,
 			Start:   e.Start,
 			Prims:   make([]RenderPrimitive, 0, len(e.Plan)),
@@ -534,6 +559,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 	for _, st := range m.Topology.Structures {
 		rt := RenderStructure{
 			ID:            st.ID,
+			Name:          st.Name,
 			Kind:          st.Kind,
 			Side:          st.Side,
 			Offset:        st.Offset,
@@ -546,25 +572,25 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		for _, iv := range st.Span {
 			e, ok := els[iv.Element]
 			if !ok {
-				return nil, nil, fmt.Errorf("track: объект %s ссылается на элемент %s, которого нет", st.ID, iv.Element)
+				return nil, nil, fmt.Errorf("track: объект %s ссылается на элемент %s, которого нет", mapfmt.Labeled(st.Name, st.ID), iv.Element)
 			}
 			// Спан в u уезжает клиенту как есть, из карты: план рисуется в u.
 			rt.Spans = append(rt.Spans, iv)
 			fromU, err := units.MetersToDistance(iv.From)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: %w", st.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: %w", mapfmt.Labeled(st.Name, st.ID), err)
 			}
 			toU, err := units.MetersToDistance(iv.To)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: %w", st.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: %w", mapfmt.Labeled(st.Name, st.ID), err)
 			}
 			fromS, err := e.Prof.UToS(fromU)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: начало: %w", st.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: начало: %w", mapfmt.Labeled(st.Name, st.ID), err)
 			}
 			toS, err := e.Prof.UToS(toU)
 			if err != nil {
-				return nil, nil, fmt.Errorf("track: объект %s: конец: %w", st.ID, err)
+				return nil, nil, fmt.Errorf("track: объект %s: конец: %w", mapfmt.Labeled(st.Name, st.ID), err)
 			}
 			spans = append(spans, netloc.IntervalS{
 				Element:   iv.Element,

@@ -382,52 +382,101 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 	if h.size() != count:
 		return {"ok": false, "error": "чанк %d/%d/%d: отсчётов %d, ожидалось %d" % [
 			level, cx, cz, h.size(), count]}
+	if quadrant >= 0 and (n - 1) % 2 != 0:
+		return {"ok": false, "error": "чанк %d/%d/%d: samples−1 = %d нечётно, четверть невыразима" % [
+			level, cx, cz, n - 1]}
+	# Целая клетка и четверть — ОДИН путь с перестройкой набора (sqym.16):
+	# накопитель, полоса на все ряды, сборка. Перестройка режет ту же полосу
+	# МЕЛЬЧЕ — меш и коллизия собираются одними и теми же строками.
+	var acc := new_acc(n, quadrant)
+	var band := build_band(h, base_z_m, level, cx, cz, rule, cover, quadrant,
+		int(acc["j0"]), int(acc["j1"]), acc)
+	if not band["ok"]:
+		return band
+	var out := assemble(acc, skirt_m)
+	# build_usec — полное время куска: полосы плюс сборка, как мерилось до резки.
+	out["build_usec"] = int(band["build_usec"]) + int(out["build_usec"])
+	return out
 
-	# Покров — ЯЧЕЙКИ, а не отсчёты: их (n−1)², а не n². Пустой массив значит
-	# «покрова нет» и рисуется серым — тем же, чем рисовалось до его появления.
-	# Тело неверной длины НЕ додумывается: покров молча игнорируется и это
-	# видно числом в отчёте, а не подставляется частично.
-	var cover_cells := n - 1
-	var has_cover := cover.size() == cover_cells * cover_cells
 
-	# ГРАНИЦЫ КУСКА в отсчётах. Четверть клетки — это (n−1)/2 интервалов, и
-	# нечётное (n−1) сделало бы её невыразимой: отказ, а не деление пополам с
-	# потерей ряда. Сегодня samples = 65, интервалов 64.
+## new_acc — НАКОПИТЕЛЬ ПОЛОС одного куска (клетки либо четверти): буферы и
+## таблица переноса «отсчёт → вершина». ОДИН на все задания полос куска:
+## полосы дописывают в него, и общий ряд между полосами — одна строка вершин
+## (remap), а не две копии. Квадрант тот же, что у build(): −1 — клетка
+## целиком, 0…3 — четверть. samples−1 обязан быть чётным — проверяет
+## вызывающий (build и перестройка набора, sqym.16).
+static func new_acc(n: int, quadrant: int) -> Dictionary:
 	var i0 := 0
 	var j0 := 0
 	var i1 := n - 1
 	var j1 := n - 1
 	if quadrant >= 0:
-		if (n - 1) % 2 != 0:
-			return {"ok": false, "error": "чанк %d/%d/%d: samples−1 = %d нечётно, четверть невыразима" % [
-				level, cx, cz, n - 1]}
 		var half := (n - 1) / 2
 		i0 = (quadrant & 1) * half
 		j0 = ((quadrant >> 1) & 1) * half
 		i1 = i0 + half
 		j1 = j0 + half
+	var remap := PackedInt32Array()
+	remap.resize(n * n)
+	remap.fill(-1)
+	return {
+		"n": n, "i0": i0, "i1": i1, "j0": j0, "j1": j1,
+		"verts": PackedVector3Array(), "norms": PackedVector3Array(),
+		"cols": PackedColorArray(), "idx": PackedInt32Array(),
+		"remap": remap, "faces": [],
+		"z_min": INF, "z_max": -INF, "steep": 0,
+	}
 
-	var t_build := Time.get_ticks_usec()
 
+## build_band — ПОЛОСА КУСКА ПО СТРОКАМ СЕТКИ (sqym.16): вершины строк
+## j_lo..j_hi и квады j_lo..j_hi−1, дописанные в накопитель acc.
+##
+## Один шаг перестройки — полоса, а не кусок целиком: меш уровня 0 целиком
+## стоит 11.4 мс замером, коллизия 11.0 мс, бюджет кадра 8 мс — шаг обязан
+## быть делимым, иначе очередь честно назовёт превышение, но раздробить его
+## не сможет.
+##
+## Нижний ряд полосы (j_lo) уже стоит в накопителе — это верхний ряд
+## предыдущей полосы: добавляются только НОВЫЕ строки, и шов между полосами
+## одной клетки — та же строка вершин. Соседние ЧАНКИ делят ряд отсчётов так
+## же (контракт тела в шапке файла), и полосы покрывают ряды j0..j1 целиком:
+## последний ряд клетки строится всегда, общий ряд соседей не поедет.
+##
+## В acc дописываются и ТРЕУГОЛЬНИКИ полосы мировыми координатами (faces) —
+## это и есть коллизия полосы: твердь обязана собираться теми же строками,
+## что и меш, и переключаться с ним одним commit() (sqym.16).
+static func build_band(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, cz: int,
+		rule: ChunkRule, cover: PackedByteArray, quadrant: int, j_lo: int, j_hi: int,
+		acc: Dictionary) -> Dictionary:
+	var n := int(acc["n"])
+	var i0 := int(acc["i0"])
+	var i1 := int(acc["i1"])
+	if h.size() != n * n:
+		return {"ok": false, "error": "чанк %d/%d/%d: отсчётов %d, ожидалось %d" % [
+			level, cx, cz, h.size(), n * n]}
+	if j_lo < int(acc["j0"]) or j_hi > int(acc["j1"]) or j_lo >= j_hi:
+		return {"ok": false, "error": "чанк %d/%d/%d: полоса %d..%d вне рядов %d..%d" % [
+			level, cx, cz, j_lo, j_hi, int(acc["j0"]), int(acc["j1"])]}
+	var verts: PackedVector3Array = acc["verts"]
+	var norms: PackedVector3Array = acc["norms"]
+	var cols: PackedColorArray = acc["cols"]
+	var idx: PackedInt32Array = acc["idx"]
+	var remap: PackedInt32Array = acc["remap"]
+	var faces: Array = acc["faces"]
+	var cover_cells := n - 1
+	var has_cover := cover.size() == cover_cells * cover_cells
 	var side := rule.side_of(level)
 	var step := rule.step_of(level)
 	var ox := float(cx) * side
 	var oz := float(cz) * side
-
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var cols := PackedColorArray()
-	# Таблица переноса: индекс отсчёта -> индекс вершины в буфере, −1 у тех, что в
-	# этот кусок не вошли. Без неё индексы квадов пришлось бы считать дважды.
-	var remap := PackedInt32Array()
-	remap.resize(count)
-	remap.fill(-1)
-
-	var z_min := INF
-	var z_max := -INF
-	var steep := 0
-
-	for j in range(j0, j1 + 1):
+	var t_build := Time.get_ticks_usec()
+	var j_first := j_lo
+	if remap[j_lo * n + i0] != -1:
+		j_first = j_lo + 1
+	var z_min := float(acc["z_min"])
+	var z_max := float(acc["z_max"])
+	var steep := int(acc["steep"])
+	for j in range(j_first, j_hi + 1):
 		for i in range(i0, i1 + 1):
 			var k := j * n + i
 			var z := base_z_m + h[k] * 0.01
@@ -437,7 +486,6 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 				z_max = z
 			remap[k] = verts.size()
 			verts.append(to_godot(ox + float(i) * step, oz + float(j) * step, z))
-
 			# Нормаль — центральной разностью по сетке отсчётов. У края чанка
 			# соседа нет, и разность берётся односторонней: это ошибка ОСВЕЩЕНИЯ
 			# на шов, а не ошибка формы. Дорисовывать ряд соседа значило бы
@@ -449,31 +497,14 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 			var dzdx := (h[j * n + ir] - h[j * n + il]) * 0.01 / (float(ir - il) * step)
 			var dzdy := (h[ju * n + i] - h[jd * n + i]) * 0.01 / (float(ju - jd) * step)
 			norms.append(Vector3(-dzdx, 1.0, dzdy).normalized())
-
 			# Тот же уклон, что дал нормаль, красит и вершину: второй проход по
 			# полю не нужен, а правило названо в шапке.
 			var slope := sqrt(dzdx * dzdx + dzdy * dzdy)
 			var base := C_GROUND
-			# АЛЬФА ВЕРШИНЫ — ТРАВЯНИСТОСТЬ, а не прозрачность: ею шейдер земли
-			# смешивает тайл дернины с тайлом грунта. Она приходит ПОКРОВОМ
-			# (класс и сомкнутость), и в этом весь смысл: сервер говорит, где
-			# какой биом, клиент рисует. Собственного шума у шейдера нет.
-			# Доля обнажённого грунта на крутизне. Та же величина, которую кладёт
-			# в цвет slope_colour, — она нужна и альфе, потому что у спайка цвет
-			# и фактура считались ОДНИМ выражением (разбор — у cover_grassy).
 			var scarp := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO),
 				0.0, 1.0) * SCARP_TINT_MAX
-			# Без покрова земля серая, и дернину рисовать не по чему.
 			var grassy := 0.0
 			if has_cover:
-				# Вершина лежит в УГЛУ ячейки, а класс принадлежит площади:
-				# берётся ячейка, для которой эта вершина — нижний левый угол, а
-				# у крайнего ряда — последняя. Иначе крайняя вершина осталась бы
-				# без класса, а достраивать ей соседа значило бы выдумать ячейку.
-				#
-				# Ячейка читается ОДИН раз на цвет и на альфу: до 2026-08-12 те
-				# же два mini() и та же выборка стояли ниже второй копией, и
-				# ничто не мешало им разъехаться.
 				var ci := mini(i, cover_cells - 1)
 				var cj := mini(j, cover_cells - 1)
 				var packed := cover[cj * cover_cells + ci]
@@ -486,30 +517,64 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 			cols.append(c)
 			if slope >= SCARP_SLOPE_LO:
 				steep += 1
-
-	var draw_quads := (i1 - i0) * (j1 - j0)
-	var idx := PackedInt32Array()
-	idx.resize(draw_quads * 6)
+	var face := PackedVector3Array()
+	face.resize((j_hi - j_lo) * (i1 - i0) * 6)
 	var w := 0
-	for j in range(j0, j1):
+	for j in range(j_lo, j_hi):
 		for i in range(i0, i1):
 			var a := remap[j * n + i]
 			var b := remap[j * n + i + 1]
 			var c := remap[(j + 1) * n + i]
 			var d := remap[(j + 1) * n + i + 1]
-			idx[w] = a
-			idx[w + 1] = c
-			idx[w + 2] = b
-			idx[w + 3] = b
-			idx[w + 4] = c
-			idx[w + 5] = d
+			idx.append(a)
+			idx.append(c)
+			idx.append(b)
+			idx.append(b)
+			idx.append(c)
+			idx.append(d)
+			face[w] = verts[a]
+			face[w + 1] = verts[c]
+			face[w + 2] = verts[b]
+			face[w + 3] = verts[b]
+			face[w + 4] = verts[c]
+			face[w + 5] = verts[d]
 			w += 6
+	faces.append(face)
+	acc["z_min"] = z_min
+	acc["z_max"] = z_max
+	acc["steep"] = steep
+	# ОБРАТНАЯ ЗАПИСЬ ПАКЕТОВ — И ЭТО НЕ ФОРМАЛЬНОСТЬ. Packed-массивы в GDScript
+	# разделяют данные до первой записи (copy-on-write): локальная verts после
+	# первого append отвязалась бы от acc["verts"], и следующая полоса увидела
+	# ПУСТОЙ накопитель, а сборка — последний обрывок. Array (faces) ссылочный
+	# и дописывается в общий объект сам, поэтому здесь только пятёрка пакетов.
+	acc["verts"] = verts
+	acc["norms"] = norms
+	acc["cols"] = cols
+	acc["idx"] = idx
+	acc["remap"] = remap
+	return {"ok": true, "build_usec": Time.get_ticks_usec() - t_build}
 
-	# ЮБКА. Обход края идёт петлёй против часовой стрелки в индексах (i, j): низ
-	# слева направо, правый край вверх, верх справа налево, левый край вниз. При
-	# таком порядке «ребро, повёрнутое на +90° вокруг Y» смотрит НАРУЖУ куска, и
-	# треугольники юбки выходят лицом к зрителю при cull_back — проверено выводом
-	# для нижнего края и перенесено на остальные три поворотом.
+
+## assemble — СБОРКА КУСКА ИЗ ПОЛОС (sqym.16): юбка по краю и поверхность.
+## Вызывается ПОСЛЕДНИМ заданием полос куска — к этому моменту накопитель
+## содержит все ряды j0..j1 и все квады. Возвращает mesh, счётчики и faces:
+## треугольники мировыми координатами по полосам, последний элемент — юбка.
+## Фаза solid строит по ним фигуры, не трогая меш, и переключает тело вместе
+## с ним одним commit().
+static func assemble(acc: Dictionary, skirt_m: float) -> Dictionary:
+	var verts: PackedVector3Array = acc["verts"]
+	var norms: PackedVector3Array = acc["norms"]
+	var cols: PackedColorArray = acc["cols"]
+	var idx: PackedInt32Array = acc["idx"]
+	var remap: PackedInt32Array = acc["remap"]
+	var faces: Array = acc["faces"]
+	var n := int(acc["n"])
+	var i0 := int(acc["i0"])
+	var i1 := int(acc["i1"])
+	var j0 := int(acc["j0"])
+	var j1 := int(acc["j1"])
+	var t_build := Time.get_ticks_usec()
 	var skirt_tris := 0
 	if skirt_m > 0.0:
 		var loop: Array[int] = []
@@ -541,11 +606,27 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 			idx.append(ql)
 			idx.append(pl)
 			skirt_tris += 2
-
-	# Кусок без единого квада — не отказ, а вырожденный вызов (например четверть
-	# клетки, у которой samples−1 = 0). Пустой поверхности движок не примет
-	# (add_surface_from_arrays на пустом массиве вершин — ошибка), поэтому здесь
-	# честный null, а не поверхность из нуля треугольников.
+		# Юбка в коллизии — те же треугольники: до sqym.16 тело клетки строилось
+		# create_trimesh_collision по ВСЕМУ мешу, юбка в него входила, и резка не
+		# вправе её выкинуть — иначе у шва между уровнями игрок проваливался бы
+		# сквозь новую землю при исправном кадре.
+		var sf := PackedVector3Array()
+		sf.resize(m * 6)
+		var w := 0
+		for t in m:
+			var p := remap[loop[t]]
+			var q := remap[loop[(t + 1) % m]]
+			var pl := first + t
+			var ql := first + (t + 1) % m
+			sf[w] = verts[p]
+			sf[w + 1] = verts[q]
+			sf[w + 2] = verts[pl]
+			sf[w + 3] = verts[q]
+			sf[w + 4] = verts[ql]
+			sf[w + 5] = verts[pl]
+			w += 6
+		faces.append(sf)
+	var draw_quads := (i1 - i0) * (j1 - j0)
 	var mesh: ArrayMesh = null
 	if draw_quads > 0:
 		var arrays := []
@@ -556,20 +637,17 @@ static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, c
 		arrays[Mesh.ARRAY_INDEX] = idx
 		mesh = ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var build_usec := Time.get_ticks_usec() - t_build
-
 	return {
-		"ok": true,
-		"mesh": mesh,
+		"ok": true, "mesh": mesh,
 		"vertices": verts.size(),
 		"triangles": draw_quads * 2 + skirt_tris,
 		# Треугольники юбки названы ОТДЕЛЬНО: это цена приёма, и она обязана быть
 		# видна числом, а не растворяться в общем счёте.
 		"skirt_triangles": skirt_tris,
-		"z_min": z_min,
-		"z_max": z_max,
-		"steep_vertices": steep,
-		"build_usec": build_usec,
+		"z_min": float(acc["z_min"]), "z_max": float(acc["z_max"]),
+		"steep_vertices": int(acc["steep"]),
+		"build_usec": Time.get_ticks_usec() - t_build,
+		"faces": faces,
 	}
 
 

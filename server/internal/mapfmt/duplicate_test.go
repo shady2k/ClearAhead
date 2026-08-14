@@ -43,8 +43,10 @@ import (
 // есть геометрия, у стрелки есть геометрия по ключу ID, висящие концы объявлены
 // упорами, якорь один и стоит на порту с одним концом, оси не пересекаются.
 //
-// Единственная переменная — идентификаторы стрелок. Одинаковые дают дефект,
-// разные — контрольную карту, которая обязана проходить валидацию целиком.
+// Единственная переменная — идентификаторы стрелок (UUID из зеркала таблицы
+// tID: uIDSW1/uIDSW2, метки SW1/SW2). Одинаковые дают дефект, разные —
+// контрольную карту, которая обязана проходить валидацию целиком. Узлы и рёбра
+// несут свои UUID и метки: тождество элемента — UUID, читаемая метка — name.
 func mapWithTwoTurnouts(id1, id2 string) *Map {
 	straight := func(l float64) Alignments {
 		return Alignments{Horizontal: []HPrim{{Kind: "straight", Length: l}}}
@@ -56,10 +58,12 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 	// Порты второй стрелки названы иначе даже при одинаковом ID: одинаковые
 	// имена дали бы повтор квалифицированного порта, и карта умерла бы раньше.
 	turnouts := []Turnout{
-		{ID: id1, Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-		{ID: id2, Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
+		{ID: id1, Name: "SW1", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+		{ID: id2, Name: "SW2", Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
 	}
 
+	// Идентификаторы шести рёбер — по одному на порт узла PA..PF, метки EA..EF.
+	edgeIDs := []string{uIDEA, uIDEB, uIDEC, uIDED, uIDEE, uIDEF}
 	ports := []Port{}
 	edges := []Edge{}
 	edgeGeometry := map[string]Alignments{}
@@ -71,19 +75,20 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 	for _, t := range turnouts {
 		for _, end := range t.PortIDs() {
 			name := string(rune('A' + i))
+			id := edgeIDs[i]
 			i++
 			ports = append(ports, Port{ID: "P" + name, Purpose: "buffer_stop"})
-			edges = append(edges, Edge{ID: "E" + name, Kind: KindRail, From: "N1.P" + name, To: end})
-			edgeGeometry["E"+name] = straight(100)
+			edges = append(edges, Edge{ID: id, Name: "E" + name, Kind: KindRail, From: uIDN1 + ".P" + name, To: end})
+			edgeGeometry[id] = straight(100)
 		}
 	}
 	return &Map{
 		FormatVersion: FormatVersion,
 		MapID:         "ST_A",
 		MapRevision:   1,
-		Anchors:       map[string]Anchor{"N1.PA": {}},
+		Anchors:       map[string]Anchor{uIDN1 + ".PA": {}},
 		Topology: Topology{
-			Nodes:    []Node{{ID: "N1", Ports: ports}},
+			Nodes:    []Node{{ID: uIDN1, Name: "N1", Ports: ports}},
 			Turnouts: turnouts,
 			Edges:    edges,
 		},
@@ -96,19 +101,20 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 // чем-нибудь, отвергалась бы по любой причине, и вывод о повторе был бы
 // подгонкой.
 func TestControlMapWithoutDuplicateIsValid(t *testing.T) {
-	if err := Validate(mapWithTwoTurnouts("SW1", "SW2")); err != nil {
+	if err := Validate(mapWithTwoTurnouts(uIDSW1, uIDSW2)); err != nil {
 		t.Fatalf("контрольная карта отвергнута: %v — тогда разбор повтора недоказателен", err)
 	}
 }
 
 // Дубликат ID стрелки отвергается прямо — с указанием причины, а не окольным
-// правилом про число проходов у порта.
+// правилом про число проходов у порта. Текст называет метку второй стрелки
+// рядом с UUID (Labeled): по одному UUID автор дефект не найдёт.
 func TestDuplicateTurnoutIsRejected(t *testing.T) {
-	err := Validate(mapWithTwoTurnouts("SW", "SW"))
+	err := Validate(mapWithTwoTurnouts(uIDSW1, uIDSW1))
 	if err == nil {
 		t.Fatal("карта с двумя стрелками одного ID принята")
 	}
-	if !strings.Contains(err.Error(), `стрелка "SW" объявлена дважды`) {
+	if !strings.Contains(err.Error(), `стрелка "`+Labeled("SW2", uIDSW1)+`" объявлена дважды`) {
 		t.Fatalf("отказ пришёл не по той причине: %v", err)
 	}
 }
@@ -120,7 +126,7 @@ func TestDuplicateTurnoutIsRejected(t *testing.T) {
 // Тест закрепляет сам механизм — он и есть причина, по которой повтор ID
 // недопустим, независимо от того, каким правилом карта отвергается сегодня.
 func TestDuplicateTurnoutCollapsesPassages(t *testing.T) {
-	m := mapWithTwoTurnouts("SW", "SW")
+	m := mapWithTwoTurnouts(uIDSW1, uIDSW1)
 
 	if len(m.Geometry.Turnouts) != 1 {
 		t.Fatalf("геометрия стрелок: записей %d, у двух одноимённых стрелок она одна", len(m.Geometry.Turnouts))
@@ -131,10 +137,10 @@ func TestDuplicateTurnoutCollapsesPassages(t *testing.T) {
 	}
 	// Последняя в списке стрелка выиграла: её порты стоят концами обоих
 	// проходов, портов первой в концах нет вовсе.
-	if got := ends["SW"+PassageStraight]; got != [2]string{"SW.C2", "SW.S2"} {
+	if got := ends[uIDSW1+PassageStraight]; got != [2]string{uIDSW1 + ".C2", uIDSW1 + ".S2"} {
 		t.Fatalf("концы прямого прохода: %v", got)
 	}
-	if got := ends["SW"+PassageDiverging]; got != [2]string{"SW.C2", "SW.D2"} {
+	if got := ends[uIDSW1+PassageDiverging]; got != [2]string{uIDSW1 + ".C2", uIDSW1 + ".D2"} {
 		t.Fatalf("концы бокового прохода: %v", got)
 	}
 }
@@ -145,7 +151,7 @@ func TestDuplicateTurnoutCollapsesPassages(t *testing.T) {
 // воспроизводится вызовом остальных модулей напрямую, а не правкой валидатора.
 // Порядок тот же, что в Validate.
 func TestDuplicateTurnoutWasCaughtWithoutDuplicateCheck(t *testing.T) {
-	m := mapWithTwoTurnouts("SW", "SW")
+	m := mapWithTwoTurnouts(uIDSW1, uIDSW1)
 
 	// Порты: шесть квалифицированных имён стрелок различны, повтора нет.
 	ports, err := m.collectPorts()
@@ -168,7 +174,17 @@ func TestDuplicateTurnoutWasCaughtWithoutDuplicateCheck(t *testing.T) {
 			t.Fatalf("выравнивания %s отвергнуты: %v", id, err)
 		}
 	}
-	if err := m.validateAnchors(ports); err != nil {
+	// Элементы собираются мимо collectElements намеренно: карта несёт две
+	// стрелки с одним ID, и сбор элементов отвергает её раньше, чем тест
+	// докажет, что дефект ловится и без проверки повтора. Для validateAnchors
+	// важен только факт «элементы есть», а он следует из наличия топологии;
+	// множество берётся от выравниваний — того же источника, из которого
+	// collectElements строит его на валидной карте.
+	elements := map[string]bool{}
+	for id := range m.AllAlignments() {
+		elements[id] = true
+	}
+	if err := m.validateAnchors(ports, elements); err != nil {
 		t.Fatalf("якоря отвергли карту: %v", err)
 	}
 

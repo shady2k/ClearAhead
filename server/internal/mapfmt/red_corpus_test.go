@@ -74,7 +74,8 @@ func TestRedCorpus(t *testing.T) {
 		{
 			"сооружение на несуществующем элементе",
 			seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
-				ID:   "TS1",
+				ID:   tID07,
+				Name: "TS1",
 				Kind: "platform",
 				Span: netloc.LinearU{{Element: "E9", From: 0, To: 10}},
 			})),

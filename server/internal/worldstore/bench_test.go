@@ -62,10 +62,11 @@ func BenchmarkPutChunk(b *testing.B) {
 	for b.Loop() {
 		i++
 		err := s.PutChunk(Chunk{
-			Address:  chunk.Address{Region: "ST_A", Level: 0, CX: i, CZ: 0},
-			Revision: 1,
-			BaseZmm:  140_000,
-			Heights:  h,
+			Address:      chunk.Address{Region: "ST_A", Level: 0, CX: i, CZ: 0},
+			WorldVersion: testWorldVersion,
+			Revision:     1,
+			BaseZmm:      140_000,
+			Heights:      h,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -79,10 +80,11 @@ func BenchmarkOverwriteChunk(b *testing.B) {
 	h := benchHeights(2)
 	for b.Loop() {
 		err := s.PutChunk(Chunk{
-			Address:  chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 0},
-			Revision: 1,
-			BaseZmm:  140_000,
-			Heights:  h,
+			Address:      chunk.Address{Region: "ST_A", Level: 0, CX: 0, CZ: 0},
+			WorldVersion: testWorldVersion,
+			Revision:     1,
+			BaseZmm:      140_000,
+			Heights:      h,
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -131,10 +133,11 @@ func BenchmarkGetChunk(b *testing.B) {
 	const N = 512
 	for i := range N {
 		err := s.PutChunk(Chunk{
-			Address:  chunk.Address{Region: "ST_A", Level: 0, CX: i, CZ: 0},
-			Revision: 1,
-			BaseZmm:  140_000,
-			Heights:  benchHeights(i),
+			Address:      chunk.Address{Region: "ST_A", Level: 0, CX: i, CZ: 0},
+			WorldVersion: testWorldVersion,
+			Revision:     1,
+			BaseZmm:      140_000,
+			Heights:      benchHeights(i),
 		})
 		if err != nil {
 			b.Fatal(err)
@@ -145,7 +148,7 @@ func BenchmarkGetChunk(b *testing.B) {
 		i := 0
 		for b.Loop() {
 			i++
-			c, ok, err := s.GetChunk(chunk.Address{Region: "ST_A", Level: 0, CX: i % N, CZ: 0})
+			c, ok, err := s.GetChunk(chunk.Address{Region: "ST_A", Level: 0, CX: i % N, CZ: 0}, testWorldVersion)
 			if err != nil || !ok {
 				b.Fatalf("чтение: %v, ok=%v", err, ok)
 			}
@@ -155,7 +158,7 @@ func BenchmarkGetChunk(b *testing.B) {
 	b.Run("промах", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			_, ok, err := s.GetChunk(chunk.Address{Region: "ST_A", Level: 0, CX: 1 << 20, CZ: 0})
+			_, ok, err := s.GetChunk(chunk.Address{Region: "ST_A", Level: 0, CX: 1 << 20, CZ: 0}, testWorldVersion)
 			if err != nil || ok {
 				b.Fatalf("чтение: %v, ok=%v", err, ok)
 			}

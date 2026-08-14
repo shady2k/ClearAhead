@@ -1,6 +1,7 @@
 package mapfmt_test
 
 import (
+	"math"
 	"strings"
 	"testing"
 
@@ -94,4 +95,62 @@ func TestSmallExtentIsAccepted(t *testing.T) {
 	if got := one.Terrain.Extent.MaxLevel(); got != 0 {
 		t.Fatalf("последний уровень %d, ожидался 0", got)
 	}
+}
+
+// Домен — ОБЯЗАТЕЛЬНЫЙ блок рецепта с 2026-08-13, и потому предмет валидации,
+// а не доверия: нуль — забытая строка, а не значение (JSON без ключа даёт тот
+// же ноль, что и явный ноль), и молча принять его значило бы выдать карту без
+// мира за исправную. Отказ — вырожденность прямоугольника, как у охвата —
+// счёт штуками: невырожденная сторона и есть заявленный домен.
+func TestDomainValidationRefuses(t *testing.T) {
+	cases := []struct {
+		name  string
+		spoil func(*mapfmt.Domain)
+		want  string
+	}{
+		{"блока нет вовсе", func(d *mapfmt.Domain) { *d = mapfmt.Domain{} }, "вырожден"},
+		{"нулевая x-сторона", func(d *mapfmt.Domain) { d.MaxX = d.MinX }, "вырожден"},
+		{"обратный прямоугольник", func(d *mapfmt.Domain) { d.MinX, d.MaxX = d.MaxX, d.MinX }, "вырожден"},
+		{"нулевая z-сторона", func(d *mapfmt.Domain) { d.MinZ = d.MaxZ }, "вырожден"},
+		{"бесконечная граница", func(d *mapfmt.Domain) { d.MaxX = math.Inf(1) }, "не конечно"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			m := seedmap.Station(seedmap.WithTerrain(), seedmap.Mutate(func(m *mapfmt.Map) {
+				c.spoil(&m.Terrain.Domain)
+			}))
+			err := mapfmt.Validate(m)
+			if err == nil {
+				t.Fatalf("порча %q принята — валидатор молча подставил свой домен", c.name)
+			}
+			if !strings.Contains(err.Error(), c.want) {
+				t.Errorf("отказ не называет причину %q: %v", c.want, err)
+			}
+		})
+	}
+}
+
+// Отказ обязан называть ВСЕ ЧЕТЫРЕ числа: автор ищет пропуск глазами, и число,
+// которого в тексте нет, он ищет по всей карте.
+func TestDomainRefusalNamesAllFourNumbers(t *testing.T) {
+	m := seedmap.Station(seedmap.WithTerrain(), seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Terrain.Domain = mapfmt.Domain{}
+	}))
+	err := mapfmt.Validate(m)
+	if err == nil {
+		t.Fatal("ожидался отказ")
+	}
+	for _, want := range []string{"x от 0 до 0", "z от 0 до 0"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("в отказе нет %q: %v", want, err)
+		}
+	}
+}
+
+// Невырожденный домен принимается — мир без пути выразим и законен.
+func TestDomainIsAccepted(t *testing.T) {
+	m := seedmap.Station(seedmap.WithTerrain(), seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Terrain.Domain = mapfmt.Domain{MinX: -8192, MinZ: -12288, MaxX: 12288, MaxZ: 12288}
+	}))
+	accepts(t, m)
 }

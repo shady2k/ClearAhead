@@ -95,11 +95,16 @@ func TestConstructionRejectsTypeOutOfRange(t *testing.T) {
 	}
 }
 
+// Два типа решётки с одним UUID — отказ. Тождество типа — UUID, поэтому повтор
+// ловится сквозной проверкой уникальности (checkUniqueIDs) раньше модуля
+// отрисовки: сообщение «тип решётки МЕТКА (uuid) повторяет …» называет причину
+// прямо. Собственная проверка модуля («объявлен дважды») осталась страховкой на
+// случай, если сквозную ослабят, и недостижима с одинаковыми UUID.
 func TestConstructionRejectsDuplicateType(t *testing.T) {
 	m := seedmap.Line(seedmap.Mutate(func(m *mapfmt.Map) {
 		m.Construction.Types = append(m.Construction.Types, m.Construction.Types[0])
 	}))
-	rejectsConstruction(t, m, "объявлен дважды")
+	rejects(t, m, "повторяет")
 }
 
 func TestConstructionRejectsUndeclaredDefaultType(t *testing.T) {
@@ -173,7 +178,8 @@ func TestConstructionRequiresEdgeCoverage(t *testing.T) {
 			"ребро покрыто двумя run'ами",
 			seedmap.Mutate(func(m *mapfmt.Map) {
 				m.Construction.Runs = append(m.Construction.Runs, mapfmt.ConstructionRun{
-					ID:         "RUN_DUP",
+					ID:         tID11,
+					Name:       "RUN_DUP",
 					Coordinate: "u",
 					Spans:      netloc.LinearU{span(seedmap.LineEdgeID, 0, U)},
 				})
@@ -258,10 +264,10 @@ func TestConstructionRequiresPlatformDimensions(t *testing.T) {
 
 // TestPlatformDimensionsAreCheckedWithoutConstructionBlock — размеры платформы часть
 // контракта отрисовки, а не блока рецепта: карта с голой платформой не должна
-// выйти наружу, даже если решётка ещё не авторилась.
 func TestPlatformDimensionsAreCheckedWithoutConstructionBlock(t *testing.T) {
 	bare := mapfmt.Structure{
-		ID:   "PLAT",
+		ID:   tID07,
+		Name: "PLAT",
 		Kind: "platform",
 		Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: 50}},
 		Side: "right",
@@ -300,7 +306,7 @@ func TestPlatformDimensionsAreCheckedWithoutConstructionBlock(t *testing.T) {
 // отказом.
 func TestBufferStopNeedsDimensionsAndDeclaredDeadEnd(t *testing.T) {
 	at := netloc.LinearU{{Element: seedmap.LineEdgeID, From: seedmap.LineLengthM, To: seedmap.LineLengthM}}
-	bare := mapfmt.Structure{ID: "BS", Kind: "buffer_stop", Span: at}
+	bare := mapfmt.Structure{ID: tID13, Name: "BS", Kind: "buffer_stop", Span: at}
 
 	// Перегон кончается границей карты, а не тупиком: сооружение утверждает то,
 	// чего топология не объявляла.
@@ -309,7 +315,8 @@ func TestBufferStopNeedsDimensionsAndDeclaredDeadEnd(t *testing.T) {
 	// На станции конец главного пути объявлен тупиковым портом — там упор
 	// законен, и без габарита он отвергается уже по размерам.
 	noSize := mapfmt.Structure{
-		ID:   "BS_X",
+		ID:   tID14,
+		Name: "BS_X",
 		Kind: "buffer_stop",
 		Span: netloc.LinearU{{Element: seedmap.StationMain, From: 230, To: 230}},
 	}

@@ -77,7 +77,7 @@ func requireSameChunk(t *testing.T, name string, got, want worldstore.Chunk) {
 // сводилась бы к «одна и та же память равна себе».
 func TestOnDemandChunkRepeatsWarmedOneByteForByte(t *testing.T) {
 	warm := newStore(t)
-	rep, err := Generate(warm, newMap(t), "ST_A", 1)
+	rep, err := Generate(warm, newMap(t), "ST_A", 1, 1)
 	if err != nil {
 		t.Fatalf("прогрев: %v", err)
 	}
@@ -91,14 +91,14 @@ func TestOnDemandChunkRepeatsWarmedOneByteForByte(t *testing.T) {
 	checked := 0
 	for level := 0; level <= lazy.sel.rule.MaxLevel; level++ {
 		a := chunk.Address{Region: "ST_A", Level: level, CX: 0, CZ: 0}
-		want, ok, err := warm.GetChunk(a)
+		want, ok, err := warm.GetChunk(a, 1)
 		if err != nil {
 			t.Fatalf("чтение прогретого %v: %v", a, err)
 		}
 		if !ok {
 			continue
 		}
-		got, ok, err := lazy.MakeChunk(a)
+		got, ok, err := lazy.MakeChunk(a, 1)
 		if err != nil {
 			t.Fatalf("счёт по требованию %v: %v", a, err)
 		}
@@ -134,13 +134,13 @@ func TestOnDemandFillsDetailWhereWarmupHasNone(t *testing.T) {
 	if !lazy.sel.inExtent(a) {
 		t.Fatalf("%v: клетка за охватом мира — проверять нечего", a)
 	}
-	if _, ok, err := store.GetChunk(a); err != nil {
+	if _, ok, err := store.GetChunk(a, 1); err != nil {
 		t.Fatalf("чтение: %v", err)
 	} else if ok {
 		t.Fatalf("%v: чанк уже в базе до счёта", a)
 	}
 
-	got, ok, err := lazy.MakeChunk(a)
+	got, ok, err := lazy.MakeChunk(a, 1)
 	if err != nil {
 		t.Fatalf("счёт: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestOnDemandFillsDetailWhereWarmupHasNone(t *testing.T) {
 
 	// Посчитанное ОБЯЗАНО лечь в базу: без этого дороже становится не первый
 	// запрос, а каждый.
-	cached, ok, err := store.GetChunk(a)
+	cached, ok, err := store.GetChunk(a, 1)
 	if err != nil {
 		t.Fatalf("чтение из базы: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestOnDemandFillsDetailWhereWarmupHasNone(t *testing.T) {
 	// байт в байт тем же: детерминизм рецепта не зависит от того, кто его
 	// развернул.
 	_, other := newLazy(t)
-	twin, ok, err := other.MakeChunk(a)
+	twin, ok, err := other.MakeChunk(a, 1)
 	if err != nil || !ok {
 		t.Fatalf("второй счёт: ok=%v, %v", ok, err)
 	}
@@ -182,7 +182,7 @@ func TestOnDemandStopsAtWorldExtent(t *testing.T) {
 
 	// Вдвое дальше охвата — заведомо снаружи при любом округлении.
 	a := chunk.Address{Region: "ST_A", Level: 0, CZ: int(2*reach/chunk.SideM(0)) + 1}
-	c, ok, err := lazy.MakeChunk(a)
+	c, ok, err := lazy.MakeChunk(a, 1)
 	if err != nil {
 		t.Fatalf("%v: за краем мира получен отказ, а ожидалась пустота: %v", a, err)
 	}
@@ -193,7 +193,7 @@ func TestOnDemandStopsAtWorldExtent(t *testing.T) {
 		t.Fatalf("%v: пустота приехала с содержимым", a)
 	}
 	// И в базу ничего не легло: иначе край мира зарастал бы кэшем.
-	if _, ok, err := store.GetChunk(a); err != nil {
+	if _, ok, err := store.GetChunk(a, 1); err != nil {
 		t.Fatalf("чтение: %v", err)
 	} else if ok {
 		t.Fatalf("%v: за краем мира чанк записан в базу", a)
@@ -213,7 +213,7 @@ func TestOnDemandRefusesAddressOutsideItsWorld(t *testing.T) {
 		"отрицательный уровень":     {Region: "ST_A", Level: -1},
 		"чужой регион":              {Region: "НЕТ_ТАКОГО", Level: 0},
 	} {
-		if _, ok, err := lazy.MakeChunk(a); err == nil {
+		if _, ok, err := lazy.MakeChunk(a, 1); err == nil {
 			t.Fatalf("%s (%v): ok=%v, отказа нет", name, a, ok)
 		}
 	}
@@ -250,7 +250,7 @@ func TestConcurrentRequestsComputeChunkOnce(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			c, ok, err := g.do(a, work)
+			c, ok, err := g.do(flightKey{a: a, v: 1}, work)
 			if err != nil || !ok {
 				t.Errorf("спрашивающий %d: ok=%v, %v", k, ok, err)
 			}
@@ -301,16 +301,16 @@ func TestFlightSurvivesPanicOfLeader(t *testing.T) {
 
 	go func() {
 		defer func() { _ = recover() }()
-		_, _, _ = g.do(a, func() (worldstore.Chunk, bool, error) {
+		_, _, _ = g.do(flightKey{a: a, v: 1}, func() (worldstore.Chunk, bool, error) {
 			<-release
 			panic("рецепт сломался")
 		})
 	}()
 
-	waitForFlight(t, &g, a)
+	waitForFlight(t, &g, flightKey{a: a, v: 1})
 	done := make(chan error, 1)
 	go func() {
-		_, ok, err := g.do(a, func() (worldstore.Chunk, bool, error) {
+		_, ok, err := g.do(flightKey{a: a, v: 1}, func() (worldstore.Chunk, bool, error) {
 			return worldstore.Chunk{}, true, nil
 		})
 		if ok {
@@ -350,13 +350,13 @@ func waitFor(t *testing.T, mu *sync.Mutex, counter *int, want int) {
 	t.Fatalf("не дождались %d вызовов счёта", want)
 }
 
-// waitForFlight крутится, пока адрес не окажется в учёте полётов.
-func waitForFlight(t *testing.T, g *flightGroup, a chunk.Address) {
+// waitForFlight крутится, пока ключ полёта не окажется в учёте.
+func waitForFlight(t *testing.T, g *flightGroup, k flightKey) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		g.mu.Lock()
-		_, ok := g.in[a]
+		_, ok := g.in[k]
 		g.mu.Unlock()
 		if ok {
 			return
@@ -382,7 +382,7 @@ func TestLazyRefusesWhenRegionRuleDiffers(t *testing.T) {
 
 	other := ruleOf(t, newMap(t))
 	other.MaxLevel++ // мир на уровень шире, чем обещает карта
-	if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: other}); err != nil {
+	if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: other, Domain: newMap(t).Terrain.Domain}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	if _, err := NewLazy(s, newMap(t), "ST_A", 1); err == nil {

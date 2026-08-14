@@ -35,7 +35,7 @@ func buildFrogFeatures(m *mapfmt.Map, els map[string]Element, rg *RenderGeometry
 	for _, t := range m.Topology.Turnouts {
 		f, err := frogFeature(els, types, c, t)
 		if err != nil {
-			return fmt.Errorf("track: стрелка %s: %w", t.ID, err)
+			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
 		if f != nil {
 			rg.Features = append(rg.Features, *f)
@@ -65,7 +65,7 @@ func frogFeature(els map[string]Element, types map[string]mapfmt.TrackType,
 	sEl, okS := els[straightID]
 	dEl, okD := els[divergingID]
 	if !okS || !okD {
-		return nil, fmt.Errorf("проходы %s и %s не скомпилированы", straightID, divergingID)
+		return nil, fmt.Errorf("проходы %s и %s не скомпилированы", mapfmt.Labeled(t.Name, straightID), mapfmt.Labeled(t.Name, divergingID))
 	}
 
 	// Какие две нитки пересекать (спека §5): правая стрелка — прямой проход

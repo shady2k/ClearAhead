@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
@@ -126,12 +127,35 @@ type regionManifest struct {
 
 	Chunks chunkRule `json:"chunks"`
 
+	// ProjectionHead — голова проекций региона: какая версия мира текущая и
+	// из чего она собрана (журнал, сеть, рецепт). Без неё клиенту нечего
+	// подставить в /worlds/{v}/... — ровно тот следующий запрос, ради
+	// которого манифест и существует.
+	ProjectionHead projectionHeadJSON `json:"projection_head"`
+
+	// Domain — где мир кончается. Прямоугольник в координатах региона:
+	// клиенту нужна эта граница ДО того, как он начнёт спрашивать чанки, — за
+	// ней ответ всегда пустота (204), а не земля. Берётся у РЕГИОНА, а не у
+	// карты, по той же причине, что и правило подробности: манифест называет
+	// то, чем засеяна база.
+	Domain mapfmt.Domain `json:"domain"`
+
 	// Frame — блок georeference региона как есть, без перепаковки: значения
 	// геопривязки меняют смысл координат, и вторая их запись рано или поздно
 	// разошлась бы с первой. Отсутствует, если региону не задана привязка:
 	// пустой объект в ответе клиент был бы обязан отличать от заданной привязки
 	// с нулями, а это работа на пустом месте.
 	Frame json.RawMessage `json:"frame,omitempty"`
+}
+
+// projectionHeadJSON — форма ProjectionHead на проводе (спека §6.3):
+// четыре поля, отдельные НАРОЧНО — версия мира не растёт от журнала, и клиент
+// обязан видеть их по отдельности, а не один счётчик «новизны».
+type projectionHeadJSON struct {
+	WorldVersion     int64  `json:"world_version"`
+	SourceJournalSeq int64  `json:"source_journal_seq"`
+	NetworkVersion   int64  `json:"network_version"`
+	RegionRecipeHash string `json:"region_recipe_hash"`
 }
 
 // chunkRule — числа правила подробности: форма чанка из пакета chunk, охват из
@@ -267,6 +291,19 @@ func (a *regionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	// Голова проекций — часть манифеста: без версии мира клиенту нечего
+	// подставить в /worlds/{v}/..., и манифест, её не назвавший, не выполняет
+	// своей работы. Регион без головы — база прежней сборки без бутстрапа,
+	// и это состояние поломки, а не законный ответ.
+	head, ok, err := a.world.GetProjectionHead(reg.ID)
+	if err != nil {
+		http.Error(w, "хранилище недоступно", http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "голова проекций не заведена", http.StatusInternalServerError)
+		return
+	}
 
 	man := regionManifest{
 		Region:           reg.ID,
@@ -274,6 +311,12 @@ func (a *regionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		Revision:         st.Manifest.Revision,
 		NetworkModelHash: st.Manifest.NetworkModelHash,
 		NetworkHash:      st.Manifest.NetworkHash,
+		ProjectionHead: projectionHeadJSON{
+			WorldVersion:     head.WorldVersion,
+			SourceJournalSeq: head.SourceJournalSeq,
+			NetworkVersion:   head.NetworkVersion,
+			RegionRecipeHash: head.RegionRecipeHash,
+		},
 		Chunks: chunkRule{
 			SideM:   chunk.SideM0,
 			StepM:   chunk.StepM0,
@@ -286,7 +329,8 @@ func (a *regionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			MaxLevel:      reg.Rule.MaxLevel,
 			AxisStepM:     terrain.AxisStepM,
 		},
-		Frame: frameJSON(reg.Frame),
+		Domain: reg.Domain,
+		Frame:  frameJSON(reg.Frame),
 	}
 	body, err := json.Marshal(man)
 	if err != nil {

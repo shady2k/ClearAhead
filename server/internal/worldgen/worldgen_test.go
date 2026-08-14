@@ -37,7 +37,8 @@ func newStore(t *testing.T) *worldstore.Store {
 		t.Fatalf("база: %v", err)
 	}
 	t.Cleanup(func() { s.Close() })
-	if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: ruleOf(t, newMap(t))}); err != nil {
+	m := newMap(t)
+	if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: ruleOf(t, m), Domain: m.Terrain.Domain}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
 	return s
@@ -45,7 +46,7 @@ func newStore(t *testing.T) *worldstore.Store {
 
 func TestPipelineGeneratesChunks(t *testing.T) {
 	s := newStore(t)
-	rep, err := Generate(s, newMap(t), "ST_A", 1)
+	rep, err := Generate(s, newMap(t), "ST_A", 1, 1)
 	if err != nil {
 		t.Fatalf("порождение: %v", err)
 	}
@@ -88,12 +89,12 @@ func TestPipelineGeneratesChunks(t *testing.T) {
 // Вдали от пути не хранится ничего: разреженность есть свойство хранилища.
 func TestNoChunksFarFromTrack(t *testing.T) {
 	s := newStore(t)
-	if _, err := Generate(s, newMap(t), "ST_A", 1); err != nil {
+	if _, err := Generate(s, newMap(t), "ST_A", 1, 1); err != nil {
 		t.Fatalf("порождение: %v", err)
 	}
 	// Сто километров от станции — заведомо за пределами последнего уровня.
 	far := chunk.Address{Region: "ST_A", Level: 0, CX: 400000 / int(chunk.SideM(0)), CZ: 0}
-	if _, ok, err := s.GetChunk(far); err != nil {
+	if _, ok, err := s.GetChunk(far, 1); err != nil {
 		t.Fatalf("чтение: %v", err)
 	} else if ok {
 		t.Fatal("вдали от пути чанк всё-таки записан")
@@ -107,7 +108,7 @@ func TestInvalidMapIsNotWritten(t *testing.T) {
 	m := newMap(t)
 	m.MapID = "СЛОМАННЫЙ:ID" // разделитель в идентификаторе запрещён
 
-	if _, err := Generate(s, m, "ST_A", 1); err == nil {
+	if _, err := Generate(s, m, "ST_A", 1, 1); err == nil {
 		t.Fatal("невалидная карта принята")
 	}
 	n, err := s.CountChunks("ST_A", 0)
@@ -127,7 +128,7 @@ func TestWithoutRegionIsRefused(t *testing.T) {
 		t.Fatalf("база: %v", err)
 	}
 	defer s.Close()
-	if _, err := Generate(s, newMap(t), "ST_A", 1); err == nil {
+	if _, err := Generate(s, newMap(t), "ST_A", 1, 1); err == nil {
 		t.Fatal("порождение прошло без заведённого региона")
 	}
 }
@@ -150,10 +151,20 @@ func TestBootstrapIsIdempotent(t *testing.T) {
 	if !seeded {
 		t.Fatal("первый бутстрап ничего не сделал на пустой базе")
 	}
-	if rep.TotalChunks == 0 {
-		t.Fatal("бутстрап не породил чанков")
+	// Бутстрап с 2026-08-13 чанков НЕ порождает: он заводит запись региона, а
+	// прогрев — отдельный явный шаг (Generate), а не подразумеваемая часть
+	// мира. Иначе «бутстрап не греет» ничем не отличалось бы от «греет».
+	if rep.TotalChunks != 0 {
+		t.Fatalf("бутстрап породил %d чанков — прогрев не должен подразумеваться", rep.TotalChunks)
+	}
+	// Прогрев включается явно — тем же шагом, каким его включает cmd/clearahead.
+	if _, err := Generate(s, m, m.MapID, 1, 1); err != nil {
+		t.Fatalf("прогрев: %v", err)
 	}
 	before, _ := s.CountChunks(m.MapID, 0)
+	if before == 0 {
+		t.Fatal("явный прогрев не породил ни одного чанка")
+	}
 
 	_, seeded2, err := Bootstrap(s, m, 2, `{"source":"seedmap","kind":"fixture"}`)
 	if err != nil {

@@ -1,12 +1,15 @@
 package worldgen
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sync"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/terrain"
+	"github.com/shady2k/ClearAhead/server/internal/vegetation"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -44,31 +47,48 @@ import (
 // разошлось с картой.
 type Lazy struct {
 	store *worldstore.Store
-	// sel держит и поле, и правило, и габарит оси. Поле после terrain.New не
-	// меняется, поэтому читать его из многих горутин можно без блокировки —
-	// это не рассуждение, а замер: BenchmarkChunkGenerationParallel гоняет
-	// ChunkHeights на всех ядрах сразу и под -race.
+	// sel держит и поле, и правило, и домен, и габарит оси. Поле после
+	// terrain.New не меняется, поэтому читать его из многих горутин можно без
+	// блокировки — это не рассуждение, а замер:
+	// BenchmarkChunkGenerationParallel гоняет ChunkHeights на всех ядрах сразу
+	// и под -race.
 	sel      selector
 	region   string
 	revision int64
 	baseZmm  int64
-	flights  flightGroup
+	// veg — источники растительности партии: лес чанков — проекция рецепта
+	// минус вырубка плюс посадка (projectForest), и порождение обязано знать
+	// их, иначе лениво посчитанный чанк воскресил бы срубленное (sqym.18).
+	veg vegetation.Sources
+	// limiter — бюджет порождения: сколько чанков считается одновременно и
+	// сколько ждёт очереди. Камера, вылетевшая в незасеянное, спрашивает
+	// клетки пачкой, и без ограничителя сервер ушёл бы в счёт целиком
+	// (замеры и числа — у типа limiter).
+	limiter *limiter
+	flights flightGroup
 }
 
-// NewLazy строит порождение по требованию для одного региона.
-//
-// Карта приходит документом, а не готовым полем, и это то же решение, что у
-// Bootstrap: знание «карта -> рельеф» живёт в конвейере входа, а не у того, кто
-// его вызывает. Иначе композиция в main.go обзавелась бы собственными
-// track.Propagate и terrain.New — второй копией пути входа в месте, где его
-// никто не проверяет.
-//
-// Отказ здесь — отказ СТАРТА: регион не заведён, карта не проходит валидацию,
-// правило подробности разошлось с записанным в базе. Молча поднять сервер,
-// который считает чанки не тем правилом, каким засеян мир, нельзя: снаружи это
-// выглядит исправным миром с невидимым швом.
 func NewLazy(s *worldstore.Store, m *mapfmt.Map, region string, revision int64) (*Lazy, error) {
-	sel, err := prepare(s, m, region)
+	return NewLazyGraded(s, m, terrain.Grading{}, region, revision)
+}
+
+// NewLazyGraded — порождение по требованию над миром с правками высот.
+//
+// Правки — исходник рядом с картой, и ленивое порождение обязано знать их:
+// иначе клетка, засеянная правкой, а затем спрошенная по требованию (камера
+// подлетела ближе, прогрев её не клал), посчиталась бы природной землёй — тот
+// же дефект «правка не сработала», что пересев уничтожает явно.
+func NewLazyGraded(s *worldstore.Store, m *mapfmt.Map, g terrain.Grading, region string, revision int64) (*Lazy, error) {
+	return NewLazySources(s, m, Sources{Grading: g}, region, revision)
+}
+
+// NewLazySources — порождение по требованию над миром с исходниками партии:
+// правки высот и вырубка. Иначе клетка, засеянная правкой или рубкой, а затем
+// спрошенная по требованию (камера подлетела ближе, прогрев её не клал),
+// посчиталась бы природной землёй и лесом рецепта — тот же дефект «правка не
+// сработала», что пересев уничтожает явно.
+func NewLazySources(s *worldstore.Store, m *mapfmt.Map, src Sources, region string, revision int64) (*Lazy, error) {
+	sel, err := prepare(s, m, region, src.Grading)
 	if err != nil {
 		return nil, err
 	}
@@ -77,6 +97,8 @@ func NewLazy(s *worldstore.Store, m *mapfmt.Map, region string, revision int64) 
 		sel:      sel,
 		region:   region,
 		revision: revision,
+		veg:      src.Vegetation,
+		limiter:  newLimiter(),
 		// Опорная высота берётся из рецепта и одна на весь регион — ровно как у
 		// прогрева. Считать её у каждого чанка заново значило бы получить два
 		// округления одного числа и, рано или поздно, две разные базы отсчёта.
@@ -84,7 +106,12 @@ func NewLazy(s *worldstore.Store, m *mapfmt.Map, region string, revision int64) 
 	}, nil
 }
 
-// MakeChunk считает недостающий чанк, кладёт его в базу и возвращает.
+// MakeChunk считает недостающий чанк ПОД ВЕРСИЕЙ МИРА, кладёт его в базу и
+// возвращает.
+//
+// Версия приходит от вызвавшего (ручка читает голову проекций): посчитанный
+// чанк обязан лечь ровно под неё — строка (адрес, версия) живёт рядом со
+// строками других версий и ничего не затирает (спека §6.3).
 //
 // # Три исхода, и они не сливаются
 //
@@ -96,7 +123,7 @@ func NewLazy(s *worldstore.Store, m *mapfmt.Map, region string, revision int64) 
 // Разница между второй и третьей строкой — то, ради чего у метода два признака
 // вместо одного. Пустой чанк вместо отказа нарисовал бы игроку ровную землю на
 // месте сломанного рецепта, и сломанное выглядело бы исправным.
-func (l *Lazy) MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error) {
+func (l *Lazy) MakeChunk(a chunk.Address, worldVersion int64) (worldstore.Chunk, bool, error) {
 	// Чужой регион — отказ, а не пустота. Рецепт у сервера ровно один, и
 	// «посчитать не могу» здесь не свойство места, а нехватка исходных данных:
 	// выдав 204, сервер сказал бы «земли там нет», хотя на самом деле он про ту
@@ -120,7 +147,19 @@ func (l *Lazy) MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error) {
 	if !l.sel.inExtent(a) {
 		return worldstore.Chunk{}, false, nil
 	}
-	return l.flights.do(a, func() (worldstore.Chunk, bool, error) { return l.compute(a) })
+	// Бюджет берётся ВНУТРИ полёта, а не до него: ждущий чужого счёта по
+	// адресу не занимает ни счётный слот, ни место в очереди — он уже
+	// получил ответ, который ему посчитают. Слот нужен только ведущему.
+	return l.flights.do(flightKey{a: a, v: worldVersion}, func() (worldstore.Chunk, bool, error) {
+		if err := l.limiter.acquire(); err != nil {
+			// Отказ, а не пустота: очередь переполнена — состояние ВРЕМЕННОЕ,
+			// и клиент повторит (ручка отвечает 503 с Retry-After). Пустота
+			// выглядела бы законным «земли здесь нет».
+			return worldstore.Chunk{}, false, err
+		}
+		defer l.limiter.release()
+		return l.compute(a, worldVersion)
+	})
 }
 
 // compute считает чанк, пишет его в базу и отдаёт ПРОЧИТАННЫМ ИЗ БАЗЫ.
@@ -138,34 +177,16 @@ func (l *Lazy) MakeChunk(a chunk.Address) (worldstore.Chunk, bool, error) {
 // взяться неоткуда — их не нужно проверять, их нечем создать.
 //
 // Заодно это проверка записи: чанк, который база не отдала сразу после
-// вставки, — сбой, а не пустота.
-func (l *Lazy) compute(a chunk.Address) (worldstore.Chunk, bool, error) {
-	// Порядок и состав слоёв те же, что у прогрева (Generate), и по той же
-	// причине: покров берётся из того же рецепта в тех же координатах, а лес
-	// считается ИЗ ПОКРОВА, отчего инвариант «бит только в лесном классе»
-	// держится построением.
-	heights, err := l.sel.field.ChunkHeights(a)
+func (l *Lazy) compute(a chunk.Address, worldVersion int64) (worldstore.Chunk, bool, error) {
+	ch, err := chunkAt(l.sel.field, l.baseZmm, a, l.revision, worldVersion, l.veg)
 	if err != nil {
 		return worldstore.Chunk{}, false, err
 	}
-	cover, err := l.sel.field.ChunkCover(a)
-	if err != nil {
-		return worldstore.Chunk{}, false, err
-	}
-	forest := l.sel.field.ChunkForest(a, cover)
-
-	if err := l.store.PutChunk(worldstore.Chunk{
-		Address:  a,
-		Revision: l.revision,
-		BaseZmm:  l.baseZmm,
-		Heights:  heights,
-		Cover:    cover,
-		Forest:   forest,
-	}); err != nil {
+	if err := l.store.PutChunk(ch); err != nil {
 		return worldstore.Chunk{}, false, err
 	}
 
-	c, ok, err := l.store.GetChunk(a)
+	c, ok, err := l.store.GetChunk(a, worldVersion)
 	if err != nil {
 		return worldstore.Chunk{}, false, err
 	}
@@ -177,8 +198,16 @@ func (l *Lazy) compute(a chunk.Address) (worldstore.Chunk, bool, error) {
 	return c, true, nil
 }
 
-// flightGroup — ОДИНОЧНЫЙ ПОЛЁТ ПО АДРЕСУ: пока чанк считается, второй запрос
-// на тот же адрес не считает его заново, а ждёт и получает тот же ответ.
+// flightGroup — ОДИНОЧНЫЙ ПОЛЁТ ПО (АДРЕС, ВЕРСИЯ): пока чанк считается,
+// второй запрос на тот же адрес ТОЙ ЖЕ ВЕРСИИ не считает его заново, а ждёт и
+// получает тот же ответ.
+//
+// # Почему версия вошла в ключ
+//
+// Полёт по адресу без версии склеил бы запросы разных миров: запрос версии 1
+// (начал счёт до правки) и запрос версии 2 (после) — это ДВЕ строки в базе, и
+// считать одну из них дважды в мусор нельзя, но и отдать ответ первой версии
+// второй нельзя. Ключ (адрес, версия) разводит их по отдельным полётам.
 //
 // # Почему это, а не транзакция и не мьютекс на всё
 //
@@ -188,15 +217,16 @@ func (l *Lazy) compute(a chunk.Address) (worldstore.Chunk, bool, error) {
 //
 // Транзакция базы решала бы ДРУГУЮ задачу — целостность записи, — и не мешала
 // бы обеим горутинам посчитать чанк: счёт идёт вне базы. Вторая запись при этом
-// не ошибка (PutChunk идемпотентен: ON CONFLICT DO UPDATE, а рельеф выводится
-// из рецепта детерминированно, поэтому байты совпадают), но она бессмысленна.
+// не ошибка (PutChunk идемпотентен в пределах версии: ON CONFLICT DO UPDATE, а
+// рельеф выводится из рецепта детерминированно, поэтому байты совпадают), но
+// она бессмысленна.
 //
 // Один мьютекс на всё порождение сериализовал бы НЕЗАВИСИМЫЕ адреса и убил бы
 // то, ради чего порождение вообще годится по срокам: 0.33 мс на чанк в
 // несколько потоков против 2.7 мс в один (BenchmarkChunkGenerationParallel).
 //
 // golang.org/x/sync/singleflight делает то же самое, но по строковому ключу и
-// ценой первой в проекте зависимости ради тридцати строк; адрес чанка —
+// ценой первой в проекте зависимости ради тридцати строк; (адрес, версия) —
 // сравнимое значение и годится ключом карты как есть.
 //
 // # Чего здесь сознательно НЕТ
@@ -205,9 +235,14 @@ func (l *Lazy) compute(a chunk.Address) (worldstore.Chunk, bool, error) {
 // перед вызовом, и второе чтение отвечало бы на тот же вопрос второй раз ради
 // узкого окна — между промахом ручки и захватом полёта, — в котором
 // пересчитанный чанк всё равно выйдет байт в байт прежним.
+type flightKey struct {
+	a chunk.Address
+	v int64
+}
+
 type flightGroup struct {
 	mu sync.Mutex
-	in map[chunk.Address]*flight
+	in map[flightKey]*flight
 }
 
 // flight — один идущий счёт. Результат читают только после закрытия done,
@@ -220,18 +255,18 @@ type flight struct {
 	err  error
 }
 
-func (g *flightGroup) do(a chunk.Address, fn func() (worldstore.Chunk, bool, error)) (worldstore.Chunk, bool, error) {
+func (g *flightGroup) do(k flightKey, fn func() (worldstore.Chunk, bool, error)) (worldstore.Chunk, bool, error) {
 	g.mu.Lock()
 	if g.in == nil {
-		g.in = make(map[chunk.Address]*flight)
+		g.in = make(map[flightKey]*flight)
 	}
-	if f, ok := g.in[a]; ok {
+	if f, ok := g.in[k]; ok {
 		g.mu.Unlock()
 		<-f.done
 		return f.c, f.ok, f.err
 	}
 	f := &flight{done: make(chan struct{})}
-	g.in[a] = f
+	g.in[k] = f
 	g.mu.Unlock()
 
 	// Паника ведущего не должна оставить ждущих висеть на канале навсегда:
@@ -243,23 +278,99 @@ func (g *flightGroup) do(a chunk.Address, fn func() (worldstore.Chunk, bool, err
 		if r := recover(); r != nil {
 			f.ok = false
 			f.err = fmt.Errorf("worldgen: порождение чанка %s/%d/%d/%d сорвалось: %v",
-				a.Region, a.Level, a.CX, a.CZ, r)
-			g.land(a, f)
+				k.a.Region, k.a.Level, k.a.CX, k.a.CZ, r)
+			g.land(k, f)
 			panic(r)
 		}
-		g.land(a, f)
+		g.land(k, f)
 	}()
 
 	f.c, f.ok, f.err = fn()
 	return f.c, f.ok, f.err
 }
 
-// land снимает полёт с учёта и будит ждущих. Порядок важен: адрес освобождается
+// land снимает полёт с учёта и будит ждущих. Порядок важен: ключ освобождается
 // ДО пробуждения, иначе разбуженный успел бы прицепиться к уже завершённому
 // полёту и ждать его повторно.
-func (g *flightGroup) land(a chunk.Address, f *flight) {
+func (g *flightGroup) land(k flightKey, f *flight) {
 	g.mu.Lock()
-	delete(g.in, a)
+	delete(g.in, k)
 	g.mu.Unlock()
 	close(f.done)
+}
+
+// ErrQueueFull — очередь порождения переполнена. Честный отказ, а не
+// бесконечное ожидание: состояние временное, и ручка чанков отвечает им 503 с
+// Retry-After (httpapi).
+var ErrQueueFull = errors.New("worldgen: очередь порождения переполнена")
+
+// Числа бюджета. Замер, а не рассуждение: машинный минимум полного содержимого
+// чанка около 5.5 мс, первый запрос вдали от оси — 39 мс сквозного
+// (terrain/bench_test.go, BenchmarkChunkLayers). Камера, вылетевшая в
+// незасеянное, спрашивает клетки пачкой, и без ограничителя сервер ушёл бы в
+// счёт целиком — включая живое состояние поезда, которому нужны те же ядра.
+const (
+	// computeSlots — сколько чанков СЧИТАЕТСЯ одновременно. Четыре: часть ядер
+	// машины остаётся всему остальному серверу. Параллельность порождения
+	// измерена (BenchmarkChunkGenerationParallel): несколько потоков дают
+	// 0.33 мс на чанк против 2.7 мс в один.
+	computeSlots = 4
+	// queueSlots — сколько запросов вправе ЖДАТЬ счётного слота. Переполнение
+	// очереди — отказ, а не рост: 64 × 5.5 мс ≈ 350 мс на дренаж полной
+	// очереди, и Retry-After в секунду даёт очереди разойтись до повтора.
+	queueSlots = 64
+)
+
+// limiter — бюджет порождения: одновременно считающихся чанков не больше
+// computeSlots, ждущих — не больше queueSlots.
+//
+// # Почему две ёмкости, а не одна
+//
+// Одна ёмкость на всё («не больше N в полёте») смешала бы счёт и ожидание:
+// очередь была бы невидимой и росла бы без предела — N считают, остальные
+// висят на канале и ничем не отличаются от считающих. Две ёмкости делают
+// очередь видимой: её переполнение отвечается отказом в момент входа.
+//
+// # Отвергнуто
+//
+// Токен-ведро по частоте — требование про ОДНОВРЕМЕННОСТЬ, а не про темп: два
+// чанка в один момент стоят двух слотов, а сто чанков за минуту по одному —
+// законная очередь. Неограниченная очередь — превращает всплеск в хвост
+// задержки, который догоняет сервер уже после того, как камера ушла. Отказ —
+// честнее: клиент повторит, а сервер не утонет.
+type limiter struct {
+	compute chan struct{}
+	queue   chan struct{}
+}
+
+func newLimiter() *limiter {
+	return &limiter{
+		compute: make(chan struct{}, computeSlots),
+		queue:   make(chan struct{}, queueSlots),
+	}
+}
+
+// acquire занимает место в очереди и дожидается счётного слота. Очередь полна —
+// немедленный отказ, а не ожидание: бесконечно ждать вправе только тот, кому
+// уже посчитали.
+func (l *limiter) acquire() error {
+	select {
+	case l.queue <- struct{}{}:
+	default:
+		return ErrQueueFull
+	}
+	// Блокировка здесь безопасна и ограничена: место в очереди уже занято, а
+	// счётные слоты освобождаются по мере завершения — каждый держатель слота
+	// либо считает, либо ждёт, и счёт всегда конечен.
+	l.compute <- struct{}{}
+	return nil
+}
+
+func (l *limiter) release() {
+	// Сначала счётный слот, потом очередь: разбуженный ждущий занимает счётный
+	// слот немедленно, а место в очереди освобождается только после того, как
+	// он начал — иначе новый входящий занял бы очередь раньше, чем она
+	// разгрузилась.
+	<-l.compute
+	<-l.queue
 }

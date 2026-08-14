@@ -25,7 +25,7 @@ func TestCompileFlatLengths(t *testing.T) {
 	if len(rg.Elements) != 9 {
 		t.Fatalf("в RenderGeometry %d элементов, ожидалось 9", len(rg.Elements))
 	}
-	if rg.Elements[0].ID != seedmap.StationApproach {
+	if rg.Elements[0].ID != seedmap.StationSW1+mapfmt.PassageDiverging {
 		t.Fatalf("порядок элементов не детерминирован: первый %s", rg.Elements[0].ID)
 	}
 }
@@ -79,7 +79,7 @@ func TestCompileDeterministic(t *testing.T) {
 // симуляции — в s.
 func approachWithGrade() *mapfmt.Map {
 	return seedmap.Station(
-		seedmap.WithStructure(platform("TSP", seedmap.StationApproach, 10, 90)),
+		seedmap.WithStructure(platform(testPlatformID, seedmap.StationApproach, 10, 90)),
 		seedmap.Mutate(func(m *mapfmt.Map) {
 			a := m.Geometry.Edges[seedmap.StationApproach]
 			a.Vertical = []mapfmt.VPrim{
@@ -93,10 +93,16 @@ func approachWithGrade() *mapfmt.Map {
 	)
 }
 
+// testPlatformID — платформа на подходе (метка TSP). UUID взят из таблицы
+// mapfmt/helpers_test.go (tID07, метка TS1): ручная фикстура своего UUID не
+// выдумывает.
+const testPlatformID = "01a3185c-5008-7242-8242-000007424242"
+
 // платформа — сооружение на элементе от fromM до toM.
 func platform(id, element string, fromM, toM float64) mapfmt.Structure {
 	return mapfmt.Structure{
 		ID:     id,
+		Name:   "TSP",
 		Kind:   "platform",
 		Span:   netloc.LinearU{{Element: element, From: fromM, To: toM}},
 		Side:   "right",
@@ -160,11 +166,11 @@ func TestCompileStructureSpansInU(t *testing.T) {
 	}
 	var st RenderStructure
 	for _, cand := range rg.Structures {
-		if cand.ID == "TSP" {
+		if cand.ID == testPlatformID {
 			st = cand
 		}
 	}
-	if st.ID != "TSP" || st.Kind != "platform" || st.Side != "right" {
+	if st.ID != testPlatformID || st.Kind != "platform" || st.Side != "right" {
 		t.Fatalf("объект %+v, ожидался TSP platform right", st)
 	}
 	if st.Offset != 1.745 || st.Width != 3.0 {
@@ -183,7 +189,7 @@ func TestCompileStructureSpansInU(t *testing.T) {
 		t.Fatalf("спан клиента (%s, %v, %v) — ожидались значения u из карты (%s, 10, 90)",
 			sp.Element, sp.From, sp.To, seedmap.StationApproach)
 	}
-	ss := cn.Structures["TSP"]
+	ss := cn.Structures[testPlatformID]
 	if len(ss) != 1 {
 		t.Fatalf("у CompiledNetwork %d спанов, ожидался 1", len(ss))
 	}
@@ -230,7 +236,7 @@ func TestCompileConstructionWire(t *testing.T) {
 			runs[i], runs[j] = runs[j], runs[i]
 		}
 	}))
-	if m.Construction.Runs[0].ID != "RUN_STUB" {
+	if m.Construction.Runs[0].ID != seedmap.StationRunStub {
 		t.Fatalf("порядок run'ов в карте не перевёрнут: первый %s — проверять сортировку не на чем",
 			m.Construction.Runs[0].ID)
 	}
@@ -253,7 +259,7 @@ func TestCompileConstructionWire(t *testing.T) {
 		t.Fatalf("run'ов в проводе %d, ожидалось 4", len(rg.ConstructionRuns))
 	}
 	// Сортировка по id, несмотря на авторский порядок в карте.
-	if rg.ConstructionRuns[0].ID != "RUN_APPROACH_CROSS" || rg.ConstructionRuns[3].ID != "RUN_STUB" {
+	if rg.ConstructionRuns[0].ID != seedmap.StationRunApproachCross || rg.ConstructionRuns[3].ID != seedmap.StationRunStub {
 		t.Fatalf("run'ы не отсортированы по id: %s, %s, %s, %s", rg.ConstructionRuns[0].ID,
 			rg.ConstructionRuns[1].ID, rg.ConstructionRuns[2].ID, rg.ConstructionRuns[3].ID)
 	}
@@ -383,9 +389,9 @@ func TestAlignmentAtAnswersInPhysicsCoordinate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
 	}
-	el, ok := cn.Elements["E_MAIN"]
+	el, ok := cn.Elements[seedmap.StationMain]
 	if !ok {
-		t.Fatal("в сети нет элемента E_MAIN")
+		t.Fatalf("в сети нет элемента %s", seedmap.StationMain)
 	}
 	cases := []struct {
 		name       string

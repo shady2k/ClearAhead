@@ -6,6 +6,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 )
 
 // Run'ы путевой решётки — авторитетный факт о физической решётке, независимый
@@ -209,13 +210,28 @@ func dropRuns(runs []mapfmt.ConstructionRun, removed map[string]bool) []mapfmt.C
 }
 
 // newRunForEdge — свежий run для нового ребра: фаза 0, направление forward.
-func newRunForEdge(m *mapfmt.Map, edgeID string) (mapfmt.ConstructionRun, error) {
+// Тождество run'а — UUIDv7 из источника, метка — RUN_<метка ребра> (решение
+// владельца 2026-08-13 «UUIDv7 везде»: прежний составной ID «RUN_+edgeID»
+// больше не тождество — тождество UUID, имя отдельным полем).
+func newRunForEdge(m *mapfmt.Map, ids uuidv7.Source, edgeID string) (mapfmt.ConstructionRun, error) {
 	sp, err := newRunSpan(m, edgeID, "forward")
 	if err != nil {
 		return mapfmt.ConstructionRun{}, err
 	}
+	name := ""
+	for _, e := range m.Topology.Edges {
+		if e.ID == edgeID {
+			name = "RUN_" + e.Name
+			break
+		}
+	}
+	id, err := allocID(m, ids, name)
+	if err != nil {
+		return mapfmt.ConstructionRun{}, err
+	}
 	return mapfmt.ConstructionRun{
-		ID:         "RUN_" + edgeID,
+		ID:         id,
+		Name:       name,
 		Coordinate: "u",
 		Phase:      0,
 		Spans:      []netloc.IntervalU{sp},

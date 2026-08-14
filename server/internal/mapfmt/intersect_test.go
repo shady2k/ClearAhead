@@ -23,7 +23,7 @@ func TestAxesIntersectInTheMiddle(t *testing.T) {
 		mapfmt.Anchor{X: 50, Y: -50, Heading: math.Pi / 2},
 		[]mapfmt.HPrim{straight(100)},
 	)
-	rejects(t, m, "E1 x E2 в (50.0, 0.0)")
+	rejects(t, m, seedmap.LineEdgeID+" x "+secondEdge+" в (50.0, 0.0)")
 }
 
 // TestAxisEndsAtAnotherAxisMiddle — конец пути, упирающийся в середину другого
@@ -36,7 +36,7 @@ func TestAxisEndsAtAnotherAxisMiddle(t *testing.T) {
 		mapfmt.Anchor{X: 50, Y: -50, Heading: math.Pi / 2},
 		[]mapfmt.HPrim{straight(50)},
 	)
-	rejects(t, m, "E1 x E2")
+	rejects(t, m, seedmap.LineEdgeID+" x "+secondEdge)
 }
 
 // TestAxesTouchWithoutCrossing — касание вне разрешённого порта. E1 идёт на
@@ -50,7 +50,7 @@ func TestAxesTouchWithoutCrossing(t *testing.T) {
 		mapfmt.Anchor{X: -50, Y: 100 + 100*math.Sqrt(3)/2, Heading: math.Pi / 6},
 		[]mapfmt.HPrim{arc(100, -math.Pi/3)},
 	)
-	rejects(t, m, "E1 x E2 в (0.0, 200.0)")
+	rejects(t, m, seedmap.LineEdgeID+" x "+secondEdge+" в (0.0, 200.0)")
 }
 
 // TestAxesOverlap — коллинеарное наложение: E2 лежит на линии E1 с 30-го по
@@ -109,8 +109,8 @@ func TestJointInSharedPortIsAllowed(t *testing.T) {
 	m := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
 		end := m.Topology.Edges[0].To
 		m.Topology.Nodes = append(m.Topology.Nodes,
-			mapfmt.Node{ID: "NC", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}})
-		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: secondEdge, Kind: mapfmt.KindRail, From: end, To: "NC.P1"})
+			mapfmt.Node{ID: tID03, Name: "NC", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}})
+		m.Topology.Edges = append(m.Topology.Edges, mapfmt.Edge{ID: secondEdge, Name: "E2", Kind: mapfmt.KindRail, From: end, To: tID03 + ".P1"})
 		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{straight(100)}}
 		m.Geometry.Edges[secondEdge] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{straight(100)}}
 	}))
@@ -123,7 +123,7 @@ func TestParallelTracksAreAllowed(t *testing.T) {
 	m := seedmap.Line(seedmap.WithoutConstruction(), seedmap.Mutate(func(m *mapfmt.Map) {
 		first := m.Topology.Edges[0]
 		m.Topology.Edges = append(m.Topology.Edges,
-			mapfmt.Edge{ID: secondEdge, Kind: mapfmt.KindRail, From: first.From, To: first.To})
+			mapfmt.Edge{ID: secondEdge, Name: "E2", Kind: mapfmt.KindRail, From: first.From, To: first.To})
 		m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{straight(100)}}
 		m.Geometry.Edges[secondEdge] = mapfmt.Alignments{Horizontal: []mapfmt.HPrim{arc(200, 0.5)}}
 		// В порту сходятся два элемента: якорь обязан назвать тот, ВНУТРЬ

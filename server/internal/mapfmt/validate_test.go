@@ -52,7 +52,8 @@ func TestValidatorRejects(t *testing.T) {
 		{
 			"сооружение неизвестного вида",
 			seedmap.Line(seedmap.WithStructure(mapfmt.Structure{
-				ID:   "TS1",
+				ID:   tID07,
+				Name: "TS1",
 				Kind: "sarai",
 				Span: netloc.LinearU{{Element: seedmap.LineEdgeID, From: 0, To: 10}},
 			})),
@@ -76,6 +77,48 @@ func TestValidatorRejects(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) { rejects(t, c.m, c.reason) })
 	}
+}
+
+// TestMapWithoutTrackIsValid — приёмочный критерий sqym.2: карта БЕЗ ЕДИНОГО
+// элемента пути заводится. Карта есть рецепт ПРИРОДЫ (§1 спеки), путь живёт в
+// партии, поэтому требование якоря обусловлено наличием сети: ноль элементов и
+// ноль якорей — законная карта, «природы без дороги не бывает» — утверждение,
+// которого формат больше не делает.
+func TestMapWithoutTrackIsValid(t *testing.T) {
+	m := natureOnlyMap()
+	if err := mapfmt.Validate(m); err != nil {
+		t.Fatalf("карта без единого элемента пути отвергнута: %v", err)
+	}
+}
+
+// TestMapWithoutTrackWithDanglingAnchorIsRejected — другая половина того же
+// правила: якорь в никуда есть ошибка автора, и молча его проигнорировать
+// значило бы принять неверно написанную карту. Якорь стоит на СУЩЕСТВУЮЩЕМ
+// узловом порту (NA.P1 — его объявляет топология, но ни одно ребро его не
+// занимает), чтобы отказ пришёл именно по числу якорей, а не по проверке порта
+// и не по axisPoses: прежний валидатор такую карту пропускал до intersect.go.
+func TestMapWithoutTrackWithDanglingAnchorIsRejected(t *testing.T) {
+	m := natureOnlyMap()
+	m.Anchors = map[string]mapfmt.Anchor{"NA.P1": {X: 0, Y: 0, Z: 150, Heading: 0}}
+	rejects(t, m, "объявлено якорей: 1")
+}
+
+// natureOnlyMap — карта без единого элемента пути: рельеф и домен есть, сети
+// нет. Топология узлов сохранена, чтобы якорь мог указывать на существующий
+// порт; рёбра, геометрия, якоря и решётка убраны целиком — иначе отказ пришёл
+// бы по первому попавшемуся дефекту, а не по предмету теста.
+func natureOnlyMap() *mapfmt.Map {
+	m := seedmap.Line(
+		seedmap.WithID("NATURE"),
+		seedmap.WithTerrain(),
+		seedmap.Mutate(func(m *mapfmt.Map) {
+			m.Anchors = nil
+			m.Topology.Edges = nil
+			m.Geometry = mapfmt.Geometry{}
+			m.Construction = nil
+		}),
+	)
+	return m
 }
 
 // TestElementKindIsRequired — карта без kind получает ОТКАЗ НА ВХОДЕ, а не

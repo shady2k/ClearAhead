@@ -40,7 +40,7 @@ func TestTurnoutBothOrientations(t *testing.T) {
 	for _, inc := range []Incidence{
 		{Port: seedmap.StationSW1 + ".S", Element: seedmap.StationSW1 + mapfmt.PassageStraight},
 		{Port: seedmap.StationSW1 + ".D", Element: seedmap.StationSW1 + mapfmt.PassageDiverging},
-		{Port: "N_STOP_MAIN.P1", Element: seedmap.StationMain},
+		{Port: seedmap.StationStopMainNode + ".P1", Element: seedmap.StationMain},
 		{Port: seedmap.StationSW2 + ".C", Element: seedmap.StationCross},
 	} {
 		a, okA := posesTo[inc]

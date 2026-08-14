@@ -43,14 +43,16 @@ func TestRiverValidationRefuses(t *testing.T) {
 	}
 }
 
-// Две реки с одним идентификатором — отказ: ID адресует объект, и второй с тем
-// же именем делает адресацию неоднозначной.
+// Две реки с одним идентификатором — отказ: UUID адресует объект, и второй с
+// тем же UUID делает адресацию неоднозначной. Повтор ловится сквозной проверкой
+// уникальности тождеств (checkUniqueIDs) — она зовётся раньше проверки рек и
+// называет причину прямо.
 func TestDuplicateRiverIDRefused(t *testing.T) {
 	m := seedmap.Station(seedmap.WithTerrain(), seedmap.Mutate(func(m *mapfmt.Map) {
 		m.Objects.Rivers = append(m.Objects.Rivers, m.Objects.Rivers[0])
 	}))
 	err := mapfmt.Validate(m)
-	if err == nil || !strings.Contains(err.Error(), "дважды") {
+	if err == nil || !strings.Contains(err.Error(), "повторяет") {
 		t.Fatalf("дубликат реки принят: %v", err)
 	}
 }

@@ -78,7 +78,12 @@ func validateTerrain(t *Terrain) error {
 	}
 	// Охват проверяется ПОСЛЕ земляных работ и размаха шума, потому что его
 	// нижняя граница считается из них.
-	return validateExtent(t.Extent, e.FormationHalfWidth+total*e.SideSlope)
+	if err := validateExtent(t.Extent, e.FormationHalfWidth+total*e.SideSlope); err != nil {
+		return err
+	}
+	// Домен проверяется рядом с охватом: оба описывают пространство мира, и
+	// две ошибки одного блока не должны разъезжаться по разным файлам.
+	return validateDomain(t.Domain)
 }
 
 // Пределы охвата. Числа отвергают невозможное, а не выбирают размер: размер
@@ -128,6 +133,32 @@ func validateExtent(e Extent, earthworksReachM float64) error {
 	if reach := e.ReachM(); reach > MaxReachM {
 		return fmt.Errorf("mapfmt: рельеф: охват: радиус %v м · 2^%d = %v м больше %v м",
 			e.Level0RadiusM, e.MaxLevel(), reach, MaxReachM)
+	}
+	return nil
+}
+
+// validateDomain проверяет прямоугольник домена. Отказывает, не чинит.
+//
+// Нуль здесь — ЗАБЫТАЯ СТРОКА, а не значение: JSON без ключа даёт тот же ноль,
+// что и явный ноль, и молча принять его значило бы выдать карту без мира за
+// исправную. Поэтому проверка — на вырожденность, а не на диапазон: домен,
+// у которого сторона не выросла, не задан. Отказ называет ВСЕ ЧЕТЫРЕ числа —
+// автор ищет пропуск глазами, и отсутствующее в тексте число он ищет по всей
+// карте.
+func validateDomain(d Domain) error {
+	for _, c := range []struct {
+		name string
+		v    float64
+	}{
+		{"min_x", d.MinX}, {"min_z", d.MinZ}, {"max_x", d.MaxX}, {"max_z", d.MaxZ},
+	} {
+		if err := checkFiniteFloat("рельеф: домен: "+c.name, c.v); err != nil {
+			return err
+		}
+	}
+	if !(d.MinX < d.MaxX && d.MinZ < d.MaxZ) {
+		return fmt.Errorf("mapfmt: рельеф: домен: прямоугольник не задан или вырожден: x от %v до %v, z от %v до %v; блок domain обязателен",
+			d.MinX, d.MaxX, d.MinZ, d.MaxZ)
 	}
 	return nil
 }
@@ -255,27 +286,27 @@ func (m *Map) validateObjects() error {
 	seen := make(map[string]bool, len(o.Buildings))
 	for i := range o.Buildings {
 		b := &o.Buildings[i]
-		if err := ValidID("постройка", b.ID); err != nil {
+		if err := checkEntity("постройка", b.Name, b.ID); err != nil {
 			return err
 		}
 		if seen[b.ID] {
-			return fmt.Errorf("mapfmt: постройка %q объявлена дважды", b.ID)
+			return fmt.Errorf("mapfmt: постройка %q объявлена дважды", Labeled(b.Name, b.ID))
 		}
 		seen[b.ID] = true
-		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: x", b.ID), b.X); err != nil {
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: x", Labeled(b.Name, b.ID)), b.X); err != nil {
 			return err
 		}
-		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: y", b.ID), b.Y); err != nil {
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: y", Labeled(b.Name, b.ID)), b.Y); err != nil {
 			return err
 		}
-		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: heading", b.ID), b.Heading); err != nil {
+		if err := checkFiniteFloat(fmt.Sprintf("постройка %s: heading", Labeled(b.Name, b.ID)), b.Heading); err != nil {
 			return err
 		}
 		// Диапазоны, а не знак: дом шириной 0.001 м проходит «строго
 		// положительно» и рисуется невидимой щепкой, а миллион таких кладёт
 		// клиент.
 		bad := func(what string, v, min, max float64) error {
-			return fmt.Errorf("mapfmt: постройка %q: %s %g вне [%g, %g] м", b.ID, what, v, min, max)
+			return fmt.Errorf("mapfmt: постройка %q: %s %g вне [%g, %g] м", Labeled(b.Name, b.ID), what, v, min, max)
 		}
 		if !(b.Width >= MinBuildingSizeM && b.Width <= MaxBuildingSizeM) {
 			return bad("width", b.Width, MinBuildingSizeM, MaxBuildingSizeM)
@@ -308,11 +339,11 @@ func validateRivers(rivers []River) error {
 	seen := make(map[string]bool, len(rivers))
 	for i := range rivers {
 		r := &rivers[i]
-		if err := ValidID("река", r.ID); err != nil {
+		if err := checkEntity("река", r.Name, r.ID); err != nil {
 			return err
 		}
 		if seen[r.ID] {
-			return fmt.Errorf("mapfmt: река %q объявлена дважды", r.ID)
+			return fmt.Errorf("mapfmt: река %q объявлена дважды", Labeled(r.Name, r.ID))
 		}
 		seen[r.ID] = true
 		// Один точки мало не по формальности: русло — ЛИНЕЙНЫЙ объект, и река
@@ -320,23 +351,23 @@ func validateRivers(rivers []River) error {
 		// значило бы выдавить круглую яму и назвать это рекой.
 		if len(r.Axis) < MinRiverAxisPoints {
 			return fmt.Errorf("mapfmt: река %q: точек оси %d, нужно не меньше %d — у русла есть направление",
-				r.ID, len(r.Axis), MinRiverAxisPoints)
+				Labeled(r.Name, r.ID), len(r.Axis), MinRiverAxisPoints)
 		}
 		if len(r.Axis) > MaxRiverAxisPoints {
-			return fmt.Errorf("mapfmt: река %q: точек оси больше %d", r.ID, MaxRiverAxisPoints)
+			return fmt.Errorf("mapfmt: река %q: точек оси больше %d", Labeled(r.Name, r.ID), MaxRiverAxisPoints)
 		}
 		for k, p := range r.Axis {
 			for _, c := range []struct {
 				name string
 				v    float64
 			}{{"x", p.X}, {"y", p.Y}, {"z", p.Z}} {
-				if err := checkFiniteFloat(fmt.Sprintf("река %s: точка %d: %s", r.ID, k, c.name), c.v); err != nil {
+				if err := checkFiniteFloat(fmt.Sprintf("река %s: точка %d: %s", Labeled(r.Name, r.ID), k, c.name), c.v); err != nil {
 					return err
 				}
 			}
 		}
 		bad := func(what string, v, min, max float64) error {
-			return fmt.Errorf("mapfmt: река %q: %s %g вне [%g, %g] м", r.ID, what, v, min, max)
+			return fmt.Errorf("mapfmt: река %q: %s %g вне [%g, %g] м", Labeled(r.Name, r.ID), what, v, min, max)
 		}
 		if !(r.HalfWidthM > 0 && r.HalfWidthM <= MaxRiverHalfWidthM) {
 			return bad("half_width", r.HalfWidthM, 0, MaxRiverHalfWidthM)

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 )
 
@@ -46,7 +47,7 @@ func TestSeedPassesValidateAndCompile(t *testing.T) {
 			purposes[n.ID+"."+p.ID] = p.Purpose
 		}
 	}
-	if purposes["N_WEST.P1"] != "map_boundary" || purposes["N_EAST.P1"] != "buffer_stop" {
+	if purposes[seedmap.BlankWest+".P1"] != "map_boundary" || purposes[seedmap.BlankEast+".P1"] != "buffer_stop" {
 		t.Fatalf("концы затравки без назначений: %+v", purposes)
 	}
 }

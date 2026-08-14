@@ -22,6 +22,10 @@ const (
 
 // Validate проверяет форму карты. Отказывает, не чинит.
 func Validate(m *Map) error {
+	// map_id — адрес региона, а не тождество элемента: по нему мир и клиент
+	// называют регион (worldgen.Bootstrap заводит регион строкой region :=
+	// m.MapID), и решение «UUIDv7 везде» его не трогает. Форма — прежний
+	// авторский идентификатор (ValidID ниже), а не UUIDv7.
 	if err := ValidID("map_id", m.MapID); err != nil {
 		return err
 	}
@@ -41,6 +45,14 @@ func Validate(m *Map) error {
 		return fmt.Errorf("mapfmt: элементов больше %d", MaxElements)
 	}
 
+	// Уникальность тождеств — в пределах всего региона, а не одного класса:
+	// UUID живёт в одном пространстве имён карты, и элемент второго класса с
+	// тем же UUID — отказ. Метки в проверке не участвуют: две одинаковые метки
+	// законны и безвредны (тождество у них разное).
+	if err := m.checkUniqueIDs(); err != nil {
+		return err
+	}
+
 	for id, a := range m.AllAlignments() {
 		if err := validateAlignments(id, a); err != nil {
 			return err
@@ -55,7 +67,7 @@ func Validate(m *Map) error {
 	if err := validateGeoreference(m.Georeference); err != nil {
 		return err
 	}
-	if err := m.validateAnchors(ports); err != nil {
+	if err := m.validateAnchors(ports, elements); err != nil {
 		return err
 	}
 	if err := m.validateAxisIntersections(); err != nil {
@@ -76,6 +88,67 @@ func Validate(m *Map) error {
 		return err
 	}
 	return m.validateProfile(DefaultProfile())
+}
+
+// checkUniqueIDs — одно пространство имён UUID на всю карту: узел и ребро не
+// могут делить один идентификатор. Повторы ВНУТРИ класса отвергаются раньше,
+// в своих сборщиках, с более точным текстом; здесь ловится сквозной повтор.
+func (m *Map) checkUniqueIDs() error {
+	seen := map[string]string{}
+	register := func(kind, name, id string) error {
+		if prev, dup := seen[id]; dup {
+			return fmt.Errorf("mapfmt: %s %s повторяет %s", kind, Labeled(name, id), prev)
+		}
+		seen[id] = Labeled(name, id)
+		return nil
+	}
+	for _, n := range m.Topology.Nodes {
+		if err := register("узел", n.Name, n.ID); err != nil {
+			return err
+		}
+	}
+	for _, t := range m.Topology.Turnouts {
+		if err := register("стрелка", t.Name, t.ID); err != nil {
+			return err
+		}
+	}
+	for _, e := range m.Topology.Edges {
+		if err := register("ребро", e.Name, e.ID); err != nil {
+			return err
+		}
+	}
+	for _, st := range m.Topology.Structures {
+		if err := register("сооружение", st.Name, st.ID); err != nil {
+			return err
+		}
+	}
+	if m.Construction != nil {
+		for _, tt := range m.Construction.Types {
+			if err := register("тип решётки", tt.Name, tt.ID); err != nil {
+				return err
+			}
+		}
+		for _, r := range m.Construction.Runs {
+			if err := register("run решётки", r.Name, r.ID); err != nil {
+				return err
+			}
+		}
+	}
+	// Objects — указатель: карта без блока objects законна, и разыменование
+	// здесь уронило бы её до штатной проверки формы.
+	if m.Objects != nil {
+		for _, b := range m.Objects.Buildings {
+			if err := register("постройка", b.Name, b.ID); err != nil {
+				return err
+			}
+		}
+		for _, r := range m.Objects.Rivers {
+			if err := register("река", r.Name, r.ID); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // validateGeoreference проверяет блок привязки по форме. Компилятор его не
@@ -217,7 +290,7 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 		return nil
 	}
 	for _, n := range m.Topology.Nodes {
-		if err := ValidID("узел", n.ID); err != nil {
+		if err := checkEntity("узел", n.Name, n.ID); err != nil {
 			return nil, err
 		}
 		for _, p := range n.Ports {
@@ -233,7 +306,7 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 	}
 	for _, t := range m.Topology.Turnouts {
 		if t.Hand != "left" && t.Hand != "right" {
-			return nil, fmt.Errorf("mapfmt: стрелка %s: рукость должна быть left или right, получено %q", t.ID, t.Hand)
+			return nil, fmt.Errorf("mapfmt: стрелка %s: рукость должна быть left или right, получено %q", Labeled(t.Name, t.ID), t.Hand)
 		}
 		// Марка крестовины НЕ проверяется намеренно: §8 объявляет её
 		// происхождением, а не ограничением, ради импорта реальных станций с
@@ -241,7 +314,7 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 		// из марки.
 		for _, p := range []string{t.Ports.Common, t.Ports.Straight, t.Ports.Diverging} {
 			if p == "" {
-				return nil, fmt.Errorf("mapfmt: стрелка %s: не заняты все три порта", t.ID)
+				return nil, fmt.Errorf("mapfmt: стрелка %s: не заняты все три порта", Labeled(t.Name, t.ID))
 			}
 			if err := add(t.ID+"."+p, Port{ID: p}); err != nil {
 				return nil, err
@@ -254,18 +327,18 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 func (m *Map) collectElements() (map[string]bool, error) {
 	els := map[string]bool{}
 	for _, e := range m.Topology.Edges {
-		if err := ValidID("ребро", e.ID); err != nil {
+		if err := checkEntity("ребро", e.Name, e.ID); err != nil {
 			return nil, err
 		}
-		if err := validKind("ребро", e.ID, e.Kind); err != nil {
+		if err := validKind("ребро", Labeled(e.Name, e.ID), e.Kind); err != nil {
 			return nil, err
 		}
 		if els[e.ID] {
-			return nil, fmt.Errorf("mapfmt: ребро %q объявлено дважды", e.ID)
+			return nil, fmt.Errorf("mapfmt: ребро %q объявлено дважды", Labeled(e.Name, e.ID))
 		}
 		els[e.ID] = true
 		if _, ok := m.Geometry.Edges[e.ID]; !ok {
-			return nil, fmt.Errorf("mapfmt: у ребра %s нет геометрии", e.ID)
+			return nil, fmt.Errorf("mapfmt: у ребра %s нет геометрии", Labeled(e.Name, e.ID))
 		}
 	}
 	// Устройства: идентификатор проверяется тем же правилом, что у ребра, и
@@ -282,20 +355,20 @@ func (m *Map) collectElements() (map[string]bool, error) {
 	// Недостижимость дефекта до этой проверки разобрана в duplicate_test.go.
 	devs := map[string]bool{}
 	for _, t := range m.Topology.Turnouts {
-		if err := ValidID("стрелка", t.ID); err != nil {
+		if err := checkEntity("стрелка", t.Name, t.ID); err != nil {
 			return nil, err
 		}
 		// Вид устройства проверяется наравне с видом ребра: проходы стрелки —
 		// такие же адресуемые элементы сети, и берут они его отсюда.
-		if err := validKind("стрелка", t.ID, t.Kind); err != nil {
+		if err := validKind("стрелка", Labeled(t.Name, t.ID), t.Kind); err != nil {
 			return nil, err
 		}
 		if devs[t.ID] {
-			return nil, fmt.Errorf("mapfmt: стрелка %q объявлена дважды", t.ID)
+			return nil, fmt.Errorf("mapfmt: стрелка %q объявлена дважды", Labeled(t.Name, t.ID))
 		}
 		devs[t.ID] = true
 		if _, ok := m.Geometry.Turnouts[t.ID]; !ok {
-			return nil, fmt.Errorf("mapfmt: у стрелки %s нет геометрии", t.ID)
+			return nil, fmt.Errorf("mapfmt: у стрелки %s нет геометрии", Labeled(t.Name, t.ID))
 		}
 		// Проход не может столкнуться с ребром: разделитель в авторском
 		// идентификаторе запрещён, поэтому ребро с именем SW:straight до сюда
@@ -400,11 +473,11 @@ func (m *Map) validateStructures(elements map[string]bool) error {
 	all := m.AllAlignments()
 	seen := map[string]bool{}
 	for _, st := range m.Topology.Structures {
-		if err := ValidID("сооружение", st.ID); err != nil {
+		if err := checkEntity("сооружение", st.Name, st.ID); err != nil {
 			return err
 		}
 		if seen[st.ID] {
-			return fmt.Errorf("mapfmt: сооружение %q объявлено дважды", st.ID)
+			return fmt.Errorf("mapfmt: сооружение %q объявлено дважды", Labeled(st.Name, st.ID))
 		}
 		seen[st.ID] = true
 		switch st.Kind {
@@ -422,28 +495,28 @@ func (m *Map) validateStructures(elements map[string]bool) error {
 			// если он землю не трогает, и в нижнюю, если несёт путь. Ветки
 			// различаются не оформлением, а тем, кто их читает.
 		default:
-			return fmt.Errorf("mapfmt: сооружение %s: неизвестный kind %q", st.ID, st.Kind)
+			return fmt.Errorf("mapfmt: сооружение %s: неизвестный kind %q", Labeled(st.Name, st.ID), st.Kind)
 		}
 		// Форма протяжённости — непустота, порядок концов, допустимость
 		// направления — проверяется один раз на все слои (пакет netloc).
 		if err := st.Span.Structural(); err != nil {
-			return fmt.Errorf("mapfmt: сооружение %s: %w", st.ID, err)
+			return fmt.Errorf("mapfmt: сооружение %s: %w", Labeled(st.Name, st.ID), err)
 		}
 		for _, iv := range st.Span {
 			if !elements[iv.Element] {
-				return fmt.Errorf("mapfmt: сооружение %s ссылается на несуществующий элемент %s", st.ID, iv.Element)
+				return fmt.Errorf("mapfmt: сооружение %s ссылается на несуществующий элемент %s", Labeled(st.Name, st.ID), iv.Element)
 			}
 			u, err := horizontalLengthU(all[iv.Element])
 			if err != nil {
-				return fmt.Errorf("mapfmt: сооружение %s: длина элемента %s: %w", st.ID, iv.Element, err)
+				return fmt.Errorf("mapfmt: сооружение %s: длина элемента %s: %w", Labeled(st.Name, st.ID), iv.Element, err)
 			}
 			from, err := units.MetersToDistance(iv.From)
 			if err != nil {
-				return fmt.Errorf("mapfmt: сооружение %s: начало интервала: %w", st.ID, err)
+				return fmt.Errorf("mapfmt: сооружение %s: начало интервала: %w", Labeled(st.Name, st.ID), err)
 			}
 			to, err := units.MetersToDistance(iv.To)
 			if err != nil {
-				return fmt.Errorf("mapfmt: сооружение %s: конец интервала: %w", st.ID, err)
+				return fmt.Errorf("mapfmt: сооружение %s: конец интервала: %w", Labeled(st.Name, st.ID), err)
 			}
 			// Границы — в целых микрометрах, а не в метрах-float: округление к
 			// ближайшему микрометру есть правило формата (спека §3), и
@@ -451,7 +524,7 @@ func (m *Map) validateStructures(elements map[string]bool) error {
 			// конце элемента. Порядок концов уже проверен выше.
 			if from < 0 || to > u {
 				return fmt.Errorf("mapfmt: сооружение %s: интервал [%v, %v] вне элемента %s длиной %s",
-					st.ID, iv.From, iv.To, iv.Element, u)
+					Labeled(st.Name, st.ID), iv.From, iv.To, iv.Element, u)
 			}
 		}
 		if st.Kind == "buffer_stop" {
@@ -576,11 +649,28 @@ func horizontalLengthU(a Alignments) (units.Distance, error) {
 // validateAnchors проверяет, что якоря существуют и указывают на существующие
 // порты.
 //
+// Требование якоря ОБУСЛОВЛЕНО наличием сети, а не безусловно: карта есть
+// рецепт ПРИРОДЫ (спека world-layers-design §1) — путь живёт в партии, и по
+// решению владельца «железная дорога никакого отношения к карте не имеет».
+// Требование «хотя бы один якорь» было верным ровно до тех пор, пока путь жил
+// в карте: якорь привязывал сеть к местности. После отвязки оно превратилось
+// бы в утверждение «природы без дороги не бывает», а мир без единого метра
+// пути обязан существовать. Поэтому карта без элементов пути законна БЕЗ
+// якорей — но не С якорями: якорь в никуда есть ошибка автора, и молча его
+// проигнорировать значило бы принять неверно написанную карту, поэтому отказ
+// называет число объявленных якорей.
+//
 // «Ровно один якорь на связную компоненту» здесь НЕ проверяется: валидатор не
 // строит компонент связности. Инвариант держит компилятор (track.Propagate),
 // который отвергает и компоненту без якоря, и два якоря в одной. Комментарий
 // первой редакции обещал проверку, которой не было, — исправлено на правду.
-func (m *Map) validateAnchors(ports map[string]Port) error {
+func (m *Map) validateAnchors(ports map[string]Port, elements map[string]bool) error {
+	if len(elements) == 0 {
+		if len(m.Anchors) > 0 {
+			return fmt.Errorf("mapfmt: на карте нет ни одного элемента пути, но объявлено якорей: %d", len(m.Anchors))
+		}
+		return nil
+	}
 	if len(m.Anchors) == 0 {
 		return fmt.Errorf("mapfmt: нет ни одного якоря")
 	}

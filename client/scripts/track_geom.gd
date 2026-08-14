@@ -66,6 +66,8 @@ class Prim:
 ## Результат разбора одного элемента.
 class Element:
 	var id: String = ""
+	## Читаемая метка элемента из провода: игроку показывают её, а не UUID.
+	var name: String = ""
 	var kind: String = ""
 	var points: Array[AxisPoint] = []
 	## Примитивы рецепта. Хранятся, а не выбрасываются после тесселяции: поза в
@@ -193,6 +195,7 @@ class Element:
 static func tessellate_element(el: Dictionary, max_seg_m: float, max_ang_rad: float) -> Element:
 	var out := Element.new()
 	out.id = String(el.get("id", ""))
+	out.name = String(el.get("name", ""))
 	out.kind = String(el.get("kind", ""))
 
 	var start: Dictionary = el.get("start", {}) as Dictionary

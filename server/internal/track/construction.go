@@ -38,6 +38,7 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 		t := byID[id]
 		rg.TrackTypes = append(rg.TrackTypes, RenderTrackType{
 			ID:    t.ID,
+			Name:  t.Name,
 			Gauge: t.Gauge,
 			Rail:  RenderRail{Height: t.Rail.Height, HeadWidth: t.Rail.HeadWidth},
 			Sleeper: RenderSleeper{
@@ -74,10 +75,11 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 			typ = c.DefaultType
 		}
 		if _, ok := byID[typ]; !ok {
-			return fmt.Errorf("track: run %s: тип %q не разрешается", r.ID, typ)
+			return fmt.Errorf("track: run %s: тип %q не разрешается", mapfmt.Labeled(r.Name, r.ID), typ)
 		}
 		rr := RenderRun{
 			ID:         r.ID,
+			Name:       r.Name,
 			Type:       typ,
 			Coordinate: r.Coordinate,
 			Phase:      r.Phase,

@@ -50,7 +50,9 @@ const TESS_MAX_ANG_RAD := 0.05
 ## — его свойство (Driver.EYE_H = 1.66 над подошвой), а не свойство камеры. Две
 ## копии одного числа разошлись бы при первой же правке роста.
 
-const GRASS_MIN_CLOSURE := 4
+## Порог сомкнутости, ниже которого трава не появляется вовсе, перенесён в
+## grass_field.gd (GrassField.GRASS_MIN_CLOSURE) вместе со всей травой — она
+## живёт поколениями, и растительность пользуется числом поля.
 
 ## ТРАВА САЖАЕТСЯ ВОКРУГ ТОЧКИ ВЗГЛЯДА, А НЕ ПО ВСЕЙ ЗАГРУЖЕННОЙ ЗЕМЛЕ.
 ##
@@ -95,33 +97,10 @@ const GRASS_MIN_CLOSURE := 4
 ## около 7 пучков на м² при сомкнутости 11/15 — против спайковых 20. Не «в
 ## тридцать раз меньше», как читается из среднего по всему кругу (0.6 на м²), а
 ## втрое; среднее по кругу мешает ближнее кольцо с дальними и меряет не то.
-const GRASS_FAR := 200.0        # м — радиус круга посадки, всегда один
-const GRASS_BASE := 0.22        # м — базовая ячейка посадки: 20 ячеек на м²
-## [радиус кольца, ШАГ по базовой сетке целым числом, доля занятых ячеек].
-## Первые четыре строки спайковой таблицы; пятая (420 м) отпадает вместе с его
-## радиусом. Плотность падает вчетверо на кольцо — шаг k режет её как k².
-const GRASS_RINGS := [
-	[45.0, 1, 1.00], [90.0, 2, 0.90], [160.0, 3, 0.80], [GRASS_FAR, 5, 0.70],
-]
-## Сторона чанка посадки. Единица постройки, единица кэша и единица отсечения по
-## пирамиде разом: у одного большого MultiMesh поэкземплярного отсечения НЕТ, и
-## трава уходила бы в отрисовку целиком даже вблизи.
-const GRASS_CHUNK := 32.0
-## Бюджет на кадр. Плотный чанк — это около 20 тысяч ячеек, то есть под сотню
-## миллисекунд; очередь непрерываемых заданий дала бы те же рывки, только по
-## сотне миллисекунд каждый.
-const GRASS_BUDGET_US := 4000
-## Во сколько раз дальше круга держим уже построенное: без тёплой полосы шаг
-## назад заставлял бы строить только что выброшенное.
-const GRASS_WARM := 1.30
-## Насколько уедет камера, прежде чем ПЛАН пересчитывается.
-##
-## Шесть метров, а не прежние двадцать пять, и порог перестал быть лечением.
-## Двадцать пять стояли затем, что пересадка шла ЦЕЛИКОМ и синхронно (замер:
-## 281 мс на круг), — то есть порог не убирал рывок, а лишь делал его реже.
-## Теперь план — это перебор трёхсот чанков и две сортировки, а постройка идёт
-## понемногу каждый кадр; частая сверка плана дешевле, чем редкая и крупная.
-const GRASS_REPLAN := 6.0
+## Константы круга травы (GRASS_FAR, GRASS_BASE, GRASS_RINGS, GRASS_CHUNK,
+## GRASS_BUDGET_US, GRASS_WARM, GRASS_REPLAN) перенесены в grass_field.gd:
+## перестройка версии строит НОВОЕ поколение травы в стороне, и круг стал
+## свойством поколения, а не мира.
 ## ДОЛЯ ЗАНЯТЫХ МЕСТ В САМОЙ ГУСТОЙ ЗАРОСЛИ. Число спайково по СМЫСЛУ, но
 ## пересчитано под нашу сетку, и это замер, а не подгонка: у спайка BUSH_FIELD
 ## 0.34 стояло на сетке посадки 5.5 м, то есть 0.34 / 30.25 м² = 0.0112 куста на
@@ -172,10 +151,11 @@ const FROG_HALF_W_M := 0.07
 ## старом имени и писал в HUD «получено и НЕ рисуется: trackside 0» — враньё
 ## дважды. Теперь расхождение имён — ОТКАЗ на экране, а не тихий ноль:
 ## пропавшее известное поле кричит, а незнакомое новое называется отдельно.
-const MANIFEST_FIELDS := ["region", "epoch", "revision", "network_model_hash", "network_hash", "chunks"]
+const MANIFEST_FIELDS := ["region", "epoch", "revision", "network_model_hash", "network_hash",
+	"chunks", "projection_head"]
 const NETWORK_FIELDS := ["region", "revision", "elements", "structures", "track_types",
 	"construction_runs", "features", "placement_algorithm"]
-const ELEMENT_FIELDS := ["id", "kind", "start", "primitives", "profile", "role"]
+const ELEMENT_FIELDS := ["id", "name", "kind", "start", "primitives", "profile", "role"]
 
 var server_url := "http://127.0.0.1:8080"
 var region := "ST_A"
@@ -266,23 +246,10 @@ var report_lines: Array[String] = []
 ## запросом за тем, что уже в руках.
 var _ground: Array[Dictionary] = []
 var _rule: ChunkRule = null
-var _grass_root: Node3D = null
-var _grass_center := Vector2.INF
-var _grass_meshes: Array[ArrayMesh] = []
-var _grass_mats: Array[Material] = []
-var _grass_plants := 0
-## Чанки посадки. Ключ ТРЁХМЕРНЫЙ — (чанк по x, чанк по z, УРОВЕНЬ КОЛЬЦА): один
-## и тот же квадрат земли может иметь готовыми несколько подробностей разом, и
-## показывается ближайшая к желаемой (_grass_show). Иначе вновь вошедший чанк
-## стоял бы голой землёй, пока строится.
-var _grass_chunks := {}          # Vector3i -> Node3D
-var _grass_want := {}            # Vector2i -> желаемый уровень
-var _grass_queue: Array[Vector3i] = []
-var _grass_queued := {}          # то же множеством, против дублей в очереди
-var _grass_job := {}             # текущее ПРОДОЛЖАЕМОЕ задание
-## Ярусы уровня 0 по адресу чанка: посадка спрашивает покров точкой мира, и
-## линейный обход двадцати девяти чанков на каждую ячейку был бы обходом впустую.
-var _cover_index := {}           # Vector2i(cx, cz) -> Dictionary яруса
+## Живое поколение травы (sqym.7). Пока перестройка набора идёт, рядом живёт
+## СТРОЯЩЕЕСЯ поколение (в VersionRebuild), и видимым оно становится одним
+## переключением — старый круг снят, новый поставлен, полукруга не бывает.
+var _grass = null              # GrassField
 ## Ячейки, накрытые подошвой балластной призмы: там травы нет.
 var _ballast_mask := {}
 ## Край мира: докуда смотрящему можно, чтобы весь его кадр остался внутри
@@ -308,6 +275,43 @@ var _stock_types := {}      # id паспорта -> Dictionary
 var _stock_assets := {}     # имя вида   -> Dictionary записи каталога
 var _terrain_node: Node3D = null
 var _terrain_solid: Array[MeshInstance3D] = []
+
+## ВЕРСИЯ МИРА (sqym.6). Клиент рисует ОДНУ версию целиком и переключается на
+## новую только по готовности её набора: сеть + патчи всех чанков в памяти.
+## _fixed_version — ЗАФИКСИРОВАННАЯ версия: под ней спрашиваются ВСЕ новые
+## чанки, и смешивать набор из двух версий нельзя (шов между соседями
+## разошёлся бы). _pending — набор новой версии, копящийся в стороне.
+var _fixed_version: int = 0
+var _match_id := ""
+var _pending = null              # VersionSet: накапливаемая версия или null
+var _pending_elements: Array = [] # элементы сети накапливаемой версии
+## Чанки В ПАМЯТИ: ключ адреса -> {level, cx, cz, h, base_z, cover, forest} и
+## узлы показа по ключу -> [{mi, q, begin}]. Держатся ПОСЛЕ загрузки: набор
+## новой версии догружается именно для них, и переключение пересобирает меши
+## на месте, не трогая структуру узлов.
+var _tiles := {}
+var _tile_nodes := {}
+## Опрос головы проекций. Манифест спрашивается периодически, а не живёт
+## событием: серверного канала «мир сменил версию» нет, и единственный способ
+## заметить — спросить.
+var _head_poll_s := 5.0
+var _head_poll_timer := 0.0
+var _version_switches := 0
+## Перестройка набора под кадровым бюджетом (sqym.7): непусто — идёт. Набор
+## собран (sqym.6) и готовится в стороне: меши, коллизии, растительность,
+## трава. Видимым он становится одним commit(), и пока он не готов, на экране
+## старая версия целиком.
+var _rebuild = null            # VersionRebuild
+var _rebuild_track_stats := {} # черновые stats пути нового набора
+
+## БЮДЖЕТ ПЕРЕСТРОЙКИ НАБОРА НА КАДР (sqym.7). Число, а не намерение: выведено
+## из цели 60 кадров/с — кадр 16.7 мс, из них живая трава держит свои 4 мс, а
+## перестройка забирает половину кадра (8 мс) и обязана в неё уложиться.
+## Превышение не прячется: грубое задание попадает в version_rebuild_over_budget.
+const REBUILD_BUDGET_US := 8000
+const VersionSetScript := preload("res://scripts/version_set.gd")
+const VersionRebuildScript := preload("res://scripts/version_rebuild.gd")
+const GrassFieldScript := preload("res://scripts/grass_field.gd")
 
 
 ## configure — всё, что мир получает СНАРУЖИ, одним вызовом и до входа в дерево.
@@ -749,6 +753,20 @@ func _load_world() -> void:
 	stats["network_model_hash"] = String(man.get("network_model_hash", "")).substr(0, 12)
 	stats["network_hash"] = String(man.get("network_hash", "")).substr(0, 12)
 
+	# ГОЛОВА ПРОЕКЦИЙ — версия мира, под которой клиент ЗАФИКСИРОВАЛСЯ (sqym.6).
+	# Четыре поля отдельные нарочно (regions.go): версия мира не растёт от
+	# журнала, и видеть их по отдельности — часть договора.
+	var head: Dictionary = man.get("projection_head", {}) as Dictionary
+	_fixed_version = int(head.get("world_version", 0))
+	if _fixed_version <= 0:
+		_fail("манифест не назвал версию мира (projection_head.world_version) — версионные адреса не собрать")
+		_refresh_ui()
+		return
+	stats["world_version"] = _fixed_version
+	stats["source_journal_seq"] = int(head.get("source_journal_seq", 0))
+	stats["network_version"] = int(head.get("network_version", 0))
+	stats["region_recipe_hash"] = String(head.get("region_recipe_hash", "")).substr(0, 12)
+
 	var rule := ChunkRule.from_manifest(man.get("chunks", {}) as Dictionary)
 	if not rule.valid():
 		# Отказ НАЗЫВАЕТ пропавшее поле. Правило выводится из манифеста целиком,
@@ -789,10 +807,25 @@ func _load_world() -> void:
 			+ "(уровней %d) — мир кончается там, где кончается засеянное, а не там, где просили") % [
 			float(view["requested_m"]), rule.ceiling_reach_m(), rule.max_level + 1]
 
-	# 2. Сеть региона. Путь нужен ДО рельефа: уровень чанка выбирается по
-	#    расстоянию до оси, и без оси спрашивать нечего.
-	var revision := int(man.get("revision", -1))
-	var net_res: WorldApi.Network = await api.network(region, revision)
+	# 1а. МАТЧ — раньше сети: версионные адреса мира идут через /matches/{m}/,
+	#     и имя матча клиент узнаёт из живого состояния партии, а не из
+	#     манифеста (матч->регион заводит серверная композиция, main.go).
+	var live_res: WorldApi.Live = await api.live(region)
+	if live_res.failed():
+		_fail("живое состояние: %s" % live_res.reason)
+		_refresh_ui()
+		return
+	_match_id = String(live_res.data.get("match", ""))
+	if _match_id == "":
+		_fail("живое состояние не назвало матч — версионные адреса мира не собрать")
+		_refresh_ui()
+		return
+	stats["match"] = _match_id
+
+	# 2. Сеть региона — ПОД ЗАФИКСИРОВАННОЙ ВЕРСИЕЙ, а не по ревизии карты:
+	#    версия называет МИР целиком, и сеть с землёй обязаны быть одной
+	#    версии — иначе новый путь ляжет на старую землю (окно спеки §6.3).
+	var net_res: WorldApi.Network = await api.world_network(_match_id, _fixed_version)
 	if net_res.failed():
 		_fail("сеть региона: %s" % net_res.reason)
 		_refresh_ui()
@@ -817,7 +850,7 @@ func _load_world() -> void:
 	# поверхности катания, отметку которой несёт сам элемент. Ждать рельеф,
 	# чтобы показать локомотив, значило бы поставить показ в зависимость от
 	# двухсот запросов чанков.
-	await _load_rolling_stock(elements)
+	await _load_rolling_stock(elements, live_res)
 
 	# 3. Рельеф. Адреса чанков клиент выводит САМ, из правила манифеста и
 	#    собственной оси.
@@ -873,7 +906,7 @@ func _load_world() -> void:
 ## законен и рисуется целиком. Причина уезжает в отказы на экране, а не в лог,
 ## потому что записанная в проекте грабля звучит так: отказ обработан штатно, в
 ## логе пусто, а на экране пусто тоже.
-func _load_rolling_stock(elements: Array[TrackGeom.Element]) -> void:
+func _load_rolling_stock(elements: Array[TrackGeom.Element], live_res: WorldApi.Live) -> void:
 	var set_res: WorldApi.Content = await api.content()
 	if set_res.failed():
 		_fail("набор контента: %s" % set_res.reason)
@@ -887,10 +920,9 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element]) -> void:
 	stats["stock_types"] = _stock_types.size()
 	stats["stock_assets"] = _stock_assets.size()
 
-	var live_res: WorldApi.Live = await api.live(region)
-	if live_res.failed():
-		_fail("живое состояние: %s" % live_res.reason)
-		return
+	# Живое состояние УЖЕ приехало: матч нужен раньше сети (версионные адреса
+	# мира идут через /matches/{m}/), и спрашивать его второй раз — запрос за
+	# тем, что в руках. Здесь живому состоянию остаётся постановка коробок.
 	stats["match"] = String(live_res.data.get("match", ""))
 
 	_stock_root = Node3D.new()
@@ -1063,11 +1095,19 @@ func _apply_track_types(network: Dictionary, elements: Array[TrackGeom.Element])
 ## крестовин. Вертикаль отсчитывается ВНИЗ от головки рельса — причина в шапке
 ## track_view.gd, и
 ## она же написана на экране.
-func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> void:
+func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
+		parent: Node3D = null, st: Dictionary = {}) -> void:
 	var node := Node3D.new()
 	node.name = "Track"
-	world.add_child(node)
+	# ОТСОЕДИНЁННЫЙ родитель — перестройка версии: путь нового
+	# набора строится в стороне, видимым становится одним переключением.
+	var host := parent if parent != null else world
+	host.add_child(node)
 
+	# Числа пути пишутся в st: перестройка копит их в черновик, и в живые
+	# stats они переезжают на commit().
+	if st.is_empty():
+		st = stats
 	var by_id := TrackBuild.elements_by_id(elements)
 	var spans := TrackBuild.covered_spans(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
 
@@ -1113,9 +1153,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 		if mi.mesh == null:
 			continue
 		ballast.add_child(mi)
-	stats["ballast_prisms_drawn"] = prisms
-	stats["ballast_ribbons_drawn"] = ribbons
-	stats["ballast_toe_m"] = toe
+	st["ballast_prisms_drawn"] = prisms
+	st["ballast_ribbons_drawn"] = ribbons
+	st["ballast_toe_m"] = toe
 
 	# 2. Платформа. Полоса от offset до offset + width со стороны side на
 	#    протяжении spans — все четыре числа присланы, ни одного своего.
@@ -1142,13 +1182,13 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 			continue
 		plat_node.add_child(mi)
 		plats_drawn += 1
-		var caption := "%s  %s  %.2f…%.2f м от оси" % [p.id, p.side, p.offset_m, p.offset_m + p.width_m]
+		var caption := "%s  %s  %.2f…%.2f м от оси" % [p.label, p.side, p.offset_m, p.offset_m + p.width_m]
 		if p.has_slab():
 			caption += "  +%.2f м над УГР" % p.height_m
 		plat_node.add_child(_label(p.far[p.far.size() / 2], caption, Color(0.98, 0.98, 0.92)))
-	stats["platforms_drawn"] = plats_drawn
-	stats["platform_slabs_drawn"] = slabs
-	stats["platforms_skipped"] = plat_res["skipped"]
+	st["platforms_drawn"] = plats_drawn
+	st["platform_slabs_drawn"] = slabs
+	st["platforms_skipped"] = plat_res["skipped"]
 
 	# 2б. Упоры. Габарит присланный: height над поверхностью катания, width
 	#     поперёк. До 2026-08-12 их не отдавали вовсе, и снесённый спайк выводил
@@ -1161,8 +1201,8 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	if bs_mi.mesh != null:
 		bs_mi.material_override = TrackView.solid_material(Color(0.72, 0.16, 0.14))
 		node.add_child(bs_mi)
-	stats["buffer_stops_drawn"] = stops.size()
-	stats["buffer_stops_skipped"] = bs_res["skipped"]
+	st["buffer_stops_drawn"] = stops.size()
+	st["buffer_stops_skipped"] = bs_res["skipped"]
 
 	# 3. Шпалы. Раскладка целиком из рецепта: phase + n·pitch по полуоткрытому
 	#    правилу, поза аналитическая. Коробкой, если прислана sleeper.height, и
@@ -1175,9 +1215,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	if sleeper_mi.mesh != null:
 		sleeper_mi.material_override = TrackView.sleeper_material()
 		node.add_child(sleeper_mi)
-	stats["sleepers_drawn"] = sleepers.size()
-	stats["sleeper_runs"] = sl["runs"]
-	stats["sleepers_skipped"] = sl["skipped"]
+	st["sleepers_drawn"] = sleepers.size()
+	st["sleeper_runs"] = sl["runs"]
+	st["sleepers_skipped"] = sl["skipped"]
 
 	# 4. Рельсы. Телом — объявленным упрощением (прямоугольник head_width ×
 	#    rail.height, внутренней гранью на ±gauge/2), если ширина головки
@@ -1223,10 +1263,10 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 		if thread_mi.mesh != null:
 			thread_mi.material_override = thread_mat
 			rails_node.add_child(thread_mi)
-	stats["rail_bodies_drawn"] = rail_bodies
-	stats["railheads_drawn"] = railheads
-	stats["rail_threads_drawn"] = threads.size()
-	stats["rail_spans_drawn"] = spans.size()
+	st["rail_bodies_drawn"] = rail_bodies
+	st["railheads_drawn"] = railheads
+	st["rail_threads_drawn"] = threads.size()
+	st["rail_spans_drawn"] = spans.size()
 
 	# 5. Элементы, не покрытые НИ ОДНИМ прогоном, — нитью. Ни колеи, ни шпал, ни
 	#    ширины у них нет, и взять их у соседа запрещено: «размер неизвестен»
@@ -1247,7 +1287,7 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 		mi.material_override = line_mat
 		bare_node.add_child(mi)
 		bare_drawn += 1
-	stats["bare_lines_drawn"] = bare_drawn
+	st["bare_lines_drawn"] = bare_drawn
 
 	# 6. Крестовины — галочкой по обеим присланным касательным.
 	var fr := TrackBuild.frogs(network, by_id)
@@ -1258,8 +1298,8 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 	if frog_mi.mesh != null:
 		frog_mi.material_override = TrackView.flat_material(Color(0.96, 0.28, 0.28), TrackView.PRIO_FROG, true)
 		node.add_child(frog_mi)
-	stats["frogs_drawn"] = frogs.size()
-	stats["frogs_skipped"] = fr["skipped"]
+	st["frogs_drawn"] = frogs.size()
+	st["frogs_skipped"] = fr["skipped"]
 
 	# 7. Стрелка — ОДНО устройство, а не две независимые ветви. Подпись несёт то,
 	#    что прислано ролью: марку и рукость. Выводить сторону из геометрии не
@@ -1280,9 +1320,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary) -> voi
 			"тип есть" if d.typed else "не покрыты ни одним construction_run, оттого без колеи и решётки"])
 		if frog_by_owner.has(d.id):
 			var f: TrackBuild.Frog = frog_by_owner[d.id]
-			dev_node.add_child(_label(f.point, "%s  %s  %s" % [d.id, mark, hand], Color(1.0, 0.68, 0.68)))
-	stats["devices"] = devices.size()
-	stats["device_lines"] = dev_lines
+			dev_node.add_child(_label(f.point, "%s  %s  %s" % [d.label, mark, hand], Color(1.0, 0.68, 0.68)))
+	st["devices"] = devices.size()
+	st["device_lines"] = dev_lines
 
 
 ## _label — подпись в мире.
@@ -1392,6 +1432,7 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	var requested := 0
 	var got := 0
 	var empty := 0
+	var clean := 0
 	var decode_usec := 0
 	var rule_usec := 0
 	var by_level := {}
@@ -1425,19 +1466,26 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		# Прежде здесь стояли три запроса подряд, перемешанные со сборкой
 		# геометрии, — оттого порядок хождения в сеть был размазан по этому файлу и
 		# распараллелить его было нельзя, не трогая рендер (ClearAhead-s42).
-		var got_tiles: Array = await api.terrain(region, addresses)
+		# ВЕСЬ УРОВЕНЬ ОДНИМ ВОПРОСОМ, и в цикле ниже нет ни одного похода в сеть
+		# (тот же порядок и та же цена, что у api.terrain; ClearAhead-s42).
+		# ПАТЧИ СПРАШИВАЮТСЯ У ЗАФИКСИРОВАННОЙ ВЕРСИИ, а не у последней известной:
+		# смешать набор из двух версий — шов между соседними чанками (sqym.6).
+		var got_tiles: Array = await api.world_terrain(_match_id, _fixed_version, region, addresses)
 		for t_raw in got_tiles:
 			var t: WorldApi.Tile = t_raw
 			var c: Dictionary = t.address
-			var heights: WorldApi.Heights = t.heights
+			var heights = t.heights
 			if heights.failed():
 				_fail("чанк %d/%d/%d: %s" % [c["level"], c["cx"], c["cz"], heights.reason])
 				continue
-			if heights.no_chunk():
-				# Пустота внутри охвата законна и НЕ является дырой: подробной
-				# клетки здесь нет, значит порог у накрывающей её четверти не
-				# ставится, и место остаётся за грубым уровнем.
+			if heights.no_work():
+				# «ЧИСТАЯ БАЗА» — земляных работ на этой версии в клетке нет (204,
+				# отличим от 404 нарочно). Версионный адрес не порождает по
+				# требованию: клетки вне материализованного мира здесь нет, порог у
+				# накрывающей её четверти не ставится, и место остаётся за грубым
+				# уровнем. Это НЕ ошибка: 204 не переспрашивается.
 				empty += 1
+				clean += 1
 				continue
 
 			var dec := TerrainMesh.decode(heights.blob, int(c["level"]), int(c["cx"]), int(c["cz"]), rule)
@@ -1547,7 +1595,7 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		var level := int(t["level"])
 		var cx := int(t["cx"])
 		var cz := int(t["cz"])
-		var own: Array[MeshInstance3D] = []
+		var own: Array = []
 		# Уровень 0 не режется на четверти: детей у него нет, порог ему ставить не
 		# на что, и четыре узла вместо одного стоили бы лишних вершин ни за что.
 		var quads: Array = [-1] if level == 0 else [0, 1, 2, 3]
@@ -1604,7 +1652,10 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 			# порога.
 			mi.visibility_range_fade_mode = GeometryInstance3D.VISIBILITY_RANGE_FADE_DISABLED
 			terrain.add_child(mi)
-			own.append(mi)
+			# Узел помнится ВМЕСТЕ С МЕТАДАННЫМИ ПОКАЗА (q — какая четверть,
+			# begin — порог): переключение версии пересобирает меш на месте, и
+			# знать, чем этот узел строился, оно должно без перебора имён.
+			own.append({"mi": mi, "q": q, "begin": begin})
 			if q >= 0:
 				slot[ChunkRule.key_of(level - 1, cx * 2 + (q & 1), cz * 2 + ((q >> 1) & 1))] = mi
 			# ЯКОРЬ — узел без порога: его показывают, когда камера рядом, и
@@ -1634,8 +1685,8 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 		var parent: MeshInstance3D = slot.get(key, null)
 		if parent == null:
 			continue
-		for mi_raw in (nodes[key] as Array):
-			var mi: MeshInstance3D = mi_raw
+		for n_raw in (nodes[key] as Array):
+			var mi: MeshInstance3D = n_raw["mi"] as MeshInstance3D
 			mi.visibility_parent = mi.get_path_to(parent)
 			linked += 1
 
@@ -1686,6 +1737,238 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	stats["terrain_radius_m"] = rule.view_reach_m()
 	stats["terrain_radius_stored_m"] = rule.ceiling_reach_m()
 	stats["terrain_box"] = terrain_box
+	stats["patches_clean"] = clean
+	# ЧАНКИ В ПАМЯТИ и их узлы держатся ПОСЛЕ загрузки: набор новой версии
+	# догружается именно для них, и переключение пересобирает меши на месте.
+	_tiles = tiles
+	_tile_nodes = nodes
+
+## --- НАКОПЛЕНИЕ ВЕРСИИ И АТОМАРНОЕ ПЕРЕКЛЮЧЕНИЕ (sqym.6) --------------------
+##
+## Мир переключается между версиями ЦЕЛИКОМ или никак. Новая голова проекций
+## замечается опросом манифеста; набор новой версии (сеть + патчи всех чанков
+## в памяти) копится в стороне, и пока он не готов, видна старая версия —
+## целиком. Ответы, опоздавшие к уже уехавшему набору, отбрасываются (патчи
+## разных версий не коммутативны, спека §5.1).
+
+## _head_poll — опрос головы проекций по таймеру.
+##
+## Манифест — единственный канал, по которому клиент узнаёт о новой версии:
+## серверного события нет, и спросить дешевле, чем ждать. Опрос НЕ накапливает
+## пока идёт накопление: одна версия за раз, следующая начнётся после неё.
+func _head_poll(delta: float) -> void:
+	if _fixed_version <= 0 or _pending != null:
+		return
+	_head_poll_timer += delta
+	if _head_poll_timer < _head_poll_s:
+		return
+	_head_poll_timer = 0.0
+	_check_head()
+
+
+func _check_head() -> void:
+	var man_res: WorldApi.Manifest = await api.manifest(region)
+	if man_res.failed():
+		return  # отказ ОПРОСА — не отказ мира; следующий опрос повторит
+	var head: Dictionary = man_res.data.get("projection_head", {}) as Dictionary
+	var v := int(head.get("world_version", 0))
+	if v <= _fixed_version:
+		return
+	_start_accumulation(v)
+
+
+## _start_accumulation — начать копить набор версии v ДЛЯ ЧАНКОВ В ПАМЯТИ.
+##
+## Адреса фиксируются на момент старта: набор отвечает ровно за те клетки,
+## которые уже нарисованы, — их и догружает переключение.
+func _start_accumulation(v: int) -> void:
+	var keys: Array = _tiles.keys()
+	if keys.is_empty():
+		return
+	_pending = VersionSetScript.new()
+	_pending.begin(v, keys)
+	stats["version_pending"] = v
+	_refresh_ui()
+	_accumulate(v, keys)
+
+
+## _accumulate — собрать набор версии v: сеть и патч каждой клетки в памяти.
+##
+## Ответ, пришедший ПОСЛЕ того, как набор уехал (зафиксирован или брошен), —
+## мусор: применять его некому и нельзя. Проверка версии на каждом шаге — та
+## самая защита от смешения, ради которой набор и заведён.
+func _accumulate(v: int, keys: Array) -> void:
+	var net_res: WorldApi.Network = await api.world_network(_match_id, v)
+	if _pending == null or _pending.version != v:
+		return
+	if not _pending.accept_network(net_res, v):
+		return
+	if _pending.failed():
+		_abort_pending(_pending.failed_reason())
+		return
+	# Сеть набора проверяется НА ПРИЁМЕ, а не в момент переключения: набор,
+	# собравшийся с негодной сетью, не должен стать видимым. Разбор — тем же
+	# тесселятором, что и при первой загрузке, но без побочных stats: набор
+	# может быть брошен, и числа видимой версии трогать нельзя.
+	var raw: Array = net_res.data.get("elements", []) as Array
+	if raw.is_empty():
+		_abort_pending("сеть версии %d пуста: ни одного элемента" % v)
+		return
+	var els: Array[TrackGeom.Element] = []
+	for e_raw in raw:
+		var el := TrackGeom.tessellate_element(e_raw as Dictionary, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
+		if el.points.size() < 2:
+			_abort_pending("сеть версии %d: элемент %s не тесселлируется" % [v, el.id])
+			return
+		els.append(el)
+	_pending_elements = els
+	if _pending.ready():
+		_begin_rebuild()
+		return
+	for key in keys:
+		var t: Dictionary = _tiles[key]
+		var p: WorldApi.Patch = await api.world_patch(_match_id, v,
+			int(t["level"]), int(t["cx"]), int(t["cz"]))
+		if _pending == null or _pending.version != v:
+			return
+		if not _pending.accept_patch(key, p, v):
+			return
+		if _pending.failed():
+			_abort_pending(_pending.failed_reason())
+			return
+		if _pending.ready():
+			_begin_rebuild()
+			return
+
+
+## _commit_pending — набор готов и ПЕРЕСТРОЕН: показать его ОДНОЙ операцией.
+##
+## До sqym.7 переключение было синхронным проходом и замирало на кадре (замер
+## W5-A: 281–288 мс на одной пересадке травы). Теперь всё тяжёлое сделано
+## перестройкой в стороне (_rebuild_tick), и здесь только назначение ссылок и
+## перестановка узлов — между двумя кадрами старая версия целиком сменяется
+## новой, и полунабора на экране не бывает.
+func _commit_pending() -> void:
+	var set: Dictionary = _rebuild.source_set()
+	var v := int(set["version"])
+	var t_swap := Time.get_ticks_usec()
+	var hand: Dictionary = _rebuild.commit()
+	var costs: Dictionary = hand["costs"]
+	# Земля и маска нового набора — в живые поля мира; трава — живым поколением.
+	_ground = hand["ground"]
+	_ballast_mask = hand["ballast"]
+	var old_grass = _grass
+	_grass = hand["grass"]
+	if old_grass != null:
+		old_grass.free_all()
+	# Путь: числа панели из черновых stats строителя (живые stats не трогались,
+	# пока набор был в стороне).
+	for k in _rebuild_track_stats:
+		stats[k] = _rebuild_track_stats[k]
+	stats["version_switch_ms"] = float(Time.get_ticks_usec() - t_swap) / 1000.0
+	stats["version_switch_breakdown"] = costs
+	stats["version_rebuild_costs_us"] = hand["build_costs_us"]
+	stats["version_rebuild_over_budget"] = hand["over_budget"]
+	stats["version_from"] = _fixed_version
+	stats["world_version"] = v
+	_fixed_version = v
+	_version_switches += 1
+	stats["version_switches"] = _version_switches
+	stats["version_pending"] = 0
+	_pending = null
+	_pending_elements = []
+	_rebuild = null
+	_rebuild_track_stats = {}
+	# ЧЕЛОВЕК: мир под ним сменился, и его точка появления — элемент НОВОЙ
+	# сети. Перестановка синхронна; твердь под ногами он ищет сам (Driver._settle).
+	var elements := _parse_elements(set["network"])
+	if _driver != null:
+		var d := _driver
+		_driver = null
+		world.remove_child(d)
+		d.free()
+		_spawn_driver(elements)
+	_refresh_ui()
+
+
+## _begin_rebuild — набор готов: начать ПЕРЕСТРОЙКУ в стороне, под бюджетом.
+##
+## Набор (сеть + патчи) собран, но показывать его нельзя — сначала его надо
+## пересобрать: меши, юбки, растительность, траву, коллизии. Это делается
+## кусочками по кадрам (_rebuild_tick), и видимым набор становится одним
+## commit() — пока он не готов, на экране старая версия целиком и без рывков.
+func _begin_rebuild() -> void:
+	var set: Dictionary = _pending.commit()
+	var v := int(set["version"])
+	stats["version_pending"] = v
+	var rb: VersionRebuildScript = VersionRebuildScript.new()
+	rb.services = {
+		"rule": _rule, "world": world, "tiles": _tiles, "tile_nodes": _tile_nodes,
+		"terrain_solid": _terrain_solid, "stats": stats,
+		"track_builder": Callable(self, "_rebuild_track_builder"),
+		"veg_tile": Callable(self, "_veg_tile"),
+		"veg_finalize": Callable(self, "_veg_finalize"),
+		"grass_new": Callable(self, "_rebuild_grass_new"),
+	}
+	rb.begin(set, _pending_elements)
+	_rebuild = rb
+	_refresh_ui()
+
+
+## _rebuild_tick — один кадр перестройки: работа в пределах бюджета. Камера
+## двинулась — очередь переупорядочивается: клетка за спиной уступает видимой.
+func _rebuild_tick() -> void:
+	if _rebuild == null:
+		return
+	if camera != null:
+		_rebuild.reprioritize(_camera_plan())
+	var res: Dictionary = _rebuild.tick(REBUILD_BUDGET_US)
+	if bool(res["failed"]):
+		_abort_pending(_rebuild.failed_reason())
+		_rebuild = null
+		return
+	if bool(res["done"]):
+		_commit_pending()
+
+
+## _rebuild_track_builder — строитель пути для перестройки: новый Track-узел в
+## ОТСОЕДИНЁННЫЙ родитель, ось и подошва призмы. Черновые stats копятся в
+## _rebuild_track_stats и переезжают в живые только на commit(): пока набор в
+## стороне, панель обязана показывать числа видимой версии.
+func _rebuild_track_builder(elements: Array, network: Dictionary, parent: Node3D) -> Dictionary:
+	_apply_track_types(network, elements)
+	_rebuild_track_stats = {}
+	_draw_track(elements, network, parent, _rebuild_track_stats)
+	var axis := TrackGeom.sample_axis(elements, _rule.axis_step_m)
+	return {"axis": axis, "toe": float(_rebuild_track_stats.get("ballast_toe_m", 0.0))}
+
+
+## _rebuild_grass_new — новое поколение травы набора: своя земля, своя маска,
+## свой (пустой) словарь счётчиков. Корень отсоединён — круг невидим, пока
+## commit() не поставит его в мир; цена постройки меряется перестройкой, а не
+## панелью живого мира.
+func _rebuild_grass_new(ground: Array, ballast: Dictionary):
+	var gf := GrassFieldScript.new()
+	gf.setup(_rule, ground, ballast, Callable(self, "_camera_plan"),
+		Callable(self, "_multimesh"), {})
+	return gf
+
+
+## _abort_pending — набор новой версии не собрался: видимой остаётся старая.
+##
+## Отказ показывается НАЗВАННЫМ: молча оставшаяся старая версия выглядела бы
+## как «мир перестал обновляться», и отличить это от поломки было бы нечем.
+func _abort_pending(why: String) -> void:
+	_fail("набор версии %d не собран: %s" % [_pending.version, why])
+	stats["version_pending"] = 0
+	_pending = null
+	_pending_elements = []
+	_refresh_ui()
+
+
+## (Старый синхронный проход _apply_version_set и его помощники — пересборка
+## мешей на месте и пересоздание коллизий — удалены: их работа переехала в
+## VersionRebuild, где идёт в стороне под кадровым бюджетом.)
 
 
 ## _count_nodes — сколько узлов показа вышло всего. Считается обходом, а не
@@ -2070,6 +2353,20 @@ func _hud_text() -> String:
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
 			stats.get("epoch"), stats.get("revision"), stats.get("network_model_hash"),
 			stats.get("network_hash"), stats.get("placement_algorithm")])
+	if stats.has("world_version"):
+		l.append("версия мира %s (сеть версии %s, журнал до %s, рецепт %s…), переключений %d" % [
+			stats["world_version"], stats.get("network_version", "?"),
+			stats.get("source_journal_seq", "?"), stats.get("region_recipe_hash", "?"),
+			stats.get("version_switches", 0)])
+		if int(stats.get("version_pending", 0)) > 0:
+			l.append("  [color=#ffc060]копится набор версии %d — видна старая, целиком[/color]" % [
+				stats["version_pending"]])
+		if stats.has("version_switch_ms"):
+			var brk: Dictionary = stats.get("version_switch_breakdown", {}) as Dictionary
+			l.append("  последнее переключение %.1f мс (путь %.1f, балласт %.1f, земля %.1f, растительность %.1f, твердь %.1f)" % [
+				float(stats["version_switch_ms"]), float(brk.get("track_ms", 0.0)),
+				float(brk.get("ballast_ms", 0.0)), float(brk.get("terrain_ms", 0.0)),
+				float(brk.get("vegetation_ms", 0.0)), float(brk.get("solid_ms", 0.0))])
 	if stats.has("rule"):
 		l.append("правило подробности (из манифеста): %s" % stats["rule"])
 	# ДВЕ СТРОКИ, А НЕ ОДНА: сверху то, что объявил сервер, снизу то, что выбрал
@@ -2122,7 +2419,7 @@ func _hud_text() -> String:
 			stats.get("trees_drawn", 0), stats.get("trees_conifer", 0), stats.get("trees_broadleaf", 0),
 			stats.get("bushes_drawn", 0)])
 		l.append("  трава: пучков %d в круге %.0f м вокруг взгляда, посадок %d по %.0f мс; по балласту не сеется (подошва %.2f м, ячеек маски %d)" % [
-			stats.get("grass_drawn", 0), GRASS_FAR, stats.get("grass_plants", 0),
+			stats.get("grass_drawn", 0), GrassFieldScript.GRASS_FAR, stats.get("grass_plants", 0),
 			float(stats.get("grass_plant_ms", 0.0)), float(stats.get("ballast_toe_m", 0.0)),
 			stats.get("ballast_mask_cells", 0)])
 		l.append("  лес: битовых карт получено %d (только уровень 0)" % stats.get("forest_got", 0))
@@ -2216,6 +2513,9 @@ func _hud_text() -> String:
 func _print_report() -> void:
 	print("=== ClearAhead client, регион %s, сервер %s ===" % [region, server_url])
 	for k in ["epoch", "revision", "network_model_hash", "network_hash", "placement_algorithm", "rule",
+			"world_version", "network_version", "source_journal_seq", "region_recipe_hash",
+			"version_switches", "version_from", "version_pending", "version_switch_ms",
+			"version_switch_breakdown",
 			"reach", "view_reach_requested_m", "view_reach_m", "view_levels", "view_reach_capped",
 			"view_reach_note", "terrain_radius_m", "terrain_radius_stored_m",
 			"bounds", "limit_note",
@@ -2359,168 +2659,180 @@ func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
 	var node := Node3D.new()
 	node.name = "Vegetation"
 	world.add_child(node)
-
-	var cells := rule.samples - 1
-
-	# ТРИ СИЛУЭТА ХВОИ И ЛИСТВЫ, А НЕ ОДИН НА ВСЁ. Довод спайка, перенесённый
-	# вместе с числами: «52 тысячи одинаковых конусов глаз читает не лесом, а
-	# ковром — силуэт повторяется, и массив превращается в текстуру». Ель идёт
-	# двумя разводами (свечка и раскидистая), лиственное — третьим силуэтом.
-	# Разброс НЕ жребий по дереву в общем счётчике, а хеш от его места: он не
-	# зависит ни от порядка обхода чанков, ни от того, сколько их приехало.
-	var spruce_narrow: Array[Transform3D] = []
-	var spruce_wide: Array[Transform3D] = []
-	var broad: Array[Transform3D] = []
-	var bushes: Array[Transform3D] = []
-	var bushes_low: Array[Transform3D] = []
-	var spruce_narrow_c := PackedColorArray()
-	var spruce_wide_c := PackedColorArray()
-	var broad_c := PackedColorArray()
-	var bushes_c := PackedColorArray()
-	var bushes_low_c := PackedColorArray()
-
+	# Разбито на ярус и сборку нарочно (sqym.7): перестройка набора строит
+	# растительность В СТОРОНЕ по ярусу на кадр (_veg_tile) и собирает MultiMesh
+	# последним заданием (_veg_finalize). Загрузка мира делает то же двумя
+	# вызовами подряд — одна реализация на оба случая.
+	var state := _veg_new_state(rule)
 	for g_raw in ground:
-		var g: Dictionary = g_raw
-		var cover: PackedByteArray = g["cover"]
-		var forest: PackedByteArray = g["forest"]
-		var heights: PackedFloat32Array = g["heights"]
-		var base_z: float = g["base_z"]
-		var cx: int = g["cx"]
-		var cz: int = g["cz"]
-		var level: int = g["level"]
-		# Сторона и шаг — СВОИ У КАЖДОГО УРОВНЯ. Брать их у нулевого значило бы
-		# посадить дальний лес в шестнадцать раз плотнее и в шестнадцать раз
-		# ближе к оси, чем говорит покров.
-		var side := rule.side_of(level)
-		var step := side / float(cells)
-		var has_forest := forest.size() == cells * cells / 8
-		# ПЛОЩАДЬ ЯКОРЯ, а не всей клетки: сажает только узел без порога видимости,
-		# и на дальних уровнях это ЧЕТВЕРТЬ клетки. Площади якорей покрывают
-		# плоскость ровно один раз (в столбце якорь один — самый подробный),
-		# поэтому дерево не двоится в перекрытии уровней и не пропадает между ними.
-		# Прежде ту же обязанность несла маска квадов; ячейка покрова и квад меша —
-		# один индекс, поэтому границы берутся прямо в ячейках.
-		var i0: int = int(g["i0"])
-		var j0: int = int(g["j0"])
-		var span: int = int(g["span"])
+		_veg_tile(state, g_raw, _ballast_mask)
+	_veg_finalize(state, node, rule, stats)
 
-		# ЛЕС ЗА КОРИДОРОМ РАССЕВАЕТ КЛИЕНТ САМ, и это не отступление от правила,
-		# а его прямое следствие (разбор раскладки леса, §«грубые уровни»).
-		#
-		# Тождество нужно дереву затем, что его РУБЯТ; рубят там, куда
-		# дотянулись, — в коридоре, и полоса рубки совпадает с полосой уровня 0.
-		# За её границей у дерева тождества нет, значит нет и повода возить его
-		# битом: оно рассевается по покрову ровно так же, как трава, и по тому
-		# же основанию — «сажать ПО ПОКРОВУ, а не по своему шуму».
-		#
-		# Цена названа: срубить такое дерево нельзя, и на границе коридора при
-		# рубке появится шов. Он невидим, пока рубки нет.
-		if has_forest:
-			var res := Forest.trees(forest, cover, heights, base_z, rule.samples, cx, cz, side,
-				i0, j0, span)
-			for st_raw in (res["list"] as Array):
-				var st: Forest.Stem = st_raw
-				var ins := _tree_instance(st.x, st.y, st.z, st.species, st.height_m)
-				match int(ins[0]):
-					0:
-						spruce_narrow.append(ins[1]); spruce_narrow_c.append(ins[2])
-					1:
-						spruce_wide.append(ins[1]); spruce_wide_c.append(ins[2])
-					_:
-						broad.append(ins[1]); broad_c.append(ins[2])
 
-		# Трава и кусты — по ячейкам покрова. Порог сомкнутости и плотность
-		# рассева клиентские: сервер сказал «здесь луг густоты 11», во сколько
-		# пучков это развернуть — вопрос кадра, а не мира.
-		var ox := float(cx) * side
-		var oz := float(cz) * side
-		for j in range(j0, j0 + span):
-			for i in range(i0, i0 + span):
-				var k := j * cells + i
-				var packed := cover[k]
-				var cls := packed >> 4
-				var closure := packed & 0x0f
-				if closure < GRASS_MIN_CLOSURE:
-					continue
-				if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
-					continue
-				# Ячейка со стволом травой не засевается: под елью её не видно, а
-				# пучков она стоит столько же.
-				if has_forest and (forest[k / 8] & (1 << (k % 8))) != 0:
-					continue
-				var z0 := base_z + float(heights[j * rule.samples + i]) * 0.01
-				# Лесная ячейка БЕЗ битовой карты — дальний уровень. Дерево
-				# ставится хешем той же функции: она уже часть контракта, и
-				# заводить второй жребий значило бы иметь два ответа на вопрос
-				# «где стоит дерево».
-				if not has_forest and (cls == TerrainMesh.SURFACE_FOREST_CONIFER
-						or cls == TerrainMesh.SURFACE_FOREST_BROAD):
-					var fj := Forest.jitter(cx, cz, i + cells, j)
-					if fj[2] < float(closure) / 15.0:
-						var fh := Forest.TREE_H_MIN + float(fj[2]) * (Forest.TREE_H_MAX - Forest.TREE_H_MIN)
-						if cls == TerrainMesh.SURFACE_FOREST_BROAD:
-							fh *= Forest.BROAD_SCALE
-						var fi := _tree_instance(ox + (float(i) + fj[0]) * step,
-							oz + (float(j) + fj[1]) * step, z0, cls, fh)
-						match int(fi[0]):
-							0:
-								spruce_narrow.append(fi[1]); spruce_narrow_c.append(fi[2])
-							1:
-								spruce_wide.append(fi[1]); spruce_wide_c.append(fi[2])
-							_:
-								broad.append(fi[1]); broad_c.append(fi[2])
-					continue
-				# Куст — только вблизи (на дальних уровнях ячейка 64 м) и редко.
-				if level > 0:
-					continue
-				var z := z0
-				var bj := Forest.jitter(cx, cz, i + 7919, j + 6271)
-				# ЗАРОСЛЯМИ, А НЕ РОВНЫМ ЖРЕБИЕМ. Здесь стояло BUSH_CHANCE × сомкнутость
-				# — независимая монетка в каждой ячейке 4 м, то есть определение соли с
-				# перцем: кусты выходили поштучно и поровну по всему лугу. Спайк брал
-				# крупный шум В КВАДРАТЕ (разбор — у Vegetation.BUSH_CLUMP_M): квадрат
-				# давит середину, и куртина получается плотной, а между куртинами
-				# кустов нет вовсе.
-				var bcx := ox + (float(i) + 0.5) * step
-				var bcy := oz + (float(j) + 0.5) * step
-				var clump := Vegetation.bush_clump(bcx, bcy)
-				# Под пологом подлеска вчетверо меньше — число спайка (1 − forest·0.75).
-				var canopy := 0.75 if (cls == TerrainMesh.SURFACE_FOREST_CONIFER
-					or cls == TerrainMesh.SURFACE_FOREST_BROAD) else 0.0
-				var bp := BUSH_FIELD * clump * clump * (1.0 - canopy) * float(closure) / 15.0
-				if bj[2] < bp:
-					# ДВА СИЛУЭТА КУСТА, а не один масштабированный: довод спайка тот же,
-					# что у двух разводов ели — одинаковые кусты читаются не зарослью, а
-					# горошком. Низкий раскидистый занимает BUSH_LOW_SHARE мест, и он
-					# ниже высокого чуть не вдвое (спайковы 0.55).
-					var bx := ox + (float(i) + bj[0]) * step
-					var by := oz + (float(j) + bj[1]) * step
-					# По балласту куст не растёт — тот же СЧИТАННЫЙ запрет, что у травы:
-					# подошва призмы приезжает с сервера. Спайк держал тут своё число
-					# BUSH_CLEAR 6.5 м, потому что размеров не получал вовсе.
-					if _on_ballast(bx, by):
-						continue
-					var bh := BUSH_H_MIN + float(bj[0]) * (BUSH_H_MAX - BUSH_H_MIN)
-					var low := _tree_lot(bx, by, 21) < BUSH_LOW_SHARE
-					var mesh_h := Vegetation.BUSH_MESH_H
-					if low:
-						bh *= 0.55
-						mesh_h = Vegetation.BUSH_LOW_MESH_H
-					var bs := bh / mesh_h
-					var bt := Transform3D(
-						Basis.IDENTITY.rotated(Vector3.UP, float(bj[1]) * TAU).scaled(Vector3(bs, bs, bs)),
-						TerrainMesh.to_godot(bx, by, z))
-					# Кусты у воды и на сухих местах разного тона — оттенок ведёт та же
-					# сомкнутость покрова, что и трава рядом. Жребий яркости 0.78…1.28 —
-					# спайков: без него заросль читается штампованной.
-					var dry: float = clampf(1.2 - float(closure) / 15.0, 0.0, 1.0)
-					var bc: Color = Vegetation.C_BUSH.lerp(Vegetation.C_BUSH_DRY, dry)
-					bc *= lerpf(0.78, 1.28, _tree_lot(bx, by, 22))
-					if low:
-						bushes_low.append(bt); bushes_low_c.append(bc.srgb_to_linear())
-					else:
-						bushes.append(bt); bushes_c.append(bc.srgb_to_linear())
+## _veg_new_state — состояние посадки растительности: экземпляры по силуэтам.
+## Всё, что копится между ярусами, лежит здесь — у перестройки это состояние
+## живёт в VersionRebuild и переживает границы кадров.
+func _veg_new_state(rule: ChunkRule) -> Dictionary:
+	return {
+		"rule": rule,
+		"spruce_narrow": [] as Array[Transform3D], "spruce_wide": [] as Array[Transform3D],
+		"broad": [] as Array[Transform3D], "bushes": [] as Array[Transform3D],
+		"bushes_low": [] as Array[Transform3D],
+		"spruce_narrow_c": PackedColorArray(), "spruce_wide_c": PackedColorArray(),
+		"broad_c": PackedColorArray(), "bushes_c": PackedColorArray(),
+		"bushes_low_c": PackedColorArray(),
+	}
 
+
+## _veg_tile — ОДИН ярус-якорь: деревья и кусты его площади в состояние.
+##
+## ballast — маска подошвы призмы, по которой куст не растёт: живой мир даёт
+## живую маску, перестройка — маску нового набора.
+func _veg_tile(state: Dictionary, g: Dictionary, ballast: Dictionary) -> void:
+	var rule: ChunkRule = state["rule"]
+	var cover: PackedByteArray = g["cover"]
+	var forest: PackedByteArray = g["forest"]
+	var heights: PackedFloat32Array = g["heights"]
+	var base_z: float = g["base_z"]
+	var cx: int = g["cx"]
+	var cz: int = g["cz"]
+	var level: int = g["level"]
+	var cells := rule.samples - 1
+	# Сторона и шаг — СВОИ У КАЖДОГО УРОВНЯ. Брать их у нулевого значило бы
+	# посадить дальний лес в шестнадцать раз плотнее и в шестнадцать раз
+	# ближе к оси, чем говорит покров.
+	var side := rule.side_of(level)
+	var step := side / float(cells)
+	var has_forest := forest.size() == cells * cells / 8
+	# ПЛОЩАДЬ ЯКОРЯ, а не всей клетки: сажает только узел без порога видимости,
+	# и на дальних уровнях это ЧЕТВЕРТЬ клетки. Площади якорей покрывают
+	# плоскость ровно один раз (в столбце якорь один — самый подробный),
+	# поэтому дерево не двоится в перекрытии уровней и не пропадает между ними.
+	# Прежде ту же обязанность несла маска квадов; ячейка покрова и квад меша —
+	# один индекс, поэтому границы берутся прямо в ячейках.
+	var i0: int = int(g["i0"])
+	var j0: int = int(g["j0"])
+	var span: int = int(g["span"])
+
+	# ЛЕС ЗА КОРИДОРОМ РАССЕВАЕТ КЛИЕНТ САМ, и это не отступление от правила,
+	# а его прямое следствие (разбор раскладки леса, §«грубые уровни»).
+	#
+	# Тождество нужно дереву затем, что его РУБЯТ; рубят там, куда
+	# дотянулись, — в коридоре, и полоса рубки совпадает с полосой уровня 0.
+	# За её границей у дерева тождества нет, значит нет и повода возить его
+	# битом: оно рассевается по покрову ровно так же, как трава, и по тому
+	# же основанию — «сажать ПО ПОКРОВУ, а не по своему шуму».
+	#
+	# Цена названа: срубить такое дерево нельзя, и на границе коридора при
+	# рубке появится шов. Он невидим, пока рубки нет.
+	if has_forest:
+		var res := Forest.trees(forest, cover, heights, base_z, rule.samples, cx, cz, side,
+			i0, j0, span)
+		for st_raw in (res["list"] as Array):
+			var st: Forest.Stem = st_raw
+			var ins := _tree_instance(st.x, st.y, st.z, st.species, st.height_m)
+			match int(ins[0]):
+				0:
+					state["spruce_narrow"].append(ins[1]); state["spruce_narrow_c"].append(ins[2])
+				1:
+					state["spruce_wide"].append(ins[1]); state["spruce_wide_c"].append(ins[2])
+				_:
+					state["broad"].append(ins[1]); state["broad_c"].append(ins[2])
+
+	# Трава и кусты — по ячейкам покрова. Порог сомкнутости и плотность
+	# рассева клиентские: сервер сказал «здесь луг густоты 11», во сколько
+	# пучков это развернуть — вопрос кадра, а не мира.
+	var ox := float(cx) * side
+	var oz := float(cz) * side
+	for j in range(j0, j0 + span):
+		for i in range(i0, i0 + span):
+			var k := j * cells + i
+			var packed := cover[k]
+			var cls := packed >> 4
+			var closure := packed & 0x0f
+			if closure < GrassFieldScript.GRASS_MIN_CLOSURE:
+				continue
+			if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
+				continue
+			# Ячейка со стволом травой не засевается: под елью её не видно, а
+			# пучков она стоит столько же.
+			if has_forest and (forest[k / 8] & (1 << (k % 8))) != 0:
+				continue
+			var z0 := base_z + float(heights[j * rule.samples + i]) * 0.01
+			# Лесная ячейка БЕЗ битовой карты — дальний уровень. Дерево
+			# ставится хешем той же функции: она уже часть контракта, и
+			# заводить второй жребий значило бы иметь два ответа на вопрос
+			# «где стоит дерево».
+			if not has_forest and (cls == TerrainMesh.SURFACE_FOREST_CONIFER
+					or cls == TerrainMesh.SURFACE_FOREST_BROAD):
+				var fj := Forest.jitter(cx, cz, i + cells, j)
+				if fj[2] < float(closure) / 15.0:
+					var fh := Forest.TREE_H_MIN + float(fj[2]) * (Forest.TREE_H_MAX - Forest.TREE_H_MIN)
+					if cls == TerrainMesh.SURFACE_FOREST_BROAD:
+						fh *= Forest.BROAD_SCALE
+					var fi := _tree_instance(ox + (float(i) + fj[0]) * step,
+						oz + (float(j) + fj[1]) * step, z0, cls, fh)
+					match int(fi[0]):
+						0:
+							state["spruce_narrow"].append(fi[1]); state["spruce_narrow_c"].append(fi[2])
+						1:
+							state["spruce_wide"].append(fi[1]); state["spruce_wide_c"].append(fi[2])
+						_:
+							state["broad"].append(fi[1]); state["broad_c"].append(fi[2])
+				continue
+			# Куст — только вблизи (на дальних уровнях ячейка 64 м) и редко.
+			if level > 0:
+				continue
+			var z := z0
+			var bj := Forest.jitter(cx, cz, i + 7919, j + 6271)
+			# ЗАРОСЛЯМИ, А НЕ РОВНЫМ ЖРЕБИЕМ. Здесь стояло BUSH_CHANCE × сомкнутость
+			# — независимая монетка в каждой ячейке 4 м, то есть определение соли с
+			# перцем: кусты выходили поштучно и поровну по всему лугу. Спайк брал
+			# крупный шум В КВАДРАТЕ (разбор — у Vegetation.BUSH_CLUMP_M): квадрат
+			# давит середину, и куртина получается плотной, а между куртинами
+			# кустов нет вовсе.
+			var bcx := ox + (float(i) + 0.5) * step
+			var bcy := oz + (float(j) + 0.5) * step
+			var clump := Vegetation.bush_clump(bcx, bcy)
+			# Под пологом подлеска вчетверо меньше — число спайка (1 − forest·0.75).
+			var canopy := 0.75 if (cls == TerrainMesh.SURFACE_FOREST_CONIFER
+				or cls == TerrainMesh.SURFACE_FOREST_BROAD) else 0.0
+			var bp := BUSH_FIELD * clump * clump * (1.0 - canopy) * float(closure) / 15.0
+			if bj[2] < bp:
+				# ДВА СИЛУЭТА КУСТА, а не один масштабированный: довод спайка тот же,
+				# что у двух разводов ели — одинаковые кусты читаются не зарослью, а
+				# горошком. Низкий раскидистый занимает BUSH_LOW_SHARE мест, и он
+				# ниже высокого чуть не вдвое (спайковы 0.55).
+				var bx := ox + (float(i) + bj[0]) * step
+				var by := oz + (float(j) + bj[1]) * step
+				# По балласту куст не растёт — тот же СЧИТАННЫЙ запрет, что у травы:
+				# подошва призмы приезжает с сервера. Спайк держал тут своё число
+				# BUSH_CLEAR 6.5 м, потому что размеров не получал вовсе.
+				if _on_ballast_mask(ballast, bx, by):
+					continue
+				var bh := BUSH_H_MIN + float(bj[0]) * (BUSH_H_MAX - BUSH_H_MIN)
+				var low := _tree_lot(bx, by, 21) < BUSH_LOW_SHARE
+				var mesh_h := Vegetation.BUSH_MESH_H
+				if low:
+					bh *= 0.55
+					mesh_h = Vegetation.BUSH_LOW_MESH_H
+				var bs := bh / mesh_h
+				var bt := Transform3D(
+					Basis.IDENTITY.rotated(Vector3.UP, float(bj[1]) * TAU).scaled(Vector3(bs, bs, bs)),
+					TerrainMesh.to_godot(bx, by, z))
+				# Кусты у воды и на сухих местах разного тона — оттенок ведёт та же
+				# сомкнутость покрова, что и трава рядом. Жребий яркости 0.78…1.28 —
+				# спайков: без него заросль читается штампованной.
+				var dry: float = clampf(1.2 - float(closure) / 15.0, 0.0, 1.0)
+				var bc: Color = Vegetation.C_BUSH.lerp(Vegetation.C_BUSH_DRY, dry)
+				bc *= lerpf(0.78, 1.28, _tree_lot(bx, by, 22))
+				if low:
+					state["bushes_low"].append(bt); state["bushes_low_c"].append(bc.srgb_to_linear())
+				else:
+					state["bushes"].append(bt); state["bushes_c"].append(bc.srgb_to_linear())
+
+## _veg_finalize — собрать MultiMesh по силуэтам и записать числа в st.
+func _veg_finalize(state: Dictionary, parent: Node3D, rule: ChunkRule, st: Dictionary) -> void:
 	# ОДИН МАТЕРИАЛ НА ВСЮ РАСТИТЕЛЬНОСТЬ, КРОМЕ ТРАВЫ, и это возврат к устройству
 	# спайка: ель, ствол, крона лиственного и куст — ЗАМКНУТЫЕ тела, изнанки у них
 	# не видно никогда, и отсечение задних граней им нужно ради светотени (разбор —
@@ -2528,21 +2840,19 @@ func _draw_vegetation(ground: Array[Dictionary], rule: ChunkRule) -> void:
 	# конусов требовала CULL_DISABLED и за это платила плоским силуэтом; крона
 	# стала эллипсоидом, и повод отпал.
 	var solid := Vegetation.solid_material()
-	_multimesh(node, "SpruceNarrow", Vegetation.spruce_mesh(Vegetation.SPRUCE_SPREAD_NARROW),
-		spruce_narrow, solid, spruce_narrow_c)
-	_multimesh(node, "SpruceWide", Vegetation.spruce_mesh(Vegetation.SPRUCE_SPREAD_WIDE),
-		spruce_wide, solid, spruce_wide_c)
-	_multimesh(node, "Broadleaf", Vegetation.broadleaf_mesh(), broad, solid, broad_c)
-	_multimesh(node, "Bushes", Vegetation.bush_mesh(), bushes, solid, bushes_c)
-	_multimesh(node, "BushesLow", Vegetation.bush_mesh_low(), bushes_low, solid, bushes_low_c)
+	_multimesh(parent, "SpruceNarrow", Vegetation.spruce_mesh(Vegetation.SPRUCE_SPREAD_NARROW),
+		state["spruce_narrow"], solid, state["spruce_narrow_c"])
+	_multimesh(parent, "SpruceWide", Vegetation.spruce_mesh(Vegetation.SPRUCE_SPREAD_WIDE),
+		state["spruce_wide"], solid, state["spruce_wide_c"])
+	_multimesh(parent, "Broadleaf", Vegetation.broadleaf_mesh(), state["broad"], solid, state["broad_c"])
+	_multimesh(parent, "Bushes", Vegetation.bush_mesh(), state["bushes"], solid, state["bushes_c"])
+	_multimesh(parent, "BushesLow", Vegetation.bush_mesh_low(), state["bushes_low"], solid, state["bushes_low_c"])
 
-	var conifer := spruce_narrow.size() + spruce_wide.size()
-	stats["trees_drawn"] = conifer + broad.size()
-	stats["trees_conifer"] = conifer
-	stats["trees_broadleaf"] = broad.size()
-	stats["bushes_drawn"] = bushes.size() + bushes_low.size()
-
-
+	var conifer := (state["spruce_narrow"] as Array).size() + (state["spruce_wide"] as Array).size()
+	st["trees_drawn"] = conifer + (state["broad"] as Array).size()
+	st["trees_conifer"] = conifer
+	st["trees_broadleaf"] = (state["broad"] as Array).size()
+	st["bushes_drawn"] = (state["bushes"] as Array).size() + (state["bushes_low"] as Array).size()
 ## _tree_lot — ЖРЕБИЙ ОТ МЕСТА, а не от счётчика.
 ##
 ## Разворот дерева вокруг вертикали, развод его кроны и разброс тона — это
@@ -2633,415 +2943,18 @@ func _multimesh(parent: Node3D, name_: String, mesh: ArrayMesh, xforms: Array[Tr
 func _plant_grass() -> void:
 	if _ground.is_empty() or _rule == null or camera == null:
 		return
-	var t0 := Time.get_ticks_usec()
-	_grass_plan()
-	while not (_grass_queue.is_empty() and _grass_job.is_empty()):
-		_grass_work(1 << 30)
-	_grass_show()
-	_grass_plants += 1
-	stats["grass_plants"] = _grass_plants
-	# Цена постройки — ЗАМЕР, а не оценка: без числа «иногда дёргается»
-	# невозможно ни подтвердить, ни опровергнуть.
-	stats["grass_plant_ms"] = float(Time.get_ticks_usec() - t0) / 1000.0
-	_grass_count()
+	_ensure_grass()
+	_grass.plant_all()
 
 
-## _grass_plan — какие чанки и с какой подробностью нужны СЕЙЧАС.
-##
-## План пересчитывается, постройка не делается: здесь только бухгалтерия по трём
-## сотням чанков. Очередь строится ПО БЛИЗОСТИ — под ногами трава нужна раньше,
-## чем на горизонте.
-func _grass_plan() -> void:
-	var focus := _camera_plan()
-	_grass_center = focus
-	if _grass_root == null:
-		_grass_root = Node3D.new()
-		_grass_root.name = "Grass"
-		world.add_child(_grass_root)
-	if _grass_meshes.is_empty():
-		for k in Vegetation.GRASS_KINDS.size():
-			_grass_meshes.append(Vegetation.grass_mesh(Vegetation.GRASS_KINDS[k]))
-			_grass_mats.append(Vegetation.grass_material(Vegetation.GRASS_KINDS[k], k))
-	if _cover_index.is_empty():
-		# Только уровень 0: на дальних уровнях ячейка покрова 64 м, и пучок в ней
-		# означал бы одну травинку на гектар. Круг GRASS_FAR всё равно короче
-		# радиуса нулевого уровня (на затравке 512 м), так что уровень 0 его
-		# накрывает целиком.
-		for g_raw in _ground:
-			var g: Dictionary = g_raw
-			if int(g["level"]) == 0:
-				_cover_index[Vector2i(int(g["cx"]), int(g["cz"]))] = g
-	_grass_want.clear()
-	# ОЧЕРЕДЬ ПЕРЕСОБИРАЕТСЯ ЦЕЛИКОМ, А НЕ ДОПОЛНЯЕТСЯ. Довод спайка, там же и
-	# замеренный: на непрерывной панораме бюджет уходил на чанки, которые камера
-	# давно проехала. Устаревшее задание — не «немного лишней работы», оно
-	# вытесняет нужное.
-	_grass_queue.clear()
-	_grass_queued.clear()
-	var r := int(ceil(GRASS_FAR / GRASS_CHUNK)) + 1
-	var c0 := int(floor(focus.x / GRASS_CHUNK))
-	var c1 := int(floor(focus.y / GRASS_CHUNK))
-	# Самый грубый уровень, который вообще применяется при радиусе GRASS_FAR:
-	# последняя строка таблицы кончается ровно на нём.
-	var coarse := GRASS_RINGS.size() - 1
-	var rough := []      # чанки без единого готового уровня — им сперва грубый
-	var fine := []       # и только потом желаемая подробность
-	for gx in range(c0 - r, c0 + r + 1):
-		for gz in range(c1 - r, c1 + r + 1):
-			var d2 := _grass_chunk_d2(gx, gz, focus)
-			var level := _grass_level(sqrt(d2))
-			if level < 0:
-				continue
-			var flat := Vector2i(gx, gz)
-			_grass_want[flat] = level
-			# ГРУБЫЙ УРОВЕНЬ ВПЕРЁД, и условие тут ровно одно: ЧАНК ГОЛЫЙ. Плотный
-			# чанк — это двадцать тысяч ячеек, то есть десятки кадров бюджета; пока
-			# он строится, под ногами была бы голая земля. Грубый — сотни ячеек:
-			# покров появляется сразу, подробность приезжает следом.
-			if not _grass_has_any(flat):
-				rough.append([d2, Vector3i(gx, gz, coarse)])
-			var key := Vector3i(gx, gz, level)
-			if not _grass_chunks.has(key):
-				fine.append([d2, key])
-	rough.sort_custom(func(a, b): return a[0] < b[0])
-	fine.sort_custom(func(a, b): return a[0] < b[0])
-	for w in rough + fine:
-		if _grass_queued.has(w[1]):
-			continue
-		_grass_queue.append(w[1])
-		_grass_queued[w[1]] = true
-	# Начатое задание, которое больше не нужно, бросаем: доделывать его — значит
-	# занимать бюджет тем, чего никто не увидит.
-	if not _grass_job.is_empty():
-		var jk: Vector3i = _grass_job["key"]
-		if int(_grass_want.get(Vector2i(jk.x, jk.y), -1)) < 0:
-			_grass_job = {}
-	_grass_evict(focus)
-	_grass_show()
-
-
-## _grass_chunk_d2 — квадрат расстояния от взгляда до ЦЕНТРА чанка.
-##
-## По центру, а не по ближнему или дальнему углу, и это замер спайка: по ближнему
-## углу чанк, едва задевший круг 45 м, получал плотность ближнего уровня целиком
-## — густая область раздувалась на диагональ чанка и стоила в 1.67 раза больше
-## работы за то, чего не видно. По дальнему была бы обратная ошибка: под ногами
-## реже, чем нужно, а это как раз то, что видно. Центр даёт несмещённую.
-func _grass_chunk_d2(gx: int, gz: int, focus: Vector2) -> float:
-	var dx := (float(gx) + 0.5) * GRASS_CHUNK - focus.x
-	var dz := (float(gz) + 0.5) * GRASS_CHUNK - focus.y
-	return dx * dx + dz * dz
-
-
-## _grass_level — номер кольца по удалению, или −1 за краем круга.
-func _grass_level(d: float) -> int:
-	if d > GRASS_FAR:
-		return -1
-	for k in GRASS_RINGS.size():
-		if d <= float(GRASS_RINGS[k][0]):
-			return k
-	return GRASS_RINGS.size() - 1
-
-
-## _grass_has_any — есть ли у квадрата земли хоть какой-то готовый уровень.
-func _grass_has_any(flat: Vector2i) -> bool:
-	for k in GRASS_RINGS.size():
-		if _grass_chunks.has(Vector3i(flat.x, flat.y, k)):
-			return true
-	return false
-
-
-## _grass_evict — выброс чанков за тёплой полосой. Полоса нужна, чтобы шаг назад
-## не заставлял строить только что выброшенное.
-func _grass_evict(focus: Vector2) -> void:
-	var keep := GRASS_FAR * GRASS_WARM
-	var keep2 := keep * keep
-	for key in _grass_chunks.keys():
-		if _grass_chunk_d2(key.x, key.y, focus) <= keep2:
-			continue
-		var node: Node3D = _grass_chunks[key]
-		_grass_root.remove_child(node)
-		node.queue_free()
-		_grass_chunks.erase(key)
-
-
-## _grass_show — показываем ТОТ УРОВЕНЬ, КОТОРЫЙ УЖЕ ЕСТЬ, ближайший к желаемому.
-##
-## Без этого вновь вошедший чанк стоял бы голой землёй, пока строится: у него нет
-## ни одного готового уровня, и «покажем предыдущий» там не работает.
-func _grass_show() -> void:
-	var best := {}
-	for key in _grass_chunks.keys():
-		var flat := Vector2i(key.x, key.y)
-		var want: int = int(_grass_want.get(flat, -1))
-		if want < 0:
-			continue
-		var d: int = absi(key.z - want)
-		if not best.has(flat) or d < int(best[flat][0]):
-			best[flat] = [d, key]
-	for key in _grass_chunks.keys():
-		var flat := Vector2i(key.x, key.y)
-		var node: Node3D = _grass_chunks[key]
-		node.visible = best.has(flat) and best[flat][1] == key
-
-
-## _grass_work — постройка в пределах бюджета. Задание переживает границу кадра:
-## курсор по ячейкам покрова лежит в самом задании.
-func _grass_work(budget_us: int) -> void:
-	var t0 := Time.get_ticks_usec()
-	while true:
-		if _grass_job.is_empty():
-			if _grass_queue.is_empty():
-				return
-			_grass_job = _grass_job_make(_grass_queue.pop_front())
-			continue
-		if _grass_job_step(_grass_job, t0, budget_us):
-			_grass_commit(_grass_job)
-			_grass_job = {}
-			_grass_show()
-		if Time.get_ticks_usec() - t0 >= budget_us:
-			return
-
-
-## _grass_job_make — задание на один чанк: список ячеек покрова, которые его
-## накрывают, и курсор по ним.
-##
-## Список собирается заранее, а не вычисляется на ходу, потому что задание
-## ПРОДОЛЖАЕМОЕ: всё, что переживает границу кадра, обязано лежать в нём самом.
-func _grass_job_make(key: Vector3i) -> Dictionary:
-	_grass_queued.erase(key)
-	var ring: Array = GRASS_RINGS[key.z]
-	var x0 := float(key.x) * GRASS_CHUNK
-	var y0 := float(key.y) * GRASS_CHUNK
-	var side := _rule.side_of(0)
-	var cells := _rule.samples - 1
-	var cstep := side / float(cells)
-	var items := []
-	# Чанк посадки может лечь на несколько ярусов: 32 м делит 256 м нацело только
-	# пока правило подробности такое, каким приехало. Считаем по прямоугольнику,
-	# а не по делимости, — тогда смена правила ничего не сломает молча.
-	for cx in range(int(floor(x0 / side)), int(floor((x0 + GRASS_CHUNK - 0.001) / side)) + 1):
-		for cz in range(int(floor(y0 / side)), int(floor((y0 + GRASS_CHUNK - 0.001) / side)) + 1):
-			var g: Dictionary = _cover_index.get(Vector2i(cx, cz), {})
-			if g.is_empty():
-				continue
-			var ox := float(cx) * side
-			var oz := float(cz) * side
-			var i0: int = maxi(0, int(floor((x0 - ox) / cstep)))
-			var i1: int = mini(cells - 1, int(ceil((x0 + GRASS_CHUNK - ox) / cstep)) - 1)
-			var j0: int = maxi(0, int(floor((y0 - oz) / cstep)))
-			var j1: int = mini(cells - 1, int(ceil((y0 + GRASS_CHUNK - oz) / cstep)) - 1)
-			for j in range(j0, j1 + 1):
-				for i in range(i0, i1 + 1):
-					items.append([g, i, j])
-	return {
-		"key": key, "step": int(ring[1]), "fill": float(ring[2]),
-		"items": items, "cursor": 0, "x0": x0, "y0": y0,
-		"xf": [[], [], []],
-		"cl": [PackedColorArray(), PackedColorArray(), PackedColorArray()],
-	}
-
-
-## _grass_job_step — true, когда задание закончено. Бюджет проверяется РАЗ В
-## ЯЧЕЙКУ ПОКРОВА: ближняя ячейка это около трёхсот ячеек мировой сетки, то есть
-## порядка миллисекунды — достаточно мелко для бюджета в четыре и достаточно
-## крупно, чтобы сам Time.get_ticks_usec не стал статьёй расхода.
-func _grass_job_step(job: Dictionary, t0: int, budget_us: int) -> bool:
-	var items: Array = job["items"]
-	while int(job["cursor"]) < items.size():
-		var it: Array = items[int(job["cursor"])]
-		job["cursor"] = int(job["cursor"]) + 1
-		_grass_cover_cell(job, it[0], int(it[1]), int(it[2]))
-		if Time.get_ticks_usec() - t0 >= budget_us:
-			return int(job["cursor"]) >= items.size()
-	return true
-
-
-## _grass_cover_cell — одна ячейка ПРИСЛАННОГО покрова: сеет по мировой сетке
-## внутри неё.
-##
-## ГРАНИЦА ВЛАДЕНИЯ ПРОХОДИТ ЗДЕСЬ. Сервер отвечает, ЕСТЬ ЛИ здесь трава и
-## СКОЛЬКО её — классом и сомкнутостью ячейки 4 м; клиент отвечает, из скольких
-## пучков это развернуть и куда каждый встал внутри своих 22 сантиметров.
-func _grass_cover_cell(job: Dictionary, g: Dictionary, i: int, j: int) -> void:
-	var samples: int = _rule.samples
-	var cells := samples - 1
-	var k := j * cells + i
-	var cover: PackedByteArray = g["cover"]
-	var packed := cover[k]
-	var cls := packed >> 4
-	var closure := packed & 0x0f
-	if closure < GRASS_MIN_CLOSURE:
+## _ensure_grass — живое поколение травы, если его ещё нет. Земля и маска
+## передаются ССЫЛКОЙ: поколение живёт с теми данными, с которыми родилось.
+func _ensure_grass() -> void:
+	if _grass != null:
 		return
-	if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
-		return
-	var forest: PackedByteArray = g["forest"]
-	# Ячейка со стволом травой не засевается: под елью её не видно, а пучков она
-	# стоит столько же.
-	if forest.size() == cells * cells / 8 and (forest[k / 8] & (1 << (k % 8))) != 0:
-		return
-
-	var side := _rule.side_of(0)
-	var cstep := side / float(cells)
-	var rx0 := float(g["cx"]) * side + float(i) * cstep
-	var ry0 := float(g["cz"]) * side + float(j) * cstep
-	# ВЫСОТА — БИЛИНЕЙНО ПО ЧЕТЫРЁМ УГЛАМ ЯЧЕЙКИ, а не отсчётом её угла на всех.
-	# Раньше все пучки ячейки стояли на высоте её левого верхнего отсчёта: при
-	# сотне пучков на ячейку это незаметно только на ровном, а на откосе 4 м
-	# ячейки дают до метра расхождения — трава висит в воздухе выше по склону и
-	# тонет ниже. При двадцати пучках на м² такая ступенька читается сразу.
-	var heights: PackedFloat32Array = g["heights"]
-	var base_z: float = g["base_z"]
-	var h00 := base_z + float(heights[j * samples + i]) * 0.01
-	var h10 := base_z + float(heights[j * samples + i + 1]) * 0.01
-	var h01 := base_z + float(heights[(j + 1) * samples + i]) * 0.01
-	var h11 := base_z + float(heights[(j + 1) * samples + i + 1]) * 0.01
-
-	var step: int = job["step"]
-	var fill: float = job["fill"]
-	var cell := GRASS_BASE * float(step)
-	var xf: Array = job["xf"]
-	var cl: Array = job["cl"]
-	# ЯЧЕЙКА ПРИНАДЛЕЖИТ ЧАНКУ ПО СВОЕЙ ОПОРНОЙ ТОЧКЕ ii*cell — владение
-	# однозначное, поэтому на швах чанков нет ни дублей, ни щелей. Пересечение
-	# берётся с прямоугольником чанка: ячейка покрова может торчать за его край.
-	var ax0: float = maxf(rx0, float(job["x0"]))
-	var ax1: float = minf(rx0 + cstep, float(job["x0"]) + GRASS_CHUNK)
-	var ay0: float = maxf(ry0, float(job["y0"]))
-	var ay1: float = minf(ry0 + cstep, float(job["y0"]) + GRASS_CHUNK)
-	var lush := float(closure) / 15.0
-	# Лесная ячейка БЕЗ ствола: полог над ней всё равно есть (стволы стоят в
-	# соседних), и трава под ним темнее. Ячейка СО стволом отсеяна выше.
-	var under_canopy := cls == TerrainMesh.SURFACE_FOREST_CONIFER \
-		or cls == TerrainMesh.SURFACE_FOREST_BROAD
-	for ii in range(int(ceil(ax0 / cell)), int(ceil(ax1 / cell))):
-		var bi := ii * step
-		var bx := float(bi) * GRASS_BASE
-		for jj in range(int(ceil(ay0 / cell)), int(ceil(ay1 / cell))):
-			var bj := jj * step
-			# ДВА ДЕШЁВЫХ ОТСЕВА ВПЕРЁД, и порядок здесь — это цена. Занятость
-			# ячейки (кольцо) и густота (ПРИСЛАННАЯ сомкнутость) отбрасывают
-			# большинство кандидатов одним хешем каждый, а полный жребий пучка
-			# стоит вчетверо дороже.
-			var lot3 := Vegetation.hash01(bi, bj, 3)
-			if lot3 > fill:
-				continue
-			# КУРТИНЫ: внутри одной дернины трава редеет и густеет пятнами по 11 м.
-			# ПРИСЛАННАЯ сомкнутость решает, есть ли покров вообще, а куртинность —
-			# густоту внутри него (разбор — у Vegetation.TUFT_M). Здесь стояла голая
-			# `lush`, то есть независимый жребий по однородной вероятности в каждой
-			# ячейке 22 см: у такого рассева нет ни одного масштаба крупнее ячейки, а
-			# глаз читает именно масштабы — отсюда «ровный ворс» вместо покрова.
-			# Множители 0.45 и 0.75 спайковы: в прогалине куртины стоит меньше
-			# половины пучков, в самой гуще — вся сомкнутость и пятая часть сверху.
-			var tuft := Vegetation.tuft(bx, float(bj) * GRASS_BASE)
-			if Vegetation.hash01(bi, bj, 5) > lush * (0.45 + 0.75 * tuft):
-				continue
-			var lot := Vegetation.tuft_lot(bi, bj)
-			# Сдвиг ВНУТРИ БАЗОВОЙ ячейки 0.22 м, а не внутри ячейки кольца:
-			# оттого дальняя трава и стоит в тех же точках, что ближняя.
-			var x := bx + float(lot[0]) * GRASS_BASE
-			var y := float(bj) * GRASS_BASE + float(lot[1]) * GRASS_BASE
-			# ПО БАЛЛАСТУ ТРАВА НЕ РАСТЁТ, и запрет здесь СЧИТАН, а не выдуман:
-			# подошва призмы приезжает с сервера (полуширина плюс заложение откоса
-			# на её высоту), и ею же он рисует саму призму. Спайк держал тут своё
-			# число 2.9 м, потому что размеров не получал вовсе. На кадре без
-			# запрета пучки стояли в шпальном ящике — трава сквозь щебень.
-			if _on_ballast(x, y):
-				continue
-			var z := lerpf(
-				lerpf(h00, h10, (x - rx0) / cstep),
-				lerpf(h01, h11, (x - rx0) / cstep),
-				(y - ry0) / cstep)
-			# ПОРОДА ОТ МЕСТА И ЖРЕБИЯ РАЗОМ, и это устройство спайка: метёлки идут
-			# ТОЛЬКО в куртинах, кочки — вперемешку, и оба редко, иначе они перестают
-			# быть исключением. Здесь пороги стояли по одному жребию, и метёлка от
-			# этого росла посреди прогалины наравне с гущей.
-			var kind := 0
-			if tuft > 0.60 and lot[2] < 0.30:
-				kind = 2
-			elif lot[2] > 0.66:
-				kind = 1
-			var spec: Array = Vegetation.GRASS_KINDS[kind]
-			# ВЫСОТА ИДЁТ ПЯТНАМИ, А НЕ ЖРЕБИЕМ. Жребий по всему полю даёт ровный ворс
-			# средней высоты — глаз читает его ковром. Куртина ведёт высоту вместе с
-			# густотой: где гуще, там и выше.
-			var plush: float = clampf(lush * (0.30 + 0.90 * tuft), 0.0, 1.0)
-			var h: float = lerpf(float(spec[3]), float(spec[4]), plush) * lerpf(0.62, 1.45, lot[3])
-			var wide: float = float(spec[5]) * lerpf(0.75, 1.35, lot[4])
-			var basis := Basis(Vector3.UP, float(lot[5]) * TAU)
-			# НАКЛОН: ни один пучок не стоит по отвесу, и разнобой наклонов —
-			# половина того, что отличает луг от щётки. До 30°: отвесный квад
-			# сверху не виден вовсе, у него нет площади в плане.
-			var ta := float(lot[6]) * TAU
-			basis = Basis(Vector3(cos(ta), 0.0, sin(ta)), float(lot[7]) * 0.52) * basis
-			var s := h / Vegetation.GRASS_MESH_H
-			basis = basis.scaled(Vector3(s * wide, s, s * wide))
-			xf[kind].append(Transform3D(basis, TerrainMesh.to_godot(x, y, z)))
-			# ОТТЕНОК: МЕСТО ЗАДАЁТ СЕРЕДИНУ, ЖРЕБИЙ РАЗВОДИТ СОСЕДЕЙ.
-			#
-			# Светлота идёт от ЗАНЯТОСТИ ячейки (lot3), а не от отдельного жребия, и
-			# это спайково: то же число, что решило «пучок здесь есть», задаёт и его
-			# место в тоне, поэтому редеющий край куртины ещё и светлеет.
-			#
-			# Сухость берётся из СОМКНУТОСТИ (редкий покров и есть выгоревший) плюс
-			# крупный тон луга — тот самый, которым покрашена земля под пучком, чтобы
-			# трава и земля выгорали в одних и тех же местах, а не порознь.
-			var dry: float = clampf(0.70 - 0.75 * lush + 0.30 * GroundLook.meadow_wave(x, y), 0.0, 1.0)
-			var col: Color = Vegetation.C_GRASS_LUSH.lerp(Vegetation.C_GRASS_PALE,
-				clampf(0.28 + 0.50 * (lot3 - 0.5), 0.0, 1.0))
-			col = col.lerp(Vegetation.C_GRASS_DARK, float(lot[9]) * 0.34)
-			col = col.lerp(Vegetation.C_GRASS_WITHER, dry * lerpf(0.20, 0.70, float(lot[10])))
-			# ПОД ПОЛОГОМ ТРАВА ТЕМНЕЕ, и уводится она к тому же подлеску, которым
-			# крашена земля под ней (FOREST_TINT 0.45 — число спайка). Без этого пучок
-			# на лесной ячейке светился лугом посреди тени.
-			if under_canopy:
-				col = col.lerp(TerrainMesh.COVER_COLOURS[cls], TerrainMesh.FOREST_TINT)
-			col *= lerpf(0.92, 1.18, float(lot[11]))
-			# ЛИНЕЙНЫМ: цвет экземпляра MultiMesh движок берёт как есть, ровно как
-			# ARRAY_COLOR (bd recall godot-vertex-color-linear).
-			cl[kind].append(col.srgb_to_linear())
-
-
-## _grass_commit — готовый чанк в дерево сцены. СВОЙ MultiMesh на чанк и на
-## породу: у одного большого поэкземплярного отсечения по пирамиде НЕТ, и трава
-## уходила бы в отрисовку целиком даже вблизи.
-func _grass_commit(job: Dictionary) -> void:
-	var key: Vector3i = job["key"]
-	if _grass_chunks.has(key):
-		var old: Node3D = _grass_chunks[key]
-		_grass_root.remove_child(old)
-		old.queue_free()
-	var node := Node3D.new()
-	node.name = "C%d_%d_L%d" % [key.x, key.y, key.z]
-	# Невидимым до _grass_show: иначе новый уровень встал бы рядом со старым, и
-	# на кадр между постройкой и показом трава удвоилась бы.
-	node.visible = false
-	_grass_root.add_child(node)
-	for k in Vegetation.GRASS_KINDS.size():
-		var kx: Array[Transform3D] = []
-		for t in (job["xf"][k] as Array):
-			kx.append(t)
-		_multimesh(node, "Grass%d" % k, _grass_meshes[k], kx, _grass_mats[k], job["cl"][k], false)
-	_grass_chunks[key] = node
-
-
-## _grass_count — сколько пучков СЕЙЧАС НА ЭКРАНЕ. Считается по видимым чанкам, а
-## не по всем построенным: панель обязана называть то, что нарисовано, иначе
-## число врёт ровно про то, ради чего его смотрят.
-func _grass_count() -> void:
-	var tufts := 0
-	var shown := 0
-	for key in _grass_chunks.keys():
-		var node: Node3D = _grass_chunks[key]
-		if not node.visible:
-			continue
-		shown += 1
-		for mm in node.get_children():
-			tufts += (mm as MultiMeshInstance3D).multimesh.instance_count
-	stats["grass_drawn"] = tufts
-	stats["grass_chunks"] = shown
-	stats["grass_chunks_kept"] = _grass_chunks.size()
+	_grass = GrassFieldScript.new()
+	_grass.setup(_rule, _ground, _ballast_mask, Callable(self, "_camera_plan"),
+		Callable(self, "_multimesh"), stats)
 
 
 ## _camera_plan — где стоит камера В ПЛАНЕ МИРА. Обратное преобразование
@@ -3051,47 +2964,30 @@ func _camera_plan() -> Vector2:
 	return Vector2(p.x, -p.z)
 
 
-## _on_ballast — попадает ли точка под подошву балластной призмы.
-##
-## Маска строится ОДИН РАЗ на ячейках BALLAST_MASK_CELL: проверять каждый пучок
-## против всех точек оси — это сотня тысяч пучков на сотню точек, то есть десятки
-## миллионов сравнений на пересадку. Ось идёт с шагом axis_step_m (5 м на
-## затравке), поэтому вдоль неё она досэмплируется: иначе между соседними точками
-## оси осталась бы незакрытая перемычка.
-const BALLAST_MASK_CELL := 1.0
-
+## _on_ballast — попадает ли точка под подошву балластной призмы ЖИВОЙ маски.
+## Сама маска строится ОДИН РАЗ (VersionRebuild.ballast_mask): проверять каждый
+## пучок против всех точек оси — это сотня тысяч пучков на сотню точек, то есть
+## десятки миллионов сравнений на пересадку.
 func _on_ballast(x: float, y: float) -> bool:
-	if _ballast_mask.is_empty():
+	return _on_ballast_mask(_ballast_mask, x, y)
+
+
+## _on_ballast_mask — попадает ли точка под подошву по ДАННОЙ маске. Живой мир
+## даёт живую маску, перестройка набора — маску нового набора: растительность
+## в стороне не должна сверяться с видимым миром.
+func _on_ballast_mask(mask: Dictionary, x: float, y: float) -> bool:
+	if mask.is_empty():
 		return false
-	return _ballast_mask.has(_mask_key(x, y))
+	return mask.has(_mask_key(x, y))
 
 
 func _mask_key(x: float, y: float) -> int:
-	return int(floor(x / BALLAST_MASK_CELL)) * 100003 + int(floor(y / BALLAST_MASK_CELL))
+	return int(floor(x / GrassFieldScript.BALLAST_MASK_CELL)) * 100003 \
+		+ int(floor(y / GrassFieldScript.BALLAST_MASK_CELL))
 
 
 func _build_ballast_mask(axis: PackedVector2Array, toe_m: float) -> void:
-	_ballast_mask = {}
-	if axis.size() < 2 or toe_m <= 0.0:
-		return
-	var r := toe_m + BALLAST_MASK_CELL
-	for k in axis.size() - 1:
-		var a := axis[k]
-		var b := axis[k + 1]
-		var seg := a.distance_to(b)
-		var steps := maxi(1, int(ceil(seg / (BALLAST_MASK_CELL * 0.5))))
-		for s in steps + 1:
-			var p := a.lerp(b, float(s) / float(steps))
-			var i0 := int(floor((p.x - r) / BALLAST_MASK_CELL))
-			var i1 := int(floor((p.x + r) / BALLAST_MASK_CELL))
-			var j0 := int(floor((p.y - r) / BALLAST_MASK_CELL))
-			var j1 := int(floor((p.y + r) / BALLAST_MASK_CELL))
-			for i in range(i0, i1 + 1):
-				for j in range(j0, j1 + 1):
-					var cx := (float(i) + 0.5) * BALLAST_MASK_CELL
-					var cy := (float(j) + 0.5) * BALLAST_MASK_CELL
-					if Vector2(cx - p.x, cy - p.y).length() <= toe_m:
-						_ballast_mask[i * 100003 + j] = true
+	_ballast_mask = VersionRebuildScript.ballast_mask(axis, toe_m)
 	stats["ballast_mask_cells"] = _ballast_mask.size()
 
 
@@ -3105,6 +3001,10 @@ func _build_ballast_mask(axis: PackedVector2Array, toe_m: float) -> void:
 ## понемногу КАЖДЫЙ кадр, включая кадры движения: задание продолжаемое, и
 ## прерывание в середине чанка ничего не портит.
 func _process(_delta: float) -> void:
+	# Опрос головы проекций идёт САМЫМ ПЕРВЫМ: ему не нужны ни камера, ни трава,
+	# и он не должен ждать их готовности — мир вправе сменить версию в любой
+	# момент, в том числе до первого кадра.
+	_head_poll(_delta)
 	# Отступ камеры меняется зумом, а от него зависит начало глубинной дымки.
 	# Порог в 1 % — чтобы не трогать окружение на каждый кадр панорамы, где
 	# отступ не меняется вовсе.
@@ -3112,19 +3012,18 @@ func _process(_delta: float) -> void:
 		var s := maxf(float(camera.call("standoff_m")), 0.0)
 		if absf(s - _fog_standoff_m) > maxf(1.0, _fog_standoff_m * 0.01):
 			_refresh_fog_depth()
-	if _grass_center == Vector2.INF or camera == null:
-		return
-	if _camera_plan().distance_to(_grass_center) >= GRASS_REPLAN:
-		_grass_plan()
-	var before := _grass_chunks.size()
-	_grass_work(GRASS_BUDGET_US)
-	# Числа в панели обязаны оставаться правдой: пучков стало другое количество, и
-	# старая строка врала бы ровно про то, что проверяют. Но пересчёт только когда
-	# чанков действительно прибыло или убыло — иначе панель пересобиралась бы
-	# каждый кадр ни за чем.
-	if _grass_chunks.size() != before:
-		_grass_count()
-		_refresh_ui()
+	# ПЕРЕСТРОЙКА НАБОРА (sqym.7) идёт РАНЬШЕ ТРАВЫ: это её кадровый бюджет, и
+	# живая трава делит с ней кадр, а не наоборот. Пока набор готовится в
+	# стороне, видимой остаётся старая версия — целиком и без рывков.
+	if _rebuild != null:
+		_rebuild_tick()
+	# Трава живого мира — по бюджету кадра: план пересчитывается на движение
+	# камеры (GRASS_REPLAN), постройка идёт понемногу каждый кадр, задание
+	# продолжаемое (устройство — в grass_field.gd). Числа в панели обязаны
+	# оставаться правдой: поле само говорит, когда чанков стало другое число.
+	if _grass != null and camera != null:
+		if _grass.tick(GrassFieldScript.GRASS_BUDGET_US):
+			_refresh_ui()
 
 
 ## _draw_buildings — постройки из третьего ресурса региона.

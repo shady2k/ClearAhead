@@ -104,8 +104,18 @@ type Field struct {
 	// индекс, намеренно: построек на регион единицы тысяч, а спрашивают их раз
 	// на ячейку покрова, то есть на порядок реже, чем ось.
 	cleared []clearedSpot
+	// buildings — построенные объекты с земляным эффектом: жёсткая площадка
+	// под габаритом и мягкий откос до природной поверхности (sqym.11).
+	// Отдельный список от cleared намеренно: cleared — пятно ВЫРУБКИ (покров),
+	// buildings — площадка и откос (высоты), и два вопроса к ним разные.
+	buildings []buildingField
 	// rivers — русла с готовым индексом оси.
 	rivers []riverField
+	// grading — правки высот (прямой терраморфинг): клетка уровня 0 ->
+	// абсолютная отметка в сантиметрах от base_z. ИСХОДНИК, а не проекция:
+	// правки не ложатся в базу чанков, переживают пересев и собираются в
+	// рабочую поверхность вместе с эффектом оси (см. grading.go).
+	grading map[gradeKey]int16
 }
 
 // riverField — река, приготовленная к запросам: размеры плюс индекс оси.
@@ -137,13 +147,6 @@ type clearedSpot struct {
 
 // buildingClearM — на сколько метров ЗА габарит постройки лес не растёт.
 const buildingClearM = 30.0
-
-func buildingsOf(m *mapfmt.Map) []mapfmt.Building {
-	if m.Objects == nil {
-		return nil
-	}
-	return m.Objects.Buildings
-}
 
 func riversOf(m *mapfmt.Map) []mapfmt.River {
 	if m.Objects == nil {
@@ -339,6 +342,21 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 		})
 	}
 
+	// Постройки: жёсткая площадка под габаритом и мягкий откос до природной
+	// поверхности (sqym.11, building.go). Площадка стоит на отметке природной
+	// поверхности в точке привязки, а NaturalM читает русла, поэтому список
+	// строится ПОСЛЕ рек — иначе площадка встала бы на рельеф без врезки.
+	for _, b := range buildingsOf(m) {
+		f.buildings = append(f.buildings, buildingField{
+			cx:        b.X,
+			cy:        b.Y,
+			heading:   b.Heading,
+			halfW:     b.Width * 0.5,
+			halfD:     b.Depth * 0.5,
+			platformZ: f.NaturalM(b.X, b.Y),
+		})
+	}
+
 	drops := formationDrops(m)
 	for _, e := range els {
 		pts, err := sampleAxis(e, carried[e.ID], drops[e.ID])
@@ -351,6 +369,24 @@ func New(m *mapfmt.Map, els map[string]track.Element) (*Field, error) {
 	// мостам и в тоннелях, земляных работ не имеет вовсе, и поверхность
 	// остаётся природной.
 	f.buildGrid()
+	return f, nil
+}
+
+// NewGraded строит поле с правками высот (прямой терраморфинг).
+//
+// Правки — ИСХОДНИК рядом с картой, а не часть рецепта: New (без правок)
+// остаётся точкой входа для мира без прямого терраморфинга (порождение по
+// требованию, прогрев), а мир с правками идёт сюда — оба пути дают байт в байт
+// одинаковые чанки там, где правок нет, и это тот же инвариант детерминизма,
+// что держит prepare (спека §3).
+func NewGraded(m *mapfmt.Map, els map[string]track.Element, g Grading) (*Field, error) {
+	f, err := New(m, els)
+	if err != nil {
+		return nil, err
+	}
+	if err := f.addGrading(g); err != nil {
+		return nil, err
+	}
 	return f, nil
 }
 
@@ -369,6 +405,12 @@ func (f *Field) buildGrid() {
 // (worldgen) и запись региона обязаны спрашивать ОДНО правило, а не собирать
 // его из рецепта каждый заново.
 func (f *Field) Rule() chunk.Rule { return f.rule }
+
+// Domain — прямоугольник домена региона. Отдаётся наружу затем, что порождение
+// (worldgen) и запись региона обязаны спрашивать ОДИН домен, а не читать его из
+// рецепта каждый заново. Согласованность домена с записью региона держит
+// worldgen.sameDomain, как и для правила подробности.
+func (f *Field) Domain() mapfmt.Domain { return f.recipe.Domain }
 
 // carriedSpans собирает интервалы, на которых путь НЕСОМ искусственным
 // сооружением — мостом или тоннелем, — сгруппированные по элементу.
@@ -679,31 +721,133 @@ func (f *Field) riverAt(x, y float64) (dist, surfaceZ float64, r *riverField, ok
 	return 0, 0, nil, false
 }
 
-// WorkedM возвращает рабочую высоту в метрах — после земляных работ.
-//
-// Правило: под основной площадкой земля лежит на отметке оси; за её кромкой
-// уходит откосом постоянного заложения до природной поверхности. Насыпь
-// поднимает землю, выемка опускает, и ни то ни другое не «проваливается»
-// сквозь природную поверхность — за это отвечают max и min.
-func (f *Field) WorkedM(x, y float64) float64 {
-	natural := f.NaturalM(x, y)
-
+// pathEffect — эффект ОДНОЙ оси пути: жёсткая площадка под основной площадкой
+// и мягкий откос постоянного заложения до природной поверхности. Отделён от
+// композиции нарочно: правка высот (прямой терраморфинг) обязана отличать
+// жёсткую площадку (два жёстких габарита — отказ при расхождении) от мягкого
+// откоса (жёсткое вправе перерезать мягкое), а без этой развилки сравнение
+// сводилось бы к «правка поверх пути» в одном слове.
+func (f *Field) pathEffect(natural, x, y float64) (worked float64, onPlatform bool, platformZ float64) {
 	d, axisZ, ok := f.nearestAxis(x, y)
 	if !ok {
-		return natural
+		return natural, false, 0
 	}
 	half := f.recipe.Earthworks.FormationHalfWidth
 	if d <= half {
-		return axisZ
+		return axisZ, true, axisZ
 	}
 	// Перепад, который откос успевает набрать на расстоянии (d - half).
 	drop := (d - half) / f.recipe.Earthworks.SideSlope
 	if natural < axisZ {
 		// Насыпь: спускаемся от площадки, но не ниже природной земли.
-		return math.Max(natural, axisZ-drop)
+		return math.Max(natural, axisZ-drop), false, 0
 	}
 	// Выемка: поднимаемся от площадки, но не выше природной земли.
-	return math.Min(natural, axisZ+drop)
+	return math.Min(natural, axisZ+drop), false, 0
+}
+
+// effectsAt — композиция земляных эффектов в точке: путь и постройки.
+//
+// Каждый эффект — чистая функция природной поверхности и своего исходника
+// (§3), и собраны они по правилам §6.2:
+//
+//   - жёсткие площадки (основная площадка пути, площадки построек) в одной
+//     точке обязаны совпасть в пределах квантования — две отметки одного
+//     места несовместимы, отказ (§4.2), а не «последний победил»;
+//   - мягкие области складываются огибающими: две насыпи — верхняя (max),
+//     две выемки — нижняя (min);
+//   - пересечение насыпи и выемки — отказ, пока не объявлено сооружение.
+//
+// Возвращает рабочую отметку, признак жёсткой площадки и её отметку. Ошибка —
+// отказ композиции; канал без ошибки (WorkedM) ошибку гасит, потому что
+// авторитетный канал компиляции — HeightCm.
+func (f *Field) effectsAt(natural, x, y float64) (worked float64, onPlatform bool, platformZ float64, err error) {
+	var (
+		platSet bool
+		platZ   float64
+		hasFill bool
+		fillMax float64
+		hasCut  bool
+		cutMin  float64
+	)
+	// addEffect кладёт один эффект в композицию. Жёсткие габариты в одной
+	// точке сравниваются в округлённых сантиметрах — ровно в той единице, в
+	// которой обе отметки попадут в провод; допуска нет (спека §8.5),
+	// расхождение — отказ, а не компромисс (§4.2).
+	addEffect := func(w float64, onP bool, pz float64) error {
+		if onP {
+			if !platSet {
+				platSet, platZ = true, pz
+				return nil
+			}
+			pc := math.Round((pz - f.recipe.BaseZ) * 100)
+			pc0 := math.Round((platZ - f.recipe.BaseZ) * 100)
+			if pc != pc0 {
+				return fmt.Errorf(
+					"terrain: в (%v, %v) две жёсткие площадки на разных отметках %d и %d см — два несовместимых жёстких габарита (спека §4.2); отказ, а не компромисс",
+					x, y, int64(pc), int64(pc0))
+			}
+			return nil
+		}
+		switch {
+		case w > natural:
+			if !hasFill || w > fillMax {
+				fillMax, hasFill = w, true
+			}
+		case w < natural:
+			if !hasCut || w < cutMin {
+				cutMin, hasCut = w, true
+			}
+		}
+		return nil
+	}
+	pw, pon, pz := f.pathEffect(natural, x, y)
+	if err := addEffect(pw, pon, pz); err != nil {
+		// Первая найденная площадка — детерминированный ответ канала без
+		// ошибки (WorkedM): путь обрабатывается раньше построек, порядок
+		// фиксирован. Мир с конфликтом не компилируется — отказ в HeightCm.
+		return platZ, true, platZ, err
+	}
+	for _, b := range f.buildings {
+		bw, bon, bz := f.buildingEffect(natural, x, y, b)
+		if err := addEffect(bw, bon, bz); err != nil {
+			return platZ, true, platZ, err
+		}
+	}
+	if platSet {
+		return platZ, true, platZ, nil
+	}
+	if hasFill && hasCut {
+		// Мир с таким конфликтом не компилируется (отказ в HeightCm), и канал
+		// без ошибки отвечает детерминированно: верхняя огибающая.
+		return math.Max(fillMax, cutMin), false, 0, fmt.Errorf(
+			"terrain: в (%v, %v) насыпь %v м пересекается с выемкой %v м — пересечение насыпи и выемки — отказ (спека §6.2)",
+			x, y, fillMax, cutMin)
+	}
+	if hasFill {
+		return fillMax, false, 0, nil
+	}
+	if hasCut {
+		return cutMin, false, 0, nil
+	}
+	return natural, false, 0, nil
+}
+
+// WorkedM возвращает рабочую высоту в метрах — после земляных работ и правок.
+//
+// Композиция эффектов — в effectsAt: жёсткие площадки пути и построек,
+// мягкие откосы по огибающим §6.2. Правка высот (прямой терраморфинг)
+// ложится ПОВЕРХ в покрытых клетках: она жёсткий габарит, и мягкий откос её
+// не двигает (спека §4.1). Несовместимость правки с жёсткой площадкой (пути
+// ИЛИ постройки) WorkedM молча не решает — это отказ, и живёт он в HeightCm,
+// умеющем возвращать ошибку.
+func (f *Field) WorkedM(x, y float64) float64 {
+	natural := f.NaturalM(x, y)
+	worked, _, _, _ := f.effectsAt(natural, x, y)
+	if h, ok := f.gradingHeightM(x, y); ok {
+		return h
+	}
+	return worked
 }
 
 // HeightCm возвращает рабочую высоту как целые сантиметры ОТНОСИТЕЛЬНО base_z.
@@ -712,7 +856,28 @@ func (f *Field) WorkedM(x, y float64) float64 {
 // Переполнение — отказ, а не обрезание: молча приведённая к границе высота
 // выглядела бы как плоскогорье ровно на краю диапазона.
 func (f *Field) HeightCm(x, y float64) (int16, error) {
-	cm := math.Round((f.WorkedM(x, y) - f.recipe.BaseZ) * 100)
+	natural := f.NaturalM(x, y)
+	worked, onPlatform, platformZ, err := f.effectsAt(natural, x, y)
+	if err != nil {
+		return 0, err
+	}
+	if h, ok := f.gradingAt(x, y); ok {
+		if onPlatform {
+			// Два несовместимых жёстких габарита: правка на отметке h, а
+			// жёсткая площадка (пути или постройки) лежит на платформе.
+			// Сравнение в округлённых сантиметрах — ровно в той единице, в
+			// которой обе отметки попадут в провод; допуска нет (спека
+			// §8.5), расхождение — отказ, а не компромисс (§4.2).
+			pc := math.Round((platformZ - f.recipe.BaseZ) * 100)
+			if pc != float64(h) {
+				return 0, fmt.Errorf(
+					"terrain: в (%v, %v) правка высот %d см против жёсткой площадки %d см — два несовместимых жёстких габарита (спека §4.2); отказ, а не компромисс",
+					x, y, h, int64(pc))
+			}
+		}
+		worked = f.recipe.BaseZ + float64(h)/100
+	}
+	cm := math.Round((worked - f.recipe.BaseZ) * 100)
 	if cm > math.MaxInt16 || cm < math.MinInt16 {
 		return 0, fmt.Errorf("terrain: высота в (%v, %v) не помещается в int16 сантиметров относительно base_z: %v см", x, y, cm)
 	}

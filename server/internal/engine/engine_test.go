@@ -8,13 +8,19 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
+	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
+// loco1ID — идентификатор локомотива фикстуры: UUIDv7 боевой расстановки
+// (maps/st_a_placement.json, метка LOCO_1). Движок тождество не проверяет —
+// константа держит фикстуру согласованной с остальными тестами.
+const loco1ID = "01a3185c-6001-7242-8242-000000424242"
+
 func fixture() *match.Match {
 	return &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
-		ID: "LOCO_1", Type: "VL80",
-		At: netloc.PointU{Element: "E_MAIN", U: 150, Direction: netloc.DirForward},
+		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
+		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
 	}}}
 }
 
@@ -120,7 +126,7 @@ func TestSnapshotIsCopyNotView(t *testing.T) {
 	s.Match.Units[0].ID = "ПОРЧА"
 	s.Match.Region = "ST_B"
 	again := e.Snapshot()
-	if again.Match.Units[0].ID != "LOCO_1" {
+	if again.Match.Units[0].ID != loco1ID {
 		t.Fatalf("единица в движке стала %q — снимок оказался видом, а не копией",
 			again.Match.Units[0].ID)
 	}

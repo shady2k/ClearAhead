@@ -93,6 +93,17 @@ func Propagate(m *mapfmt.Map) (map[Incidence]PortPose, map[string]Element, error
 	if err != nil {
 		return nil, nil, err
 	}
+	// Читаемые метки элементов — для текстов отказов: UUID не читается,
+	// рядом с меткой (как в compile.go) ошибка называет элемент.
+	names := make(map[string]string, len(m.Topology.Edges)+2*len(m.Topology.Turnouts))
+	for _, e := range m.Topology.Edges {
+		names[e.ID] = e.Name
+	}
+	for _, t := range m.Topology.Turnouts {
+		for _, ps := range t.Passages() {
+			names[ps.ID] = t.Name
+		}
+	}
 
 	byPort := map[string][]Incidence{}
 	ids := make([]string, 0, len(els))
@@ -203,7 +214,7 @@ func Propagate(m *mapfmt.Map) (map[Incidence]PortPose, map[string]Element, error
 	for id, e := range els {
 		p, ok := poses[e.fromInc()]
 		if !ok {
-			return nil, nil, fmt.Errorf("track: элемент %s в компоненте без якоря", id)
+			return nil, nil, fmt.Errorf("track: элемент %s в компоненте без якоря", mapfmt.Labeled(names[id], id))
 		}
 		e.Start = p
 		els[id] = e

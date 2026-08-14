@@ -3,22 +3,30 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/content"
+	"github.com/shady2k/ClearAhead/server/internal/edit"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/httpapi"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/match"
+	"github.com/shady2k/ClearAhead/server/internal/sourcestore"
+	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 	"github.com/shady2k/ClearAhead/server/internal/worldgen"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
+
+	_ "modernc.org/sqlite"
 )
 
 // worldRevision — ревизия, которой помечается статический ярус мира.
@@ -48,6 +56,13 @@ func main() {
 	// умолчание работает при запуске из server/. Makefile всё равно передаёт
 	// абсолютный путь — умолчание удобно человеку, а не цели сборки.
 	mapPath := flag.String("map", mapfmt.ShippedMapPath, "файл карты мира")
+	// ИСХОДНИКИ ПАРТИИ — ОТДЕЛЬНАЯ база рядом с проекциями (sqym.18). Сторож
+	// assertProjectionsOnly требует, чтобы база проекций несла ТОЛЬКО проекции;
+	// исходники (закоммиченная карта, правки высот, вырубка, журнал коммитов)
+	// живут здесь и -reseed их не касается вовсе: проекцию сносить можно всегда,
+	// исходник — нет (решение W6-B). Путь отдельный, потому что сносить эти два
+	// файла нельзя одним движением.
+	sourcesPath := flag.String("sources", "sources.db", "файл базы исходников партии")
 	// Пересоздание мира — решение ТОГО, КТО ЗАПУСКАЕТ, и потому ключ, а не
 	// поведение бутстрапа: worldgen.Bootstrap идемпотентен нарочно.
 	//
@@ -62,6 +77,19 @@ func main() {
 	// собственного разбора «ture» как опечатки. Переменная читается молча — а
 	// молча сносить базу нельзя.
 	reseed := flag.Bool("reseed", false, "снести базу мира перед стартом и засеять заново")
+	// ПРОГРЕВ — КЭШ, А НЕ ЧАСТЬ МИРА (решение владельца 2026-08-13, спека §4).
+	//
+	// Бутстрап больше не греет чанки: он заводит запись региона, а всё
+	// остальное порождение по требованию считает само. Прогрев включается
+	// ЗДЕСЬ, явно, тем, кто запускает, и только для СВЕЖЕГО засева — греть
+	// существующую базу заново означало бы пересчитывать весь мир при каждом
+	// старте (полный пересчёт региона — около семи минут машинного времени,
+	// спека §8.1).
+	//
+	// Умолчание включено, чтобы цикл разработки (make dev с -reseed) получал
+	// тёплый мир, как и до отвязки; оператор большой карты снимает флаг и
+	// полагается на порождение по требованию с его бюджетом и очередью.
+	preheat := flag.Bool("preheat", true, "греть свежезасеянный мир чанками (кэш, а не правильность)")
 	// САМОЗАВЕРШЕНИЕ. Ноль значит «работать, пока не остановят», и это умолчание:
 	// игровой сервер, гаснущий сам, — не сервер.
 	//
@@ -109,10 +137,36 @@ func main() {
 		}
 	}
 
+	// ИСХОДНИКИ ПАРТИИ: закоммиченное поднимается из sourcestore, а не
+	// сочиняется заново. Сервис правок — шов, за который будущий транспорт
+	// (шаг 12 эпика) дернёт модель; сегодня он держит закоммиченный мир и
+	// исходники, и компиляторы мира читают их через него.
+	sources, err := sourcestore.Open(*sourcesPath)
+	if err != nil {
+		log.Fatalf("база исходников %s: %v", *sourcesPath, err)
+	}
+	defer sources.Close()
+	editSvc, err := edit.NewServiceStored(sources, worldMap, uuidv7.New)
+	if err != nil {
+		log.Fatalf("сервис правок: %v", err)
+	}
+	committed := editSvc.Committed()
+	veg, err := sources.GetVegetation()
+	if err != nil {
+		log.Fatalf("растительность из базы исходников: %v", err)
+	}
+	src := worldgen.Sources{Grading: editSvc.Grading(), Vegetation: veg}
+	if n := editSvc.JournalSeq(); n > 0 {
+		log.Printf("исходники партии: журнал коммитов %d, правок высот %d, рубок %d",
+			n, len(src.Grading.Cells), len(src.Vegetation.Cuts))
+	}
+
 	// Одна и та же карта для сети в памяти и для мира в базе: иначе сеть
-	// описывала бы одну станцию, а рельеф — другую.
+	// описывала бы одну станцию, а рельеф — другую. Карта здесь —
+	// ЗАКОММИЧЕННАЯ (файл плюс принятые правки пути): сеть, которую видит
+	// клиент, обязана описывать мир, который лежит в базе.
 	store := mapstore.Open()
-	st, err := store.Set(worldMap)
+	st, err := store.Set(&committed)
 	if err != nil {
 		log.Fatalf("карта %s не проходит вход: %v", *mapPath, err)
 	}
@@ -125,16 +179,41 @@ func main() {
 	}
 	defer world.Close()
 
-	// Бутстрап идемпотентен: заполняет только пустую базу.
-	rep, seeded, err := worldgen.Bootstrap(world, worldMap, worldRevision, provenanceOf(*mapPath))
+	// Бутстрап идемпотентен: заводит регион, чанков не трогает (прогрев — кэш,
+	// включается ниже явно, а не подразумевается бутстрапом).
+	rep, seeded, err := worldgen.Bootstrap(world, &committed, worldRevision, provenanceOf(*mapPath))
 	if err != nil {
 		log.Fatalf("бутстрап мира: %v", err)
 	}
 	if seeded {
-		log.Printf("мир засеян: регион %s, чанков %d, %.1f МБ",
-			rep.Region, rep.TotalChunks, float64(rep.TotalBytes)/1e6)
+		log.Printf("мир засеян: регион %s (домен x [%v, %v] z [%v, %v])",
+			rep.Region, worldMap.Terrain.Domain.MinX, worldMap.Terrain.Domain.MaxX,
+			worldMap.Terrain.Domain.MinZ, worldMap.Terrain.Domain.MaxZ)
 	} else {
 		log.Printf("мир уже есть: регион %s, база не тронута", rep.Region)
+	}
+
+	// Прогрев: явный шаг того, кто запускает, и только для свежего засева
+	// (см. ключ -preheat выше). Порождение по требованию уже построено ниже и
+	// посчитает всё недостающее само — прогрев лишь делает первые запросы
+	// клиента попаданиями в базу.
+	//
+	// Строки ложатся ПОД ВЕРСИЮ МИРА, которую назвала голова проекций:
+	// бутстрап завёл её версией 1, и прогрев обязан совпасть с ней, иначе
+	// разошлись бы неверсионный адрес (текущий мир) и версионные (публикации).
+	if *preheat && seeded {
+		head, ok, err := world.GetProjectionHead(rep.Region)
+		if err != nil {
+			log.Fatalf("голова проекций: %v", err)
+		}
+		if !ok {
+			log.Fatalf("голова проекций региона %s не заведена", rep.Region)
+		}
+		warm, err := worldgen.GenerateSources(world, &committed, src, rep.Region, worldRevision, head.WorldVersion)
+		if err != nil {
+			log.Fatalf("прогрев мира: %v", err)
+		}
+		log.Printf("мир прогрет: чанков %d, %.1f МБ", warm.TotalChunks, float64(warm.TotalBytes)/1e6)
 	}
 
 	// Порождение по требованию строится ОДИН РАЗ на старте, а не на запрос.
@@ -154,7 +233,7 @@ func main() {
 	// Отказ здесь — отказ СТАРТА, а не тихая работа без порождения: сервер,
 	// который не может посчитать недостающее, отвечал бы пустотой там, где
 	// земля есть, и клиенту это было бы неотличимо от края мира.
-	lazy, err := worldgen.NewLazy(world, worldMap, rep.Region, worldRevision)
+	lazy, err := worldgen.NewLazySources(world, &committed, src, rep.Region, worldRevision)
 	if err != nil {
 		log.Fatalf("порождение чанков по требованию: %v", err)
 	}
@@ -175,6 +254,16 @@ func main() {
 	// Набор контента — ТРЕТЬЕ хранилище рядом с картой и миром, и появление его
 	// добавило строку сюда, не тронув ни одного существующего обработчика:
 	// ровно то, ради чего композиция и живёт в main.
+	// КОМПИЛЯТОР АДРЕСНОЙ ПЕРЕСБОРКИ — часть боевой композиции (sqym.18):
+	// замыкание по правке, пересборка ровно затронутых чанков, публикация под
+	// новой версией мира. Несёт с собой правки высот и вырубку (src) и позицию
+	// журнала коммитов (editSvc.JournalSeq): пересобранный мир обязан быть
+	// построен ДО той же позиции журнала, которую назовёт голова проекций.
+	// Сегодня его держит только композиция — ручки команд строителя это шаг 12
+	// эпика, и до них Rebuild зовётся лишь из тестов.
+	compiler := worldgen.NewCompilerSources(world, rep.Region, worldRevision, editSvc.JournalSeq(), src)
+	_ = compiler
+
 	set, err := content.Load(*contentDir)
 	if err != nil {
 		log.Fatalf("набор контента (ключ -content): %v", err)
@@ -228,6 +317,10 @@ func main() {
 		httpapi.NewObjectsHandler(store),
 		httpapi.NewLiveHandler(sim),
 	))
+	// ВЕРСИОННЫЕ АДРЕСА МИРА (sqym.5): /matches/{m}/worlds/{v}/… отдают
+	// замороженные публикации с immutable. Матч один (matchID), регион — тот,
+	// что засеял бутстрап; каталог партий появится вместе со второй партией.
+	mux.Handle("/matches/", httpapi.NewWorldsHandler(matchID, rep.Region, world))
 	// Набор контента и байты ассетов — БЕЗ региона в адресе, и это решение, а не
 	// экономия: «ВЛ80 — общий контент, к карте отношения не имеет» (владелец,
 	// 2026-08-13). Блоб под регионом означал бы, что второй регион качает те же
@@ -288,6 +381,19 @@ func provenanceOf(path string) string {
 
 // dropWorld сносит базу мира ЦЕЛИКОМ и говорит, что снёс.
 //
+// # Что сносится и что нет — решение W6-B (бида ClearAhead-26g)
+//
+// Сносится ПРОЕКЦИЯ: чанки, регионы, головы проекций, тела сетей. Исходники
+// сносу не подлежат — карта живёт файлом, а закоммиченное партии (правки
+// высот, вырубка, журнал коммитов, закоммиченная карта) — в ОТДЕЛЬНОЙ базе
+// sourcestore (ключ -sources), которой -reseed не касается вовсе: проекцию
+// сносить можно всегда, исходник — нет. Выбран первый рог развилки из брифа
+// W6-B: правки хранятся ОТДЕЛЬНО от развёрнутых чанков и переживают пересев
+// (чанк остаётся производным, исходник живёт своей жизнью). В базу чанков
+// исходники не ложатся НИКОГДА, и пересев не может их стереть — это держит
+// сторож assertProjectionsOnly; сам сторож и хранилище, которое он
+// подразумевает, разведены по двум файлам (sqym.18).
+//
 // # Почему удаление файла, а не удаление региона средствами worldstore
 //
 // Точнее было бы снести один регион с его чанками: файл может нести и то, чего
@@ -312,6 +418,12 @@ func dropWorld(path string) error {
 		return nil
 	}
 	if err != nil {
+		return err
+	}
+
+	// Сторож исходников: база, несущая таблицы вне набора проекций, — база с
+	// работой игрока внутри, и -reseed обязан отказать, а не стереть.
+	if err := assertProjectionsOnly(path); err != nil {
 		return err
 	}
 
@@ -348,5 +460,59 @@ func dropWorld(path string) error {
 	}
 	log.Printf("пересоздание мира: база %s снесена — было %d чанков, %.1f МБ на диске",
 		path, chunks, float64(info.Size())/1e6)
+	return nil
+}
+
+// projectionTables — таблицы, которые мир держит в базе: регионы, чанки,
+// головы проекций, тела сетей. ВСЁ это проекции, и сносить их можно всегда.
+// Таблицы-исходники (журнал партии, правки высот) в набор НЕ входят: их снос
+// уничтожил бы работу игрока и выглядел бы как «правка не сработала» — отказ
+// без следа, худший вид дефекта. Список обязан расти вместе со схемой
+// worldstore: таблица вне набора не «ломает» -reseed, а честно его
+// останавливает, и остановка читается как сигнал — сознательно расширить
+// набор или не сносить.
+var projectionTables = map[string]bool{
+	"regions":          true,
+	"chunks":           true,
+	"projection_heads": true,
+	"network_versions": true,
+}
+
+// assertProjectionsOnly проверяет, что база несёт ТОЛЬКО проекции.
+//
+// Сторож решения W6-B: пересев сносит проекции и не трогает исходники.
+// Сегодня база проекции и есть — правки живут с закоммиченным миром, — но
+// сторож стоит не для сегодняшнего дня, а для того дня, когда в базе появится
+// таблица-исходник: молчаливый снос такой базы стёр бы работу игрока, и
+// выглядело бы это как «правка не сработала». Отказ, а не подстановка:
+// названная таблица — факт, и решает по нему человек, а не код.
+func assertProjectionsOnly(path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return fmt.Errorf("пересоздание мира: открыть базу %s для проверки: %w", path, err)
+	}
+	defer db.Close()
+	rows, err := db.Query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`)
+	if err != nil {
+		return fmt.Errorf("пересоздание мира: чтение таблиц базы %s: %w", path, err)
+	}
+	defer rows.Close()
+	var foreign []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return fmt.Errorf("пересоздание мира: чтение таблиц базы %s: %w", path, err)
+		}
+		if !projectionTables[name] {
+			foreign = append(foreign, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("пересоздание мира: чтение таблиц базы %s: %w", path, err)
+	}
+	if len(foreign) > 0 {
+		return fmt.Errorf("пересоздание мира: база %s несёт таблицы-исходники: %s — снос уничтожил бы работу игрока; пересев сносит только проекции (решение W6-B)",
+			path, strings.Join(foreign, ", "))
+	}
 	return nil
 }

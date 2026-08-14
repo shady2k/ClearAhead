@@ -30,6 +30,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/track"
+	"github.com/shady2k/ClearAhead/server/internal/vegetation"
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
@@ -42,56 +43,57 @@ type Report struct {
 	TotalBytes  int
 }
 
-// Generate разворачивает карту в чанки и пишет их в базу.
+// Generate разворачивает карту в чанки и пишет их в базу ПОД ВЕРСИЕЙ МИРА.
+//
+// Прогрев — КЭШ текущего мира (спека §4): строки ложатся под версией, которую
+// назвала голова проекций (бутстрап завёл её первой), и байт в байт равны
+// тому, что посчитало бы порождение по требованию под той же версией.
 //
 // Регион должен быть заведён заранее: у него своя геопривязка и своё
 // происхождение, и придумывать их за автора конвейер не вправе.
-func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision int64) (Report, error) {
-	rep := Report{Region: region, ByLevel: map[int]int{}}
+func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision, worldVersion int64) (Report, error) {
+	return GenerateGraded(s, m, terrain.Grading{}, region, revision, worldVersion)
+}
 
-	sel, err := prepare(s, m, region)
-	if err != nil {
-		return rep, err
-	}
-	field := sel.field
-	baseZmm := int64(math.Round(field.BaseZ() * 1000))
+// GenerateGraded — Generate над миром с правками высот: прямой терраморфинг
+// входит в поле тем же путём входа, что и карта. Правки — исходник, и прогрев
+// над ними даёт ровно ту землю, которую клиент получит после пересева: чанк —
+// проекция, её можно сносить и считать заново, правка от этого не теряется
+// (переживает НАСТОЯЩИЙ перезапуск — TestGradingSurvivesRestartThroughComposition).
+func GenerateGraded(s *worldstore.Store, m *mapfmt.Map, g terrain.Grading, region string, revision, worldVersion int64) (Report, error) {
+	return GenerateSources(s, m, Sources{Grading: g}, region, revision, worldVersion)
+}
 
-	_, _, err = walk(sel, region, sel.covers, func(a chunk.Address) error {
-		heights, err := field.ChunkHeights(a)
-		if err != nil {
-			return err
-		}
-		// Покров разворачивается тем же проходом, что и высоты, а не отдельным:
-		// оба берутся из одного рецепта в одних координатах, и второй обход
-		// стоил бы ровно столько же, сколько первый, ради разделения, которого
-		// никто не просил. nil означает карту без рецепта покрова — законное
-		// состояние, отличимое от пустого покрова.
-		cover, err := field.ChunkCover(a)
-		if err != nil {
-			return err
-		}
-		// Лес считается ИЗ ПОКРОВА, а не из рецепта заново: инвариант «бит
-		// только в лесном классе» так держится по построению, а не проверкой.
-		forest := field.ChunkForest(a, cover)
-		if err := s.PutChunk(worldstore.Chunk{
-			Address:  a,
-			Revision: revision,
-			BaseZmm:  baseZmm,
-			Heights:  heights,
-			Cover:    cover,
-			Forest:   forest,
-		}); err != nil {
-			return err
-		}
-		rep.ByLevel[a.Level]++
-		rep.TotalChunks++
-		rep.TotalBytes += chunk.HeightsBytes + len(cover) + len(forest)
-		return nil
-	})
+// chunkAt считает полную строку чанка из поля: высоты, покров, лес — тем же
+// рецептом и в тех же координатах, что прогрев (Generate), порождение по
+// требованию (Lazy.compute) и пересборка (Compiler): чанк, посчитанный любым
+// путём, обязан выйти байт в байт одинаковым (детерминизм §3 контракта —
+// то же, что держит инвариант prepare). Покров nil означает карту без рецепта
+// покрова — законное состояние, отличимое от пустого покрова; лес — ПРОЕКЦИЯ
+// рецепта (projectForest): из покрова, минус вырубка плюс посадка, и инвариант
+// «бит только в лесном классе» держится по построению, а не проверкой.
+func chunkAt(field *terrain.Field, baseZmm int64, a chunk.Address, revision, worldVersion int64, veg vegetation.Sources) (worldstore.Chunk, error) {
+	heights, err := field.ChunkHeights(a)
 	if err != nil {
-		return rep, err
+		return worldstore.Chunk{}, err
 	}
-	return rep, nil
+	cover, err := field.ChunkCover(a)
+	if err != nil {
+		return worldstore.Chunk{}, err
+	}
+	forest, err := projectForest(field, a, cover, veg)
+	if err != nil {
+		return worldstore.Chunk{}, err
+	}
+	return worldstore.Chunk{
+		Address:      a,
+		WorldVersion: worldVersion,
+		Revision:     revision,
+		BaseZmm:      baseZmm,
+		Heights:      heights,
+		Cover:        cover,
+		Forest:       forest,
+	}, nil
 }
 
 // prepare проводит карту полным путём входа и собирает выбор клеток для
@@ -107,7 +109,7 @@ func Generate(s *worldstore.Store, m *mapfmt.Map, region string, revision int64)
 // Lazy знает ровно то же, что Generate, — разошлась бы с первой на первом же
 // расширении пути входа, и разошлась бы МОЛЧА: расхождение видно только тому,
 // кто сравнит байты чанка, посчитанного двумя способами.
-func prepare(s *worldstore.Store, m *mapfmt.Map, region string) (selector, error) {
+func prepare(s *worldstore.Store, m *mapfmt.Map, region string, g terrain.Grading) (selector, error) {
 	reg, ok, err := s.GetRegion(region)
 	if err != nil {
 		return selector{}, err
@@ -128,14 +130,14 @@ func prepare(s *worldstore.Store, m *mapfmt.Map, region string) (selector, error
 	if m.Terrain == nil {
 		return selector{}, fmt.Errorf("worldgen: у карты нет рельефа; порождать нечего")
 	}
-	field, err := terrain.New(m, els)
+	// Правки высот (прямой терраморфинг) — ИСХОДНИК рядом с картой: они
+	// приходят отдельным аргументом, а не полем карты (карта — рецепт
+	// природы, правки — собственность партии). Пустое множество — тот же
+	// мир, что и без аргумента вовсе: NewGraded с пустым множеством даёт
+	// байт в байт то же поле, что New (инвариант детерминизма §3).
+	field, err := terrain.NewGraded(m, els, g)
 	if err != nil {
 		return selector{}, fmt.Errorf("worldgen: рельеф: %w", err)
-	}
-
-	minX, minY, maxX, maxY, ok := field.Bounds()
-	if !ok {
-		return selector{}, fmt.Errorf("worldgen: у карты нет ни одной точки оси")
 	}
 
 	// Правило подробности берётся у поля, а не у пакета chunk: охват — свойство
@@ -146,8 +148,22 @@ func prepare(s *worldstore.Store, m *mapfmt.Map, region string) (selector, error
 	if err := sameRule(region, reg.Rule, rule); err != nil {
 		return selector{}, err
 	}
+	// Домен — та же сверка другим числом: существование клеток в базе объявлено
+	// тем доменом, которым засеян регион, и клиент читает его манифестом.
+	// Разошлись домены — манифест обещает одну границу мира, а база отвечает
+	// клетками другой, и расхождение видно только глазами на снимке.
+	if err := sameDomain(region, reg.Domain, field.Domain()); err != nil {
+		return selector{}, err
+	}
 
-	return selector{field: field, rule: rule, minX: minX, minY: minY, maxX: maxX, maxY: maxY}, nil
+	// Габарит оси больше НЕ условие существования: он нужен обходу прогрева
+	// (walk) и отсеву дальних клеток (intersectsDisc), а существует ли клетка
+	// вообще, решает домен (inExtent). Карта без единого метра пути — законное
+	// состояние: поле, правило и домен у неё есть, обход прогрева пуст, а
+	// земляные работы не применяются (рабочая поверхность равна природной).
+	sel := selector{field: field, rule: rule, domain: field.Domain()}
+	sel.minX, sel.minY, sel.maxX, sel.maxY, sel.hasAxis = field.Bounds()
+	return sel, nil
 }
 
 // sameRule сверяет правило региона с правилом карты.
@@ -172,12 +188,41 @@ func sameRule(region string, stored, want chunk.Rule) error {
 	return nil
 }
 
-// selector — правило покрытия, применённое к одному полю. Габарит оси хранится
-// рядом с полем: он нужен и обходу, и отсеву дальних клеток.
+// sameDomain сверяет домен региона с доменом карты.
+//
+// Тот же класс, что sameRule: чанки в базе существуют В ГРАНИЦАХ домена,
+// которым засеян регион, и по нему же клиент понимает, где мир кончается
+// (манифест берёт числа у региона). Разошлись домены — мир снаружи выглядит
+// исправным, а манифест обещает одну границу, база отвечает клетками другой.
+// Пересев молча запрещён: решает тот, кто запускает (ключ -reseed).
+//
+// Вырожденный сохранённый домен — база прежней сборки, в которой домена не
+// было вовсе: сверять там не с чем, и отказ называет способ починки.
+func sameDomain(region string, stored, want mapfmt.Domain) error {
+	if !stored.Known() {
+		return fmt.Errorf("worldgen: у региона %s не записан домен: база засеяна сборкой, в которой существование мира выводилось из оси; пересоздайте базу ключом -reseed",
+			region)
+	}
+	if stored != want {
+		return fmt.Errorf("worldgen: регион %s засеян доменом x [%v, %v] z [%v, %v], а карта требует x [%v, %v] z [%v, %v]; пересоздайте базу ключом -reseed",
+			region, stored.MinX, stored.MaxX, stored.MinZ, stored.MaxZ,
+			want.MinX, want.MaxX, want.MinZ, want.MaxZ)
+	}
+	return nil
+}
+
+// selector — правило покрытия, применённое к одному полю.
+//
+// Домен хранится рядом с полем и решает СУЩЕСТВОВАНИЕ клетки (inExtent);
+// габарит оси хранится для обхода прогрева (walk) и отсева дальних клеток
+// (intersectsDisc) и существование НЕ решает. Отсутствие оси (hasAxis == false)
+// — законное состояние карты без пути, и тогда обход прогрева пуст.
 type selector struct {
 	field                  *terrain.Field
 	rule                   chunk.Rule
+	domain                 mapfmt.Domain
 	minX, minY, maxX, maxY float64
+	hasAxis                bool
 }
 
 // probesPerSide — на сколько частей делится сторона клетки, когда решить о ней
@@ -241,24 +286,37 @@ const probesPerSide = 16
 // (прежняя оценка в chunk давала 388 МБ — сходится), 517 МБ по центру, 648 МБ
 // по телу.
 func (s selector) covers(a chunk.Address) bool {
-	return s.intersectsDisc(a, s.rule.RadiusM(a.Level))
+	// Прогрев — подмножество существования, а не пересечение с ним: клетка,
+	// порождённая прогревом за пределами домена, лежала бы в базе и отдавалась
+	// бы по попаданию, хотя домен объявляет её пустотой. Существование решает
+	// домен — и для прогрева тоже, иначе прогрев рисовал бы землю там, где
+	// манифест обещает конец мира.
+	return s.inExtent(a) && s.intersectsDisc(a, s.rule.RadiusM(a.Level))
 }
 
 // inExtent — существует ли клетка в мире ВООБЩЕ, на своём уровне или нет.
 //
-// Это граница, которую ключ terrain.extent объявляет наружу: мир простирается
-// на ReachM от оси и не дальше. Вопрос отделён от covers, потому что отвечает на
-// другое: covers говорит, что кладёт в базу ПРОГРЕВ, а inExtent — что вправе
-// посчитать порождение по требованию (lazy.go).
+// Это граница, которую ДОМЕН объявляет наружу: мир простирается до
+// прямоугольника домена и не дальше. До 2026-08-13 охват мерился от ОСИ
+// (ReachM от рельсов), и карта без единого метра пути не имела ни габарита, ни
+// критерия существования (спека §0.2 п. 6, §4). Вопрос отделён от covers,
+// потому что отвечает на другое: covers говорит, что кладёт в базу ПРОГРЕВ, а
+// inExtent — что вправе посчитать порождение по требованию (lazy.go).
 //
 // Разница между ними и есть весь смысл ленивого порождения. Прогрев кладёт
 // клетку уровня L только внутри R_L: подробность выбрана БЛИЗОСТЬЮ К ПУТИ, и в
 // трёх километрах от рельсов уровня 0 нет ни одного. Камера же выбирает
 // подробность тем, куда смотрит, и вправе спросить уровень 0 в любом месте
-// мира. Внутри ReachM такой запрос теперь считается, за ним — по-прежнему
+// домена. Внутри прямоугольника такой запрос считается, за ним — по-прежнему
 // пустота, потому что земли там нет ни для кого.
 func (s selector) inExtent(a chunk.Address) bool {
-	return s.intersectsDisc(a, s.rule.ReachM())
+	side := chunk.SideM(a.Level)
+	x0, z0 := a.OriginM()
+	// Прямоугольный тест, а не расстояние до оси: тело клетки пересекает домен
+	// (rectGap == 0) — клетка существует. Клетка, входящая в домен лишь углом,
+	// существует целиком: она и так считается вся, и её пересечение с доменом
+	// неотличимо от пересечения любой другой её точки.
+	return rectGap(x0, z0, x0+side, z0+side, s.domain.MinX, s.domain.MinZ, s.domain.MaxX, s.domain.MaxZ) == 0
 }
 
 // intersectsDisc — пересекает ли ТЕЛО клетки круг радиуса r вокруг оси.
@@ -269,6 +327,11 @@ func (s selector) inExtent(a chunk.Address) bool {
 // бы с первой ровно там, где это никто не проверяет: на кайме шириной в метр по
 // краю мира.
 func (s selector) intersectsDisc(a chunk.Address, r float64) bool {
+	// Без оси круга вокруг неё нет: у карты без пути прогрев пуст по
+	// построению, а существование решает домен, а не эта функция.
+	if !s.hasAxis {
+		return false
+	}
 	side := chunk.SideM(a.Level)
 	x0, z0 := a.OriginM()
 
@@ -355,6 +418,13 @@ func rectGap(ax0, az0, ax1, az1, bx0, bz0, bx1, bz1 float64) float64 {
 // нулевого уровня на восемь километров значило бы обойти в тысячу раз больше
 // пустых адресов, чем нужно.
 func walk(s selector, region string, rule func(chunk.Address) bool, fn func(chunk.Address) error) (candidates, kept int, err error) {
+	// Обход идёт по габариту ОСИ, а не по домену: кандидаты прогрева — клетки
+	// вблизи пути, и без пути прогревать нечего. Домен при этом не теряется:
+	// он отсекает кандидатов в covers (inExtent), а за его пределами прогрев
+	// ничего не кладёт.
+	if !s.hasAxis {
+		return 0, 0, nil
+	}
 	for level := 0; level <= s.rule.MaxLevel; level++ {
 		side := chunk.SideM(level)
 		r := s.rule.RadiusM(level)
@@ -424,10 +494,28 @@ func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64, provenance st
 	if err != nil {
 		return Report{}, false, fmt.Errorf("worldgen: %w", err)
 	}
+	head, network, err := seedHead(m)
+	if err != nil {
+		return Report{}, false, err
+	}
 	if reg, ok, err := s.GetRegion(region); err != nil {
 		return Report{}, false, err
 	} else if ok {
-		return Report{Region: region}, false, sameRule(region, reg.Rule, rule)
+		if err := sameRule(region, reg.Rule, rule); err != nil {
+			return Report{Region: region}, false, err
+		}
+		if err := sameDomain(region, reg.Domain, m.Terrain.Domain); err != nil {
+			return Report{Region: region}, false, err
+		}
+		// База прежней сборки: регион есть, головы нет — перестройка ключа
+		// дала чанкам версию 1, и голова обязана назвать ту же. Seed
+		// идемпотентен: существующие строки не трогаются, живой мир не
+		// откатывается. Сеть на версии 1 при этом — текущая карта: прежняя
+		// сборка сети не хранила, и другого честного ответа нет.
+		if err := s.Seed(worldstore.Region{ID: region, Rule: rule, Domain: m.Terrain.Domain}, head, network); err != nil {
+			return Report{Region: region}, false, err
+		}
+		return Report{Region: region}, false, nil
 	}
 
 	frame := "{}"
@@ -436,7 +524,7 @@ func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64, provenance st
 			frame = string(b)
 		}
 	}
-	err = s.PutRegion(worldstore.Region{
+	err = s.Seed(worldstore.Region{
 		ID:         region,
 		Frame:      frame,
 		Provenance: provenance,
@@ -445,17 +533,53 @@ func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64, provenance st
 		// прежними, и тогда единственный честный ответ на вопрос «каким правилом
 		// это порождено» лежит здесь.
 		Rule: rule,
+		// Домен записывается тем же доводом: манифест региона отвечает клиенту
+		// «где мир кончается» числом ХРАНИЛИЩА, а не числом файла карты.
+		Domain: m.Terrain.Domain,
 		// Распространяемость по-прежнему утверждается здесь, и это признанная
 		// дыра, а не решение: пока карты свои, «да» верно, но для карты,
 		// пришедшей импортом, ответ знает только источник. Флаг переедет к
 		// провенансу вместе с импортом извне (бида ClearAhead-62f).
 		Redistributable: true,
 		Epoch:           1,
-	})
+	}, head, network)
 	if err != nil {
 		return Report{}, false, err
 	}
 
-	rep, err := Generate(s, m, region, revision)
-	return rep, true, err
+	// ПРОГРЕВ ЗДЕСЬ БОЛЬШЕ НЕ ЖИВЁТ. Бутстрап заводит запись региона — домен,
+	// правило, происхождение, геопривязку, голову проекций и первую сеть — и
+	// на этом останавливается: чанки ради ПРАВИЛЬНОСТИ не нужны (порождение по
+	// требованию — основной путь), а прогрев — это КЭШ, и включается он явно
+	// тем, кто запускает (cmd/clearahead), а не подразумевается бутстрапом.
+	return Report{Region: region}, true, nil
+}
+
+// seedHead собирает голову проекций и первое тело сети из карты: рецепт
+// хешируется, сеть компилируется. Оба вывода детерминированы (та же карта —
+// та же голова), поэтому бутстрап вправе считать их при каждом старте и
+// идемпотентно сверять с тем, что лежит.
+func seedHead(m *mapfmt.Map) (worldstore.ProjectionHead, []byte, error) {
+	recipeHash, err := worldstore.RecipeHash(*m.Terrain)
+	if err != nil {
+		return worldstore.ProjectionHead{}, nil, err
+	}
+	// Сеть компилируется ЗДЕСЬ, а не берётся от mapstore: бутстрап заводит
+	// регион сам, и знание «карта -> сеть» живёт в конвейере входа, а не у
+	// вызывающего. Вторая компиляция на старте — миллисекунды, и она же
+	// страхует от расхождения сетей, посчитанных двумя путями.
+	_, rg, err := CompileNetwork(m)
+	if err != nil {
+		return worldstore.ProjectionHead{}, nil, err
+	}
+	body, err := track.RenderBody(rg)
+	if err != nil {
+		return worldstore.ProjectionHead{}, nil, err
+	}
+	return worldstore.ProjectionHead{
+		WorldVersion:     1,
+		SourceJournalSeq: 0,
+		NetworkVersion:   1,
+		RegionRecipeHash: recipeHash,
+	}, body, nil
 }

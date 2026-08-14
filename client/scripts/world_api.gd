@@ -161,6 +161,32 @@ class Heights extends Answer:
 	func no_chunk() -> bool:
 		return _missing
 
+## Patch — отсчёты высот клетки НА НАЗВАННОЙ ВЕРСИИ мира.
+##
+## То же тело и та же база, что у чанка (samples² int16 LE относительно
+## base_z, заголовок X-Chunk-Base-Z-Mm), но адрес версионный — строка
+## хранилища ключуется версией, и тело под версией v не меняется никогда
+## (immutable). Собирается сервером из базы и земляных работ версии: клиенту
+## применять ничего не нужно — он рисует присланное (спека §5.1, sqym.6).
+##
+## level/cx/cz — адрес, пронесённый насквозь тем же шагом, что у Tile: набор
+## версии запоминает, какой клетке принадлежит ответ.
+class Patch extends Answer:
+	var blob := PackedByteArray()
+	var base_z_m := 0.0
+	var level := 0
+	var cx := 0
+	var cz := 0
+
+	## no_work — «чистая база»: земляных работ на этой версии в клетке нет.
+	##
+	## Это ПОЛНЫЙ ответ, а не ошибка и не дыра: 204 отличим от 404 нарочно —
+	## несуществующий адрес (чужой матч, версия за головой, уровень выше
+	## последнего) это неверный вопрос, а пустое содержимое версии — верный.
+	## Путать их нельзя: 204 не переспрашивается, 404 показывается отказом.
+	func no_work() -> bool:
+		return _missing
+
 
 ## Cover — класс поверхности и сомкнутость на ячейку той же сетки, что квады.
 class Cover extends Answer:
@@ -202,7 +228,11 @@ class ForestBits extends Answer:
 ## из неё три числа адреса и не трогает остального.
 class Tile extends RefCounted:
 	var address: Dictionary = {}
-	var heights: Heights
+	## heights — ВЫСОТЫ МЕСТА: Heights на неверсионном проводе, Patch на
+	## версионном (sqym.6). Тип не назван нарочно: у обоих один протокол
+	## (have/no_work·no_chunk/failed), и называть один из них значило бы
+	## запретить второй.
+	var heights
 	var cover: Cover
 	var forest: ForestBits
 
@@ -235,6 +265,21 @@ func manifest(region: String) -> Manifest:
 func network(region: String, revision: int) -> Network:
 	var a := Network.new()
 	var r: Dictionary = await net.fetch_json("/regions/%s/revisions/%d/network" % [region, revision])
+	if not r["ok"]:
+		a.reason = String(r["error"])
+		return a
+	a.data = r["data"] as Dictionary
+	return a
+
+## world_network — сеть региона НА НАЗВАННОЙ ВЕРСИИ мира.
+##
+## Версионный адрес (sqym.5) неизменяем: тело, однажды отданное под версией v,
+## не меняется никогда (immutable), и клиент, выбравший версию, видит ровно её
+## сеть — а не последнюю, которая могла уехать вперёд между запросами.
+## Несуществующая версия или чужой матч — отказ, как и всякий неверный адрес.
+func world_network(match: String, version: int) -> Network:
+	var a := Network.new()
+	var r: Dictionary = await net.fetch_json("/matches/%s/worlds/%d/network" % [match, version])
 	if not r["ok"]:
 		a.reason = String(r["error"])
 		return a
@@ -277,6 +322,42 @@ func chunk(region: String, level: int, cx: int, cz: int) -> Heights:
 		return a
 	# Миллиметры целыми — в метры. Единственное место клиента, знающее единицу
 	# этого заголовка; наружу уезжают метры, как и всюду в мире.
+	a.base_z_m = float(base.to_int()) / 1000.0
+	a.blob = r["body"] as PackedByteArray
+	return a
+
+## world_patch — отсчёты высот клетки НА НАЗВАННОЙ ВЕРСИИ мира.
+##
+## Тот же блоб и та же база, что у чанка, но адрес версионный: тело под
+## версией v неизменяемо, и клиент, копящий набор версии, не рискует получить
+## землю, уехавшую вперёд между запросами.
+##
+## ТРИ ИСХОДА, И ПУТАТЬ ИХ НЕЛЬЗЯ (sqym.6):
+##   200 — have(): отсчёты версии, тело и база заполнены;
+##   204 — no_work(): «чистая база» — земляных работ на этой версии в клетке
+##         нет. ПОЛНЫЙ ответ, а не ошибка: 204 не переспрашивается;
+##   прочее — failed(): отказ (чужой матч, версия за головой, уровень выше
+##         последнего, транспорт), и набор версии при нём не собирается.
+func world_patch(match: String, version: int, level: int, cx: int, cz: int) -> Patch:
+	var a := Patch.new()
+	a.level = level
+	a.cx = cx
+	a.cz = cz
+	var r: Dictionary = await net.fetch(_world_patch_path(match, version, level, cx, cz))
+	if not r["ok"]:
+		a.reason = String(r["error"])
+		return a
+	var code := int(r["code"])
+	if code == CODE_EMPTY:
+		a._missing = true
+		return a
+	if code != CODE_OK:
+		a.reason = "сервер ответил HTTP %d" % code
+		return a
+	var base := NetClient.header_value(r["headers"], HEADER_BASE_Z)
+	if base == "":
+		a.reason = "нет заголовка %s — высоты не к чему отложить" % HEADER_BASE_Z
+		return a
 	a.base_z_m = float(base.to_int()) / 1000.0
 	a.blob = r["body"] as PackedByteArray
 	return a
@@ -389,6 +470,52 @@ func terrain(region: String, addresses: Array) -> Array:
 ## и два способа её назвать развели бы её тождество надвое.
 func _chunk_path(region: String, level: int, cx: int, cz: int) -> String:
 	return "/regions/%s/chunks/%d/%d/%d" % [region, level, cx, cz]
+
+## world_tile — одно место рельефа версии v: патч из версионного адреса, покров
+## и лес — из неверсионного.
+##
+## Покров и лес у версионного адреса НЕТ (sqym.5 отдаёт клиенту только сеть и
+## патчи): они производные рецепта региона, а не земляных работ, и между
+## версиями не меняются. Порядок и условия — те же, что у tile(): покров и лес
+## спрашиваются, ТОЛЬКО когда по адресу приехали высоты, а лес — только у
+## уровня 0.
+func world_tile(match: String, version: int, region: String, address: Dictionary) -> Tile:
+	var t := Tile.new()
+	t.address = address
+	var level := int(address["level"])
+	var cx := int(address["cx"])
+	var cz := int(address["cz"])
+
+	t.heights = await world_patch(match, version, level, cx, cz)
+	t.cover = Cover.new()
+	t.forest = ForestBits.new()
+	if not t.heights.have():
+		t.cover.reason = "не спрашивали: высот по этому адресу нет"
+		t.forest.reason = "не спрашивали: высот по этому адресу нет"
+		return t
+
+	t.cover = await cover(region, level, cx, cz)
+	if level == 0:
+		t.forest = await forest(region, level, cx, cz)
+	else:
+		t.forest._missing = true
+	return t
+
+
+## world_terrain — рельеф уровня версии v, по плитке на адрес (см. terrain —
+## там же записан порядок хождения в сеть и его цена, ClearAhead-s42).
+func world_terrain(match: String, version: int, region: String, addresses: Array) -> Array:
+	var out: Array = []
+	for a_raw in addresses:
+		out.append(await world_tile(match, version, region, a_raw as Dictionary))
+	return out
+
+
+## _world_patch_path — версионный адрес патча клетки. Один шаблон, и он же в
+## проверках контракта (checks/live/35_worlds.gd) — два способа собрать адрес
+## разошлись бы при первой же правке формы.
+func _world_patch_path(match: String, version: int, level: int, cx: int, cz: int) -> String:
+	return "/matches/%s/worlds/%d/chunks/%d/%d/%d/terrain-patch" % [match, version, level, cx, cz]
 
 
 ## --- НАБОР КОНТЕНТА И ЖИВОЕ СОСТОЯНИЕ ----------------------------------------

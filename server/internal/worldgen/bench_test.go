@@ -8,6 +8,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
+	"github.com/shady2k/ClearAhead/server/internal/project"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/terrain"
 	"github.com/shady2k/ClearAhead/server/internal/track"
@@ -28,8 +29,13 @@ func benchStore(tb testing.TB) *worldstore.Store {
 	return s
 }
 
-// BenchmarkBootstrap — весь путь на затравке: валидация, позы, рельеф, обход,
-// порождение, запись. База каждый раз свежая, её создание из замера исключено.
+// BenchmarkBootstrap — ХОЛОДНЫЙ СТАРТ: бутстрап (запись региона) и прогрев
+// (развёртка чанков) тем же шагом, каким их включает cmd/clearahead. База
+// каждый раз свежая, её создание из замера исключено.
+//
+// Сам по себе бутстрап с 2026-08-13 чанков не порождает (прогрев — кэш, а не
+// часть мира), поэтому «весь путь» — это два шага, и мерить их надо вместе:
+// оператор платит за оба при каждом холодном старте.
 func BenchmarkBootstrap(b *testing.B) {
 	m := seedmap.Station(seedmap.WithTerrain())
 	var rep Report
@@ -38,9 +44,12 @@ func BenchmarkBootstrap(b *testing.B) {
 		s := benchStore(b)
 		b.StartTimer()
 
-		r, seeded, err := Bootstrap(s, m, 1, `{"source":"seedmap","kind":"fixture"}`)
-		if err != nil || !seeded {
+		if _, seeded, err := Bootstrap(s, m, 1, `{"source":"seedmap","kind":"fixture"}`); err != nil || !seeded {
 			b.Fatalf("бутстрап: %v, сделан=%v", err, seeded)
+		}
+		r, err := Generate(s, m, m.MapID, 1, 1)
+		if err != nil {
+			b.Fatalf("прогрев: %v", err)
 		}
 		rep = r
 
@@ -104,9 +113,11 @@ func selectorFor(f *terrain.Field) (selector, bool) {
 	if !ok {
 		return selector{}, false
 	}
-	// Правило берётся У ПОЛЯ — там же, где его берёт Generate: охват приезжает
-	// картой, и второй его источник в проверках мерил бы не тот мир.
-	return selector{field: f, rule: f.Rule(), minX: minX, minY: minY, maxX: maxX, maxY: maxY}, true
+	// Правило и домен берутся У ПОЛЯ — там же, где их берёт Generate: охват и
+	// существование приезжают картой, и второй их источник в проверках мерил бы
+	// не тот мир.
+	return selector{field: f, rule: f.Rule(), domain: f.Domain(),
+		minX: minX, minY: minY, maxX: maxX, maxY: maxY, hasAxis: true}, true
 }
 
 func seedField(tb testing.TB) *terrain.Field {
@@ -139,6 +150,25 @@ func BenchmarkWalkCandidates(b *testing.B) {
 	b.ReportMetric(float64(selected), "отобрано")
 }
 
+// domainAround — домен фикстуры по габариту её оси.
+//
+// Число выведено из габарита (миграционный выбор, как у st_a.json) и
+// выровнено по сетке самого грубого уровня (4096 м): ни одна грубая клетка на
+// краю не режется границей пополам. Это выбор ФИКСТУРЫ, а не правило — домен
+// есть свойство карты, и длинная ось обязана объявить его сама, иначе её мир
+// кончится раньше, чем кончится ось.
+func domainAround(minX, minZ, maxX, maxZ, reachM float64) mapfmt.Domain {
+	const coarse = 4096.0
+	floor := func(v float64) float64 { return math.Floor(v/coarse) * coarse }
+	ceil := func(v float64) float64 { return math.Ceil(v/coarse) * coarse }
+	return mapfmt.Domain{
+		MinX: floor(minX - reachM),
+		MinZ: floor(minZ - reachM),
+		MaxX: ceil(maxX + reachM),
+		MaxZ: ceil(maxZ + reachM),
+	}
+}
+
 // rightAngleAxis — ось, загибающаяся под прямым углом: два плеча по lengthM.
 //
 // Нужна затем, что обход кандидатов идёт по ГАБАРИТУ оси, а не вдоль неё.
@@ -162,6 +192,21 @@ func rightAngleAxis(tb testing.TB, lengthM float64) *mapfmt.Map {
 			}
 		}),
 	)
+	// Домен по фактическому габариту оси: направление поворота дуги известно
+	// только компилятору, и гадать за него фикстура не вправе.
+	_, els, err := track.Propagate(m)
+	if err != nil {
+		tb.Fatalf("угол %.0f м: позы: %v", lengthM, err)
+	}
+	f, err := terrain.New(m, els)
+	if err != nil {
+		tb.Fatalf("угол %.0f м: рельеф: %v", lengthM, err)
+	}
+	minX, minZ, maxX, maxZ, ok := f.Bounds()
+	if !ok {
+		tb.Fatalf("угол %.0f м: нет оси", lengthM)
+	}
+	m.Terrain.Domain = domainAround(minX, minZ, maxX, maxZ, 8192)
 	if err := mapfmt.Validate(m); err != nil {
 		tb.Fatalf("угол %.0f м невалиден: %v", lengthM, err)
 	}
@@ -220,6 +265,10 @@ func straightCorridor(tb testing.TB, lengthM float64) *mapfmt.Map {
 			m.Geometry.Edges[seedmap.LineEdgeID] = mapfmt.Alignments{
 				Horizontal: []mapfmt.HPrim{{Kind: "straight", Length: lengthM}},
 			}
+			// Прямая ось лежит вдоль x от 0 до lengthM при z = 0: домен
+			// объявляется здесь, по габариту оси (миграционный выбор, см.
+			// domainAround).
+			m.Terrain.Domain = domainAround(0, 0, lengthM, 0, 8192)
 		}),
 	)
 	if err := mapfmt.Validate(m); err != nil {
@@ -242,12 +291,12 @@ func BenchmarkGenerateCorridor(b *testing.B) {
 			for b.Loop() {
 				b.StopTimer()
 				s := benchStore(b)
-				if err := s.PutRegion(worldstore.Region{ID: m.MapID, Frame: "{}", Epoch: 1, Rule: ruleOf(b, m)}); err != nil {
+				if err := s.PutRegion(worldstore.Region{ID: m.MapID, Frame: "{}", Epoch: 1, Rule: ruleOf(b, m), Domain: m.Terrain.Domain}); err != nil {
 					b.Fatal(err)
 				}
 				b.StartTimer()
 
-				r, err := Generate(s, m, m.MapID, 1)
+				r, err := Generate(s, m, m.MapID, 1, 1)
 				if err != nil {
 					b.Fatal(err)
 				}
@@ -269,12 +318,12 @@ func BenchmarkGenerateRegion(b *testing.B) {
 	for b.Loop() {
 		b.StopTimer()
 		s := benchStore(b)
-		if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: ruleOf(b, m)}); err != nil {
+		if err := s.PutRegion(worldstore.Region{ID: "ST_A", Frame: "{}", Epoch: 1, Rule: ruleOf(b, m), Domain: m.Terrain.Domain}); err != nil {
 			b.Fatal(err)
 		}
 		b.StartTimer()
 
-		if _, err := Generate(s, m, "ST_A", 1); err != nil {
+		if _, err := Generate(s, m, "ST_A", 1, 1); err != nil {
 			b.Fatal(err)
 		}
 
@@ -282,4 +331,43 @@ func BenchmarkGenerateRegion(b *testing.B) {
 		s.Close()
 		b.StartTimer()
 	}
+}
+
+// BenchmarkRebuildTurnout — стоимость адресной пересборки правки одной
+// стрелки на затравке: замыкание, пересборка адресов и запись группами.
+//
+// Габарит 200 × 40 м (след стрелки с откосами, W1-D) даёт 12 адресов на
+// уровне 0..4. Спека §8.1 называет бюджет сквозных 300 мс для подтверждённой
+// постройки; результат дороже — это число, а не провал, но назвать его
+// обязано измерение.
+func BenchmarkRebuildTurnout(b *testing.B) {
+	m := seedmap.Station(seedmap.WithTerrain())
+	ch := project.Change{
+		Kind:   project.SourcePath,
+		Extent: project.Extent{MinX: 100, MinZ: -40, MaxX: 300, MaxZ: 0},
+	}
+	var rep *Result
+	for b.Loop() {
+		b.StopTimer()
+		s := benchStore(b)
+		if _, seeded, err := Bootstrap(s, m, 1, `{"source":"seedmap","kind":"fixture"}`); err != nil || !seeded {
+			b.Fatalf("бутстрап: %v, сделан=%v", err, seeded)
+		}
+		if _, err := Generate(s, m, m.MapID, 1, 1); err != nil {
+			b.Fatalf("прогрев: %v", err)
+		}
+		cc := NewCompiler(s, m.MapID, 1, 0)
+		b.StartTimer()
+
+		r, err := cc.Rebuild(m, ch)
+		if err != nil {
+			b.Fatalf("пересборка: %v", err)
+		}
+		rep = r
+
+		b.StopTimer()
+		s.Close()
+		b.StartTimer()
+	}
+	b.ReportMetric(float64(rep.TotalChunks), "адресов")
 }

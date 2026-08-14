@@ -19,6 +19,9 @@ func stationWithExtent(radiusM float64, levels int) *mapfmt.Map {
 	}))
 }
 
+// stationDomain — домен фикстуры станции: тот же, что у seedmap.WithTerrain.
+var stationDomain = mapfmt.Domain{MinX: -8192, MinZ: -12288, MaxX: 12288, MaxZ: 12288}
+
 func emptyStore(t *testing.T) *worldstore.Store {
 	t.Helper()
 	s, err := worldstore.Open(filepath.Join(t.TempDir(), "world.db"))
@@ -35,13 +38,25 @@ func emptyStore(t *testing.T) *worldstore.Store {
 // дают разное число чанков и разный последний уровень. Равенство здесь означало
 // бы, что правило карты до порождения не доехало.
 func TestExtentFromMapDecidesWorldSize(t *testing.T) {
-	big, _, err := Bootstrap(emptyStore(t), stationWithExtent(512, 5), 1, "{}")
-	if err != nil {
+	// Бутстрап заводит регион, а чанки даёт явный прогрев: обе карты проходят
+	// один и тот же путь, что и холодный старт сервера.
+	bigStore := emptyStore(t)
+	bigMap := stationWithExtent(512, 5)
+	if _, _, err := Bootstrap(bigStore, bigMap, 1, "{}"); err != nil {
 		t.Fatalf("большой мир: %v", err)
 	}
-	small, _, err := Bootstrap(emptyStore(t), stationWithExtent(256, 3), 1, "{}")
+	big, err := Generate(bigStore, bigMap, bigMap.MapID, 1, 1)
 	if err != nil {
+		t.Fatalf("большой прогрев: %v", err)
+	}
+	smallStore := emptyStore(t)
+	smallMap := stationWithExtent(256, 3)
+	if _, _, err := Bootstrap(smallStore, smallMap, 1, "{}"); err != nil {
 		t.Fatalf("малый мир: %v", err)
+	}
+	small, err := Generate(smallStore, smallMap, smallMap.MapID, 1, 1)
+	if err != nil {
+		t.Fatalf("малый прогрев: %v", err)
 	}
 	t.Logf("охват 8192 м: чанков %d, %.2f МБ, по уровням %v",
 		big.TotalChunks, float64(big.TotalBytes)/1e6, big.ByLevel)
@@ -118,11 +133,12 @@ func TestGenerateRefusesForeignRule(t *testing.T) {
 	s := emptyStore(t)
 	if err := s.PutRegion(worldstore.Region{
 		ID: "ST_A", Frame: "{}", Epoch: 1,
-		Rule: chunk.Rule{Level0RadiusM: 512, MaxLevel: 4},
+		Rule:   chunk.Rule{Level0RadiusM: 512, MaxLevel: 4},
+		Domain: stationDomain,
 	}); err != nil {
 		t.Fatalf("регион: %v", err)
 	}
-	if _, err := Generate(s, stationWithExtent(256, 3), "ST_A", 1); err == nil {
+	if _, err := Generate(s, stationWithExtent(256, 3), "ST_A", 1, 1); err == nil {
 		t.Fatal("порождение по чужому правилу не отвергнуто")
 	}
 	for level := 0; level <= chunk.MaxLevelLimit; level++ {

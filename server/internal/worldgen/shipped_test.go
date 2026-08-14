@@ -44,8 +44,14 @@ func TestShippedMapReachesTheDatabase(t *testing.T) {
 	if !seeded {
 		t.Fatal("бутстрап не тронул пустую базу")
 	}
-	if rep.TotalChunks == 0 {
-		t.Fatal("боевая карта не породила ни одного чанка")
+	// Бутстрап с 2026-08-13 чанков не порождает — он заводит запись региона, а
+	// прогрев (Generate) включается явно тем, кто запускает. Здесь проверяется
+	// ПОЛНЫЙ путь входа, поэтому прогрев зовётся тем же шагом, что и сервер.
+	if rep.TotalChunks != 0 {
+		t.Fatalf("бутстрап породил %d чанков — прогрев не должен подразумеваться", rep.TotalChunks)
+	}
+	if _, err := Generate(s, m, m.MapID, 1, 1); err != nil {
+		t.Fatalf("прогрев боевой карты: %v", err)
 	}
 
 	r, ok, err := s.GetRegion(m.MapID)
