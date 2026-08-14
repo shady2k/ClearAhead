@@ -7,9 +7,30 @@ package rpc
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
+)
+
+// Два исхода барьера, которые вызывающий обязан РАЗЛИЧАТЬ.
+//
+// До канала команд их различать было незачем: HTTP-ручка на любой отказ
+// барьера отвечала 404, потому что снаружи неверный адрес и неверное тело
+// одинаково означают «такого ресурса нет». В JSON-RPC у них разные коды
+// (-32601 против -32602), и разница не косметическая: первый говорит «такого
+// метода не существует», второй — «метод есть, а запрос неверен». Клиент,
+// получивший не тот код, чинил бы не то.
+//
+// Сентинелы, а не типы ошибок: различать нужно ровно два случая, а сообщение и
+// без того едет строкой. Тип завёлся бы вместе с полем, которое надо прочитать
+// машинно, — у доменных отказов такое поле есть (protocol.Refusal), у ошибок
+// барьера его нет.
+var (
+	// ErrUnknownMethod — метода нет в реестре.
+	ErrUnknownMethod = errors.New("rpc: неизвестный метод")
+	// ErrInvalidParams — метод есть, но разбор запроса отказал.
+	ErrInvalidParams = errors.New("rpc: запрос не разобран")
 )
 
 type route func(context.Context, protocol.Input) (any, error)
@@ -38,7 +59,11 @@ func Register[T any, PT protocol.Request[T], Resp any](
 	m.routes[method] = func(ctx context.Context, in protocol.Input) (any, error) {
 		var req T
 		if err := PT(&req).Parse(in); err != nil {
-			return nil, fmt.Errorf("rpc: %s: %w", method, err)
+			// Обёрнуты ОБЕ ошибки: сентинел даёт вызывающему код ответа, а
+			// исходная ошибка — причину, которую читает человек. Потерять
+			// вторую ради первой значило бы отдать клиенту «запрос не
+			// разобран» без единого слова о том, какое поле виновато.
+			return nil, fmt.Errorf("%w: %s: %w", ErrInvalidParams, method, err)
 		}
 		return h(ctx, req)
 	}
@@ -49,7 +74,7 @@ func Register[T any, PT protocol.Request[T], Resp any](
 func (m *Mux) Dispatch(ctx context.Context, method string, in protocol.Input) (any, error) {
 	r, ok := m.routes[method]
 	if !ok {
-		return nil, fmt.Errorf("rpc: неизвестный метод %q", method)
+		return nil, fmt.Errorf("%w %q", ErrUnknownMethod, method)
 	}
 	return r(ctx, in)
 }

@@ -25,7 +25,16 @@ import (
 var forbidden = []string{"PathValue", "Unmarshal", "NewDecoder", "ParseForm"}
 
 func TestBarrierNoRawInputOutsideRPC(t *testing.T) {
-	roots := []string{"../httpapi", "../track", "../mapfmt", "../../cmd"}
+	// Пакет канала команд (../channel) стоит в списке с 2026-08-14 — это
+	// требование биды ClearAhead-ysw, и оно тут главное. Команды приходят
+	// сокетом, то есть телом, а не адресом: соблазн «разобрать кадр на месте»
+	// сильнее всего именно здесь, а цена ошибки выше — за адресом стоит
+	// выдача документа, за командой правка мира.
+	//
+	// Чтобы канал мог не читать сырое, разбор кадра JSON-RPC живёт в этом
+	// пакете (jsonrpc.go): узнать имя метода нельзя, не разобрав кадр, и
+	// делать это обязан владелец барьера.
+	roots := []string{"../httpapi", "../track", "../mapfmt", "../channel", "../../cmd"}
 	for _, root := range roots {
 		matches, err := filepath.Glob(filepath.Join(root, "*.go"))
 		if err != nil {

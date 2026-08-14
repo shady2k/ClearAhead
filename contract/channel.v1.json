@@ -1,0 +1,110 @@
+{
+  "contract": "channel",
+  "protocol_version": 1,
+  "path": "/regions/{region}/channel",
+  "transport": "websocket, JSON-RPC 2.0 в обе стороны",
+
+  "why": [
+    "Это ОБЪЯВЛЕННЫЙ договор канала: имена полей, их виды и обязательность. Его читают ОБЕ стороны — серверный тест (server/internal/channel/contract_test.go) и проверка клиента, — и каждая сверяет с ним СВОЙ провод. Одна сторона, сверяющая себя сама с собой, доказывает лишь согласие кода с самим собой.",
+    "ЗДЕСЬ НЕТ ЧИСЕЛ МИРА, и это главное отличие от эталона contract/render_geometry.golden.json, снесённого 2026-08-11 (коммит 4b4d6a7). Тот замораживал ВЫЧИСЛЕННЫЕ float64 байт в байт и не пережил смены машины: расхождение ~1e-13 на неизменном коде. Договор о ФОРМЕ смены машины переживает, потому что имя поля и его вид от порядка вычислений не зависят.",
+    "JSON Schema отвергнута: вторая сторона у нас на GDScript, и валидатор пришлось бы написать под весь стандарт (или втащить зависимость в клиент). Словарь видов ниже покрывает то, что действительно едет по проводу, и укладывается в полсотни строк на каждой стороне.",
+    "Неизвестное поле — ОТКАЗ у проверяющего, а не пропуск: поле, приехавшее и не объявленное, означает, что провод ушёл вперёд договора. Клиент в бою неизвестные поля игнорирует (иначе приборы машиниста поднимали бы major-версию), но ПРОВЕРКА обязана их ловить."
+  ],
+
+  "kinds": {
+    "int": "целое число JSON",
+    "uint": "целое число JSON, неотрицательное",
+    "float": "число JSON",
+    "string": "строка JSON",
+    "bool": "true или false",
+    "int_string": "целое со знаком, записанное СТРОКОЙ — правило провода revision-7-plan §4: JSON.parse_string в Godot читает числа как float, и единообразие важнее, чем то, что для наших величин точности хватило бы",
+    "[]T": "массив значений вида T",
+    "T?": "поле необязательно; если пришло — обязано быть вида T"
+  },
+
+  "types": {
+    "envelope": {
+      "protocol_version": "int",
+      "session_id": "string",
+      "snapshot_seq": "uint",
+      "kind": "string",
+      "region": "string",
+      "match": "string",
+      "time": "int_string",
+      "units": "[]unit"
+    },
+    "unit": {
+      "id": "string",
+      "name": "string?",
+      "type": "string",
+      "at": "point_u"
+    },
+    "point_u": {
+      "element": "string",
+      "u": "float",
+      "direction": "string?"
+    },
+    "hello_params": {
+      "protocol_version": "int",
+      "session_id": "string?",
+      "last_snapshot_seq": "uint?"
+    },
+    "hello_result": {
+      "protocol_version": "int",
+      "session_id": "string",
+      "actor_id": "string",
+      "snapshot": "envelope"
+    },
+    "refusal": {
+      "reason": "string",
+      "resource_id": "string?",
+      "held_by": "string?"
+    }
+  },
+
+  "methods": {
+    "hello": {
+      "params": "hello_params",
+      "result": "hello_result",
+      "note": "одно на соединение; первым кадром; command_id не требуется — рукопожатие состояние партии не меняет"
+    }
+  },
+
+  "notifications": {
+    "snapshot": {
+      "params": "envelope",
+      "note": "сверху вниз, без id. Идёт при смене состояния либо по максимальному возрасту в МОДЕЛЬНОМ времени"
+    }
+  },
+
+  "errors": {
+    "parse": -32700,
+    "invalid_request": -32600,
+    "method_not_found": -32601,
+    "invalid_params": -32602,
+    "internal": -32603,
+    "refused": -32001
+  },
+
+  "refusal_data": "refusal",
+
+  "refusal_reasons": [
+    "unsupported_protocol_version",
+    "unknown_session",
+    "not_greeted",
+    "already_greeted"
+  ],
+
+  "forbidden_up": [
+    "пакетные запросы (массив в корне)",
+    "уведомления снизу вверх (запрос без id)",
+    "позиционные params (массив)"
+  ],
+
+  "idempotency": {
+    "key": ["session_id", "actor_id", "command_id"],
+    "command_id": "params.command_id; запрос БЕЗ него состояние партии не меняет",
+    "actor_id": "берётся из соединения, а не из params: иначе любой клиент командует от чужого имени",
+    "repeat": "повтор возвращает ТОТ ЖЕ ответ байт в байт, включая отказ и id первого запроса"
+  }
+}

@@ -32,6 +32,7 @@ type regionsRouter struct {
 	chunks   http.Handler
 	objects  http.Handler
 	live     http.Handler
+	channel  http.Handler
 }
 
 // NewRegionsHandler собирает корень /regions/ из готовых подручек.
@@ -45,6 +46,13 @@ type regionsRouter struct {
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/cover   — покров той же клетки
 //	GET /regions/{region}/chunks/{level}/{cx}/{cz}/forest  — лес, только уровень 0
 //	GET /regions/{region}/live                             — живое состояние партии
+//	GET /regions/{region}/channel                          — канал команд (апгрейд в сокет)
+//
+// Канал стоит РЯДОМ с live, а не вместо него, и это временное состояние с
+// названной ценой: одно и то же состояние партии отдаётся двумя способами.
+// Ручка live остаётся, пока у неё есть читатели — проверки клиента ходят по
+// HTTP и не умеют держать сокет. Уедет она вместе с ними, а не раньше: снести
+// её сейчас значило бы ослепить проверки ради чистоты списка адресов.
 //
 // Ревизии в адресе live НЕТ, и это не забывчивость: ревизия называет карту, а
 // живое состояние к карте не относится — оно принадлежит партии, идущей на этой
@@ -56,8 +64,9 @@ type regionsRouter struct {
 // /maps/{id}/revisions/{n}/geometry, рельеф на /regions/{id}/chunks/…, а
 // связывало их соглашение `region := m.MapID` из одной строки
 // worldgen.Bootstrap — то есть знание, которого у клиента нет и быть не должно.
-func NewRegionsHandler(manifest, network, chunks, objects, live http.Handler) http.Handler {
-	return &regionsRouter{manifest: manifest, network: network, chunks: chunks, objects: objects, live: live}
+func NewRegionsHandler(manifest, network, chunks, objects, live, channel http.Handler) http.Handler {
+	return &regionsRouter{manifest: manifest, network: network, chunks: chunks,
+		objects: objects, live: live, channel: channel}
 }
 
 func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +86,8 @@ func (h *regionsRouter) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.objects.ServeHTTP(w, r)
 	case len(parts) == 3 && parts[2] == "live":
 		h.live.ServeHTTP(w, r)
+	case len(parts) == 3 && parts[2] == "channel":
+		h.channel.ServeHTTP(w, r)
 	case len(parts) == 6 && parts[2] == "chunks":
 		h.chunks.ServeHTTP(w, r)
 	// Покров — ХВОСТ адреса чанка, а не свой ресурс: клетка одна, и два пути к

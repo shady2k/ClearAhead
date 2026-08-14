@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shady2k/ClearAhead/server/internal/channel"
 	"github.com/shady2k/ClearAhead/server/internal/chunk"
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/edit"
@@ -316,6 +317,12 @@ func main() {
 		httpapi.NewChunksHandler(world, lazy),
 		httpapi.NewObjectsHandler(store),
 		httpapi.NewLiveHandler(sim),
+		// КАНАЛ КОМАНД: один сокет, JSON-RPC 2.0 в обе стороны (ClearAhead-wa51).
+		// Источник идентификаторов — системный: предсказуемая
+		// последовательность нужна тестам, а боевой сессии нужна
+		// неугадываемость, потому что session_id возвращается клиентом при
+		// переподключении и служит ключом к его ключам идемпотентности.
+		channel.NewHandler(sim, uuidv7.New),
 	))
 	// ВЕРСИОННЫЕ АДРЕСА МИРА (sqym.5): /matches/{m}/worlds/{v}/… отдают
 	// замороженные публикации с immutable. Матч один (matchID), регион — тот,

@@ -18,6 +18,17 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/worldstore"
 )
 
+// routeMark — подручка, которая только называет себя.
+//
+// Роутер обязан ДОВЕСТИ адрес до нужной подручки и больше ничего; проверять это
+// настоящим каналом нельзя — он требует апгрейда сокета, то есть проверял бы
+// библиотеку вместо развода адресов.
+func routeMark(name string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Route", name)
+	})
+}
+
 // newRegionsTestHandler поднимает корень /regions/ целиком — так, как его
 // собирает main.go: из двух хранилищ и трёх подручек.
 //
@@ -53,6 +64,10 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		// Роутер проверяется на развод адресов, а не на содержимое партии, и
 		// пустая партия — законный мир (станция без единой машины).
 		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID})),
+		// Канал командой заглушкой: настоящий требует апгрейда сокета, а
+		// роутер обязан лишь довести адрес до него. Что делает сам канал,
+		// проверяет его собственный пакет.
+		routeMark("channel"),
 	)
 	return h, st, world
 }
@@ -295,6 +310,13 @@ func TestRegionRootRoutesSubresources(t *testing.T) {
 		}
 	}
 
+	// Канал проверяется отдельно: до него доходит не код ответа, а сам вызов
+	// подручки — настоящий канал на этом адресе начал бы апгрейд сокета.
+	rec := do(t, h, http.MethodGet, "/regions/"+region+"/channel", nil)
+	if got := rec.Header().Get("X-Route"); got != "channel" {
+		t.Fatalf("адрес канала ушёл не в ту подручку: %q (код %d)", got, rec.Code)
+	}
+
 	bad := map[string]string{
 		"корень без региона":  "/regions/",
 		"пустое имя региона":  "/regions//chunks/0/0/0",
@@ -347,6 +369,7 @@ func TestNatureOnlyRegionServesManifest(t *testing.T) {
 		NewChunksHandler(world, nil),
 		NewObjectsHandler(maps),
 		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID})),
+		routeMark("channel"),
 	)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, httptest.NewRequest("GET", "/regions/"+st.Manifest.MapID, nil))
