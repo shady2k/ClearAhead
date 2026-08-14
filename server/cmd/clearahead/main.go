@@ -22,6 +22,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/mapstore"
 	"github.com/shady2k/ClearAhead/server/internal/match"
+	simpkg "github.com/shady2k/ClearAhead/server/internal/sim"
 	"github.com/shady2k/ClearAhead/server/internal/sourcestore"
 	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 	"github.com/shady2k/ClearAhead/server/internal/worldgen"
@@ -297,7 +298,11 @@ func main() {
 	// завершения вовсе (разбор — у ключа -quit-after ниже), и заводить его ради
 	// одной петли значило бы городить остановку для процесса, который гасится
 	// os.Exit. Отмена нужна тем, кто крутит движок в тестах, и там она есть.
-	sim := engine.New(game)
+	// ФИЗИКА ПРИХОДИТ В ДВИЖОК ПАРАМЕТРОМ (ClearAhead-fcy): движок остаётся
+	// чистым ядром и о сети с паспортами не знает, а мир движения собирается
+	// здесь — там же, где собирается всё остальное.
+	motion := simpkg.NewWorld(st.Network, set)
+	sim := engine.New(game, motion)
 	go sim.Run(context.Background())
 	log.Printf("время партии %s идёт: тик %s", game.ID, engine.TickDuration)
 
@@ -316,13 +321,13 @@ func main() {
 		// принимает тот, кто собирает сервер, а не тот, кто отдаёт байты.
 		httpapi.NewChunksHandler(world, lazy),
 		httpapi.NewObjectsHandler(store),
-		httpapi.NewLiveHandler(sim),
+		httpapi.NewLiveHandler(sim, st.Network),
 		// КАНАЛ КОМАНД: один сокет, JSON-RPC 2.0 в обе стороны (ClearAhead-wa51).
 		// Источник идентификаторов — системный: предсказуемая
 		// последовательность нужна тестам, а боевой сессии нужна
 		// неугадываемость, потому что session_id возвращается клиентом при
 		// переподключении и служит ключом к его ключам идемпотентности.
-		channel.NewHandler(sim, uuidv7.New, set),
+		channel.NewHandler(sim, uuidv7.New, set, st.Network),
 	))
 	// ВЕРСИОННЫЕ АДРЕСА МИРА (sqym.5): /matches/{m}/worlds/{v}/… отдают
 	// замороженные публикации с immutable. Матч один (matchID), регион — тот,

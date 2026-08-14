@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
 	"github.com/shady2k/ClearAhead/server/internal/rpc"
+	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 )
@@ -86,6 +88,10 @@ type Handler struct {
 	// машины, а не в мире. Канал его не читает сам и ничего в нём не ищет —
 	// только передаёт правке, которая проверяет им себя.
 	set *content.Set
+	// net — сеть региона. Нужна ПРОЕКЦИИ состояния на провод: положение машины
+	// живёт в s вдоль оси, а клиент читает u вдоль карты, и перевод делает
+	// партия (match.States), которой сеть и передаётся.
+	net *track.CompiledNetwork
 }
 
 // NewHandler собирает ручку канала.
@@ -97,8 +103,8 @@ type Handler struct {
 // Источник идентификаторов приходит ПАРАМЕТРОМ — правило пакета uuidv7:
 // генератор обязан быть внедряемым, иначе тест не получит предсказуемых
 // session_id и вынужден будет проверять «строка непустая» вместо равенства.
-func NewHandler(e *engine.Engine, ids uuidv7.Source, set *content.Set) *Handler {
-	return &Handler{e: e, reg: newRegistry(ids), set: set}
+func NewHandler(e *engine.Engine, ids uuidv7.Source, set *content.Set, net *track.CompiledNetwork) *Handler {
+	return &Handler{e: e, reg: newRegistry(ids), set: set, net: net}
 }
 
 // connState — то, что принадлежит ОДНОМУ соединению.
@@ -486,16 +492,16 @@ func (st *connState) write(ctx context.Context, body []byte) bool {
 func (h *Handler) envelope(sess *session, snap engine.Snapshot) snapshotEnvelope {
 	// Пустой список, а не null: партия без состава — законное состояние мира, и
 	// клиент обязан увидеть «единиц нет», а не «поля нет».
-	placed := make([]wireUnit, 0, len(snap.Match.Units))
-	for _, u := range snap.Match.Units {
-		w := wireUnit{Unit: u}
-		if c, ok := snap.Match.ControlsOf(u.ID); ok {
-			// Копия под указателем берётся у ЛОКАЛЬНОЙ переменной цикла:
-			// иначе все единицы указывали бы на одно значение.
-			cc := c
-			w.Controls = &cc
-		}
-		placed = append(placed, w)
+	placed, err := snap.Match.States(h.net)
+	if err != nil {
+		// Проекция не собралась — это поломка мира (элемент исчез из сети), и
+		// снапшот уходит БЕЗ единиц, а не с половиной. Половина выглядела бы как
+		// исчезнувшая машина, то есть как событие мира, которого не было.
+		log.Printf("канал: состояние партии не проецируется на провод: %v", err)
+		placed = []match.UnitState{}
+	}
+	if placed == nil {
+		placed = []match.UnitState{}
 	}
 	return snapshotEnvelope{
 		ProtocolVersion: protocol.ProtocolVersion,
@@ -554,24 +560,18 @@ type snapshotEnvelope struct {
 	Region      string `json:"region"`
 	Match       string `json:"match"`
 	// Time — модельное время партии, микросекунды СТРОКОЙ (units.SimTime).
-	Time  units.SimTime `json:"time"`
-	Units []wireUnit    `json:"units"`
+	Time  units.SimTime     `json:"time"`
+	Units []match.UnitState `json:"units"`
 }
 
-// wireUnit — единица на проводе: то, что записано в расстановке, плюс
-// положение органов управления.
+// Единицы на проводе — это match.UnitState, и собирает их партия, а не канал.
 //
-// Встраиванием, а не переписыванием полей: имена id, name, type и at живут в
-// одном месте (match.Unit), и вторая их запись разошлась бы с первой при первом
-// же переименовании.
-//
-// Controls УКАЗАТЕЛЕМ и с omitempty: у вагона органов нет вовсе, и нули в его
-// строке означали бы контроллер на нулевой позиции у машины, где контроллера
-// нет. Отсутствие поля и есть «управлять нечем».
-type wireUnit struct {
-	match.Unit
-	Controls *match.Controls `json:"controls,omitempty"`
-}
+// Здесь был свой тип wireUnit, склеенный из документа расстановки и органов
+// управления. Он снят вместе с появлением движения: положение машины перестало
+// быть тем, что записано в расстановке, и проекция состояния на провод (перевод
+// s → u, скорость, органы) обязана быть ОДНА на оба транспорта — канал и
+// оставшуюся ручку живого состояния. Иначе клиент, ходящий двумя дорогами,
+// получил бы два разных мира. Разбор — у match.UnitState.
 
 // ПРОВОД ЗДЕСЬ НЕ РАЗБИРАЕТСЯ — ни в одну сторону, кроме той, что идёт через
 // rpc. Функции «разобрать конверт» у пакета нет нарочно: проверки контракта

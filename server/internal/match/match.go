@@ -92,6 +92,33 @@ type Match struct {
 	//
 	// Разбор классов фактов — в controls.go.
 	Controls map[string]Controls `json:"-"`
+	// Motions — состояние физики по единицам: где машина и как быстро идёт.
+	// Разбор — в motion.go.
+	Motions map[string]Motion `json:"-"`
+	// Turnouts — положение остряков по устройствам: "straight" или "diverging".
+	//
+	// СОСТОЯНИЕ, А НЕ КОМАНДА. Переводить стрелки — работа диспетчера, и её
+	// команда придёт с ClearAhead-duf; но ПОЛОЖЕНИЕ у стрелки есть всегда,
+	// независимо от того, кто его меняет, и без него физика не знает, на какую
+	// ветвь уводить машину. Умолчание — прямая ветвь: у настоящей стрелки тоже
+	// есть плюсовое положение, а не «неизвестно».
+	Turnouts map[string]string `json:"-"`
+}
+
+// Положения остряка. Строки те же, что у ветви прохода в компиляции
+// (mapfmt.Passage.Branch): третьего написания одного и того же не заводится.
+const (
+	TurnoutStraight  = "straight"
+	TurnoutDiverging = "diverging"
+)
+
+// TurnoutAt — положение остряка устройства. Неизвестное устройство — прямая:
+// стрелка, о которой партия ничего не знает, стоит по главному пути.
+func (m Match) TurnoutAt(deviceID string) string {
+	if pos, ok := m.Turnouts[deviceID]; ok {
+		return pos
+	}
+	return TurnoutStraight
 }
 
 // document — файл расстановки как он записан.
@@ -212,6 +239,17 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			}
 			m.Controls[u.ID] = Stopped()
 		}
+		// СОСТОЯНИЕ ФИЗИКИ ЗАВОДИТСЯ ВМЕСТЕ С МАШИНОЙ, у всего, что катится:
+		// стоящая машина имеет положение и нулевую скорость, а «состояния ещё
+		// нет» у неё не бывает. Перевод u → s делается здесь один раз.
+		mo, err := StartMotion(u, el)
+		if err != nil {
+			return err
+		}
+		if m.Motions == nil {
+			m.Motions = map[string]Motion{}
+		}
+		m.Motions[u.ID] = mo
 	}
 	m.Units = append([]Unit(nil), list...)
 	return nil

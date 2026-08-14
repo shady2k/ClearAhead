@@ -28,7 +28,7 @@ func fixture() *match.Match {
 // секунды реального. Проверяется не скорость, а РАВЕНСТВО: время партии есть
 // номер тика, умноженный на длительность, и ничто другое.
 func TestStepAdvancesTimeByExactlyOneTick(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	if s := e.Snapshot(); s.Tick != 0 || s.Time != 0 {
 		t.Fatalf("новая партия начинает с тика %d, времени %s", s.Tick, s.Time)
 	}
@@ -53,7 +53,7 @@ func TestStepAdvancesTimeByExactlyOneTick(t *testing.T) {
 // разницей показаний часов, он покажет это первым: три шага обязаны дать ровно
 // три тика, сколько бы реального времени между ними ни прошло.
 func TestModelTimeDoesNotFollowWallClock(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	for range 3 {
 		e.Step()
 		time.Sleep(25 * time.Millisecond)
@@ -121,7 +121,7 @@ func TestPlanDropsBeyondCatchUpWithoutSkippingTicks(t *testing.T) {
 // TestSnapshotIsCopyNotView — снимок обязан быть копией: читатель, правящий
 // возвращённый срез, иначе правил бы партию.
 func TestSnapshotIsCopyNotView(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	s := e.Snapshot()
 	s.Match.Units[0].ID = "ПОРЧА"
 	s.Match.Region = "ST_B"
@@ -145,7 +145,7 @@ func TestSnapshotIsCopyNotView(t *testing.T) {
 // пройти — свойство загруженности машины, а не движка, и точное число сделало
 // бы тест мигающим.
 func TestRunAdvancesTimeWhileSnapshotsAreRead(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -175,7 +175,7 @@ func TestRunAdvancesTimeWhileSnapshotsAreRead(t *testing.T) {
 // запустил. Петля, не возвращающаяся по отмене, — это утёкшая горутина, и
 // увидят её не здесь, а на выходе сервера.
 func TestRunReturnsOnContextCancel(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {

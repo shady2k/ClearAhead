@@ -43,9 +43,29 @@ func run() -> void:
 	for reason in [LiveChannel.REASON_UNKNOWN_SESSION, LiveChannel.REASON_UNSUPPORTED_PROTOCOL]:
 		_ok("причина %s объявлена в договоре" % reason, doc.refusal_reasons.has(reason))
 
+	_check_display_kinematics(doc)
 	_check_envelope(doc)
 	_check_unknown_field_survives(doc)
 	_check_validator_is_not_blind(doc)
+
+
+## КИНЕМАТИКА ПОКАЗА ОБЪЯВЛЕНА, а не «клиент как-то сглаживает».
+##
+## Правило досчёта между снапшотами — клиентское, но версионированное и
+## записанное в договоре (ClearAhead-t5h §6): сервер по нему будет мерить
+## расхождение своей копии с картинкой игрока. Разойдись версия или буфер — и он
+## мерил бы не ту картинку.
+func _check_display_kinematics(doc) -> void:
+	var decl: Dictionary = doc.raw.get("display_kinematics", {}) as Dictionary
+	_ok("кинематика показа объявлена в договоре", not decl.is_empty())
+	if decl.is_empty():
+		return
+	_ok("версия кинематики совпадает с договором",
+		DisplayMotion.VERSION == int(decl.get("version", -1)),
+		"клиент %d, договор %s" % [DisplayMotion.VERSION, str(decl.get("version"))])
+	_ok("буфер показа совпадает с договором",
+		DisplayMotion.BUFFER_US == int(decl.get("buffer_ms", -1)) * 1000,
+		"клиент %d мкс, договор %s мс" % [DisplayMotion.BUFFER_US, str(decl.get("buffer_ms"))])
 
 
 ## Конверт, собранный ПО ДОГОВОРУ, обязан быть разобран клиентом полностью.

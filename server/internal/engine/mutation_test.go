@@ -47,7 +47,7 @@ func names(g match.Match) []string {
 // значило бы менять партию из горутины транспорта, то есть ровно та гонка,
 // ради невозможности которой движок владеет состоянием единолично.
 func TestMutationAppliesAtTickAndNotBefore(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	done := e.Submit(mark{name: "M"})
 	if got := names(e.Snapshot().Match); len(got) != 1 {
 		t.Fatalf("правка применилась до тика: %v", got)
@@ -72,7 +72,7 @@ func TestMutationAppliesAtTickAndNotBefore(t *testing.T) {
 // добрались до замка: все три правки поданы до тика и обязаны примениться так,
 // как поданы.
 func TestMutationsApplyInSubmissionOrder(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	for _, n := range []string{"A", "B", "C"} {
 		e.Submit(mark{name: n})
 	}
@@ -93,7 +93,7 @@ func TestMutationsApplyInSubmissionOrder(t *testing.T) {
 // подал, и никому больше: сосед по очереди обязан примениться как ни в чём не
 // бывало.
 func TestFailedMutationReachesItsSubmitter(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	bad := e.Submit(mark{name: "X", fail: true})
 	good := e.Submit(mark{name: "Y"})
 	e.Step()
@@ -112,7 +112,7 @@ func TestFailedMutationReachesItsSubmitter(t *testing.T) {
 // правке за тик: иначе наплыв команд растил бы очередь быстрее, чем она
 // разбирается, и мир отставал бы от игрока молча.
 func TestQueueIsDrainedWholeEachTick(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	const n = 32
 	for i := range n {
 		e.Submit(mark{name: fmt.Sprintf("M%02d", i)})
@@ -125,7 +125,7 @@ func TestQueueIsDrainedWholeEachTick(t *testing.T) {
 
 // TestSubscriberSeesEveryTickAndStopsOnUnsubscribe — подписка на границу тика.
 func TestSubscriberSeesEveryTickAndStopsOnUnsubscribe(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	sub, unsubscribe := e.Subscribe()
 	// Первый снимок кладётся при подписке — без него подписчик в неподвижном
 	// мире не узнал бы о нём ничего до первого изменения.
@@ -152,7 +152,7 @@ func TestSubscriberSeesEveryTickAndStopsOnUnsubscribe(t *testing.T) {
 // задержать тик. Потери он не несёт: снимок полный, и следующий содержит всё,
 // что содержал пропущенный, — на этом свойстве и держится право ронять.
 func TestSlowSubscriberDropsSnapshotsAndKeepsTicking(t *testing.T) {
-	e := New(fixture())
+	e := New(fixture(), nil)
 	sub, unsubscribe := e.Subscribe()
 	defer unsubscribe()
 	for range 5 {

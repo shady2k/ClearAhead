@@ -248,6 +248,12 @@ var api: WorldApi
 ## (LiveChannel), и клиент возвращается в ту же сессию.
 var channel: LiveChannel
 
+## Элементы сети по идентификаторам — для перестановки машин по снапшотам.
+var _stock_elements := {}
+
+## Кинематика показа: где рисовать машины между снапшотами (ClearAhead-t5h §6).
+var _display := DisplayMotion.new()
+
 ## Подпись состава на последнем применённом снапшоте. По ней решается,
 ## перестраивать ли постановку: биение приходит не реже раза в секунду
 ## модельного времени и обычно несёт ровно то же состояние.
@@ -1003,6 +1009,12 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 	stats["channel_note"] = ""
 	var signature := JSON.stringify(snap.units)
 	stats["channel_stock_changed"] = _stock_signature != "" and signature != _stock_signature
+	# МАШИНЫ ЕДУТ. Снапшот кладётся в кинематику показа, а узлы двигаются
+	# каждый кадр между снимками (разбор — у DisplayMotion): сервер шлёт десять
+	# раз в секунду, экран рисует шестьдесят, и без досчёта машина дёргается —
+	# замерено, прыжки до 0.47 м.
+	_display.push(snap.time_us, snap.units)
+	_move_stock(snap)
 	# Кабина берёт положение рукояток из снапшота: истина о машине приходит
 	# оттуда, а не остаётся тем, что игрок в последний раз выставил.
 	if cab.aboard():
@@ -1010,6 +1022,44 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 		_cab_stats()
 	if _loaded and ui_label != null:
 		_refresh_ui()
+
+
+## _move_stock — числа о движении в отчёт. Само движение показывает _process.
+func _move_stock(snap: LiveChannel.Snapshot) -> void:
+	var fastest := 0.0
+	for raw in snap.units:
+		var d := raw as Dictionary
+		var v := String(d.get("speed", "0")).to_int() / 1e6
+		fastest = maxf(fastest, absf(v))
+	stats["stock_speed_ms"] = fastest
+
+
+## _show_stock — поставить машины туда, где они СЕЙЧАС по кинематике показа.
+##
+## Каждый кадр, а не на снапшот: между снимками сервер молчит, а экран рисует, и
+## показывать всё это время одно и то же положение значит дёргаться десять раз в
+## секунду. Досчитывается координата ВДОЛЬ ПУТИ, поза — тем же кодом, что при
+## постановке (разбор, почему не Tween, — в DisplayMotion).
+func _show_stock() -> void:
+	if _stock_units.is_empty() or _stock_elements.is_empty():
+		return
+	var moved := 0
+	for u_raw in _stock_units:
+		var u := u_raw as RollingStock.Unit
+		var at := _display.at(u.id)
+		if at.is_empty():
+			continue
+		var was := u.u_m
+		var note := RollingStock.move(u, at, _stock_elements)
+		if note != "":
+			# Отказ перестановки — на экран, а не в тишину: машина, оставшаяся
+			# стоять при едущем сервере, выглядит исправной.
+			if not errors.has(note):
+				errors.append("машина не переставлена — %s" % note)
+			continue
+		if not is_equal_approx(was, u.u_m):
+			moved += 1
+	stats["stock_moved"] = moved
 
 
 ## _on_controls_set — сервер принял команду и вернул положение, КОТОРОЕ ВСТАЛО.
@@ -1085,6 +1135,11 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element], snap: LiveChannel.S
 	_stock_root.name = "rolling_stock"
 	world.add_child(_stock_root)
 	var res := RollingStock.place(_stock_root, {"units": snap.units}, _stock_types, _stock_assets, elements)
+	# Элементы держатся ПОСЛЕ загрузки: по ним переставляется машина, когда
+	# приходит снапшот. Искать их заново в сети на каждый снимок значило бы
+	# разбирать сеть десять раз в секунду.
+	for el in elements:
+		_stock_elements[el.id] = el
 	_stock_signature = JSON.stringify(snap.units)
 	_stock_units = res["units"]
 	stats["stock_units"] = _stock_units.size()
@@ -2647,6 +2702,11 @@ func _hud_text() -> String:
 	# сломан, видно, почему рукоятка не слушается.
 	if cab.aboard():
 		l.append(cab.text())
+		# СКОРОСТЬ — ПРОИЗВОДНОЕ, а не положение рукоятки, и потому отдельной
+		# строкой: прибор показывает, что вышло из физики, а не то, что выставил
+		# машинист (четыре класса фактов, ClearAhead-0na).
+		l.append("  скорость %.1f км/ч (с сервера; клиент между снимками не досчитывает)" % [
+			float(stats.get("stock_speed_ms", 0.0)) * 3.6])
 		l.append("  [i]1/2 тяга, 3/4 тормоз, R реверсор (Shift+R назад), 0 всё в ноль[/i]")
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
@@ -2830,7 +2890,7 @@ func _print_report() -> void:
 			# КАБИНА: положение рукояток числами. Снимок показывает, что кабина
 			# есть; отчёт — что в ней выставлено.
 			"cab_unit", "cab_traction", "cab_brake", "cab_reverser", "cab_pending",
-			"cab_on_machine", "cab_refusal_reason",
+			"cab_on_machine", "cab_refusal_reason", "stock_moved", "stock_speed_ms",
 			"structures_received", "features_received", "runs_received", "track_types_received",
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",
@@ -3308,6 +3368,10 @@ func _build_ballast_mask(axis: PackedVector2Array, toe_m: float) -> void:
 ## понемногу КАЖДЫЙ кадр, включая кадры движения: задание продолжаемое, и
 ## прерывание в середине чанка ничего не портит.
 func _process(_delta: float) -> void:
+	# МАШИНЫ СТАВЯТСЯ КАЖДЫЙ КАДР — по объявленной кинематике показа. Первым,
+	# потому что это положение вещей мира: от него зависит и камера, наведённая
+	# на машину, и то, что видит игрок в кадре.
+	_show_stock()
 	# Опрос головы проекций идёт САМЫМ ПЕРВЫМ: ему не нужны ни камера, ни трава,
 	# и он не должен ждать их готовности — мир вправе сменить версию в любой
 	# момент, в том числе до первого кадра.

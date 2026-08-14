@@ -17,11 +17,13 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/contract"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
 	"github.com/shady2k/ClearAhead/server/internal/rpc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
+	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 )
@@ -80,14 +82,29 @@ type talk struct {
 	ctx context.Context
 }
 
+// station — скомпилированная сеть затравки: та же, на которой стоит боевая
+// расстановка. Нужна проекции состояния на провод (перевод s → u).
+func station(t *testing.T) *track.CompiledNetwork {
+	t.Helper()
+	m := seedmap.Station()
+	if err := mapfmt.Validate(m); err != nil {
+		t.Fatalf("фикстура карты: %v", err)
+	}
+	cn, _, err := track.Compile(m)
+	if err != nil {
+		t.Fatalf("компиляция карты: %v", err)
+	}
+	return cn
+}
+
 func dial(t *testing.T) *talk {
 	t.Helper()
 	doc, err := contract.Load(contractPath())
 	if err != nil {
 		t.Fatalf("договор не читается: %v", err)
 	}
-	e := engine.New(testMatch())
-	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t)))
+	e := engine.New(testMatch(), nil)
+	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t), station(t)))
 	t.Cleanup(srv.Close)
 
 	// Срок на весь разговор: тест, зависший на чтении сокета, обязан упасть
@@ -375,8 +392,8 @@ func TestServerConstantsMatchContract(t *testing.T) {
 // TestWrongRegionIsNotFound — адрес несуществующего региона обязан отвечать
 // 404 ДО апгрейда: канал не открывается на то, чего нет.
 func TestWrongRegionIsNotFound(t *testing.T) {
-	e := engine.New(testMatch())
-	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t)))
+	e := engine.New(testMatch(), nil)
+	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t), station(t)))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

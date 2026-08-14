@@ -47,6 +47,14 @@ var errors: Dictionary = {}
 var refusal_data := ""
 var refusal_reasons: Array = []
 
+## raw — договор как он записан, целиком.
+##
+## Нужен разделам, которые не являются объявлением ВИДА: кинематика показа,
+## запреты подмножества, идемпотентность. Разбирать каждый из них в своё поле
+## значило бы заводить поле на каждую строку договора и править этот файл при
+## всякой правке того.
+var raw: Dictionary = {}
+
 ## reason — почему договор не прочитан. Пусто, если всё в порядке.
 var reason := ""
 
@@ -68,6 +76,7 @@ static func load_channel() -> Object:
 		doc.reason = "договор не разбирается как объект JSON: %s" % abs
 		return doc
 	var d := parsed as Dictionary
+	doc.raw = d
 	doc.name = String(d.get("contract", ""))
 	doc.protocol_version = int(d.get("protocol_version", 0))
 	doc.path = String(d.get("path", ""))

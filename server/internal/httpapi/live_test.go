@@ -7,15 +7,32 @@ import (
 	"testing"
 
 	"github.com/shady2k/ClearAhead/server/internal/engine"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
+	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // loco1ID — идентификатор локомотива фикстуры: UUIDv7 боевой расстановки
 // (maps/st_a_placement.json, метка LOCO_1).
 const loco1ID = "01a3185c-6001-7242-8242-000000424242"
+
+// station — скомпилированная сеть затравки: ручке живого состояния она нужна
+// для проекции положения (s вдоль оси → u вдоль карты).
+func station(t *testing.T) *track.CompiledNetwork {
+	t.Helper()
+	m := seedmap.Station()
+	if err := mapfmt.Validate(m); err != nil {
+		t.Fatalf("фикстура карты: %v", err)
+	}
+	cn, _, err := track.Compile(m)
+	if err != nil {
+		t.Fatalf("компиляция карты: %v", err)
+	}
+	return cn
+}
 
 // liveFixture — движок с одной поставленной единицей.
 //
@@ -25,12 +42,12 @@ func liveFixture() *engine.Engine {
 	return engine.New(&match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
 		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
-	}}})
+	}}}, nil)
 }
 
 func TestLiveServesUnits(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewLiveHandler(liveFixture()).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
+	NewLiveHandler(liveFixture(), station(t)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d", rec.Code)
 	}
@@ -76,7 +93,7 @@ func TestLiveServesUnits(t *testing.T) {
 // таймингов.
 func TestLiveCarriesModelTime(t *testing.T) {
 	e := liveFixture()
-	h := NewLiveHandler(e)
+	h := NewLiveHandler(e, station(t))
 	read := func() units.SimTime {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
@@ -103,7 +120,7 @@ func TestLiveCarriesModelTime(t *testing.T) {
 // а не 404: партия существует, состава в ней нет. 404 означал бы, что мира нет.
 func TestLiveEmptyMatchIsNotFound404(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: "ST_A"})).
+	NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: "ST_A"}, nil), station(t)).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d, ожидался 200", rec.Code)
@@ -131,7 +148,7 @@ func TestLiveRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			NewLiveHandler(liveFixture()).ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+			NewLiveHandler(liveFixture(), station(t)).ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
 			if rec.Code != c.want {
 				t.Fatalf("код %d, ожидался %d", rec.Code, c.want)
 			}

@@ -76,7 +76,7 @@ func TestStateHashSeparatesFieldsByLength(t *testing.T) {
 // читателем: второе место, где объявлен канонический порядок полей, разошлось
 // бы с первым.
 func TestEngineSealsHashEveryTick(t *testing.T) {
-	e := New(two())
+	e := New(two(), nil)
 	start := e.Snapshot()
 	if start.Hash == "" {
 		t.Fatal("у нового движка нет хеша состояния")

@@ -107,6 +107,22 @@ func StateHash(m *match.Match) string {
 			writeUint(uint64(c.Brake))
 			writeStr(string(c.Reverser))
 		}
+		// СОСТОЯНИЕ ФИЗИКИ — ТОЖЕ СОСТОЯНИЕ, и без него хеш не замечает
+		// движения. Найдено пробником на живом сервере: машина ехала, а снапшоты
+		// шли раз в секунду — то есть только биением, потому что хеш при
+		// движении не менялся. На экране это выглядело бы как рывки в секунду
+		// вместо хода.
+		//
+		// Здесь float64 нет вовсе: положение уже целое (микрометры), скорость —
+		// целое (микрометры в секунду). Квантовать нечего.
+		mo, moving := m.Motions[u.ID]
+		writeUint(boolBit(moving))
+		if moving {
+			writeStr(mo.Element)
+			writeUint(uint64(mo.S))
+			writeUint(uint64(mo.Speed))
+			writeStr(string(mo.Facing))
+		}
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }

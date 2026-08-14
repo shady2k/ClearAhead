@@ -15,11 +15,13 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/content"
 
 	"github.com/shady2k/ClearAhead/server/internal/engine"
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
 	"github.com/shady2k/ClearAhead/server/internal/rpc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
+	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/uuidv7"
 )
 
@@ -85,9 +87,24 @@ func testSet(t *testing.T) *content.Set {
 	return s
 }
 
+// station — скомпилированная сеть затравки: та же, на которой стоит боевая
+// расстановка. Нужна проекции состояния на провод (перевод s → u).
+func station(t *testing.T) *track.CompiledNetwork {
+	t.Helper()
+	m := seedmap.Station()
+	if err := mapfmt.Validate(m); err != nil {
+		t.Fatalf("фикстура карты: %v", err)
+	}
+	cn, _, err := track.Compile(m)
+	if err != nil {
+		t.Fatalf("компиляция карты: %v", err)
+	}
+	return cn
+}
+
 func testHandler(t *testing.T) *Handler {
 	t.Helper()
-	return NewHandler(engine.New(testMatch()), uuidv7.Deterministic(), testSet(t))
+	return NewHandler(engine.New(testMatch(), nil), uuidv7.Deterministic(), testSet(t), station(t))
 }
 
 // newConn — соединение без сокета: h.request сокета не касается вовсе, а
@@ -392,8 +409,8 @@ func setControls(t *testing.T, h *Handler, st *connState, id int, params string)
 // TestSetControlsAppliesAndAnswersWithWhatStood — команда доезжает до партии, а
 // ответ несёт положение, КОТОРОЕ ВСТАЛО.
 func TestSetControlsAppliesAndAnswersWithWhatStood(t *testing.T) {
-	e := engine.New(testMatch())
-	h := NewHandler(e, uuidv7.Deterministic(), testSet(t))
+	e := engine.New(testMatch(), nil)
+	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
 	st := greeted(t, h)
@@ -446,8 +463,8 @@ func TestSetControlsRefusals(t *testing.T) {
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			e := engine.New(testMatch())
-			h := NewHandler(e, uuidv7.Deterministic(), testSet(t))
+			e := engine.New(testMatch(), nil)
+			h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 			stop := ticking(e)
 			defer stop()
 			st := greeted(t, h)
@@ -465,8 +482,8 @@ func TestSetControlsRefusals(t *testing.T) {
 // TestSetControlsRequiresAllOrgans — частичная команда отвергается формой, а не
 // доезжает до партии с додуманными нулями.
 func TestSetControlsRequiresAllOrgans(t *testing.T) {
-	e := engine.New(testMatch())
-	h := NewHandler(e, uuidv7.Deterministic(), testSet(t))
+	e := engine.New(testMatch(), nil)
+	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
 	st := greeted(t, h)
@@ -480,8 +497,8 @@ func TestSetControlsRequiresAllOrgans(t *testing.T) {
 // Без ключа идемпотентности повтор наложил бы прежнее положение поверх новой
 // правки; с ключом он возвращает прежний ответ и партии не касается.
 func TestRepeatedControlsCommandAppliesOnce(t *testing.T) {
-	e := engine.New(testMatch())
-	h := NewHandler(e, uuidv7.Deterministic(), testSet(t))
+	e := engine.New(testMatch(), nil)
+	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
 	st := greeted(t, h)

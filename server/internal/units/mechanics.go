@@ -3,6 +3,7 @@ package units
 import (
 	"fmt"
 	"math"
+	"strconv"
 )
 
 // GravityMicro — ускорение свободного падения в микрометрах на секунду в
@@ -84,6 +85,36 @@ func KmhToSpeed(kmh float64) (Speed, error) {
 
 // Kmh возвращает скорость в километрах в час для показа.
 func (v Speed) Kmh() float64 { return float64(v) * 3600 / 1e9 }
+
+// MarshalJSON пишет скорость строкой микрометров в секунду.
+//
+// Правило провода то же, что у расстояния и модельного времени
+// (revision-7-plan §4): целое int64 едет строкой. Довод здесь тот же и
+// дополнительный: у скорости есть ЗНАК, и «-16700000» строкой читается
+// однозначно, а число в JSON у разбирающего float-парсера рискует прийти
+// как -1.67e7 — то есть уже не целым.
+//
+// Заведено вместе с первым читателем: до движения скорости на проводе не было
+// вовсе (ClearAhead-fcy).
+func (v Speed) MarshalJSON() ([]byte, error) {
+	return []byte(`"` + strconv.FormatInt(int64(v), 10) + `"`), nil
+}
+
+// UnmarshalJSON читает скорость из строки микрометров в секунду.
+//
+// Нужен разбору снимков в тестах провода: без него json.Unmarshal в структуру
+// с этим полем отказывает, и разбирать строку пришлось бы каждому тесту заново.
+func (v *Speed) UnmarshalJSON(b []byte) error {
+	if len(b) < 2 || b[0] != '"' || b[len(b)-1] != '"' {
+		return fmt.Errorf("units: Speed ожидается строкой микрометров в секунду, получено %s", b)
+	}
+	n, err := strconv.ParseInt(string(b[1:len(b)-1]), 10, 64)
+	if err != nil {
+		return fmt.Errorf("units: разбор Speed: %w", err)
+	}
+	*v = Speed(n)
+	return nil
+}
 
 // MilliKmh — скорость в тысячных долях километра в час.
 //

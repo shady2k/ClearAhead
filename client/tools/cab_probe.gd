@@ -124,10 +124,117 @@ func _run(w: Node) -> void:
 	_press(KEY_3)
 	await _settled(cab)
 
+	await _check_ride(w)
 	await _check_camera(w)
 
 	print("CAB PROBE %s" % ("OK" if _fails == 0 else "ОТКАЗОВ %d" % _fails))
 	quit(_fails)
+
+
+## МАШИНА ЕДЕТ — и это то, ради чего всё остальное.
+##
+## Меряется ПУТЬ ПО МИРУ, а не число в снапшоте: узел машины в осях мира до и
+## после. Число из снапшота показало бы, что сервер посчитал; путь узла
+## показывает, что клиент это применил.
+func _check_ride(w: Node) -> void:
+	var cab: Cab = w.cab
+	var machine: Node3D = null
+	for u_raw in w._stock_units:
+		var u := u_raw as RollingStock.Unit
+		if u.id == cab.unit_id:
+			machine = u.node
+	if machine == null:
+		_ok("узел машины найден", false)
+		return
+
+	# ТОРМОЗ ОТПУСКАЕТСЯ ПЕРВЫМ, и это не формальность: прошлая проверка кончила
+	# «всё в ноль», то есть ПОЛНЫМ тормозом, и машина под ним никуда не поедет.
+	# Первый заход на этом и споткнулся — «0.0 м за 5 с», — и это была ошибка
+	# зонда, а не мира.
+	for i in range(cab.brake_notches):
+		_press(KEY_3)
+		await _settled(cab)
+	_ok("тормоз отпущен перед поездкой", cab.set_brake == 0, str(cab.set_brake))
+
+	var from := machine.global_position
+	# ЕДЕМ В СТОРОНУ СТРЕЛКИ (Shift+R — реверсор назад), а не к упору.
+	#
+	# Мир зонд не пересоздаёт: сервер живёт своей жизнью, и машина вполне может
+	# стоять там, куда её привёл прошлый прогон. Первый заход это и поймал —
+	# «0.0 м за 5 с», потому что локомотив упирался в тупиковый конец главного
+	# пути. В сторону стрелки путь есть всегда: за ней подход и край карты.
+	_press_shift(KEY_R)
+	await _settled(cab)
+	_ok("реверсор встал назад", cab.set_reverser == "reverse", cab.set_reverser)
+	for i in range(10):
+		_press(KEY_2)
+		await _settled(cab)
+	_ok("набрана тяга", cab.set_traction == 10, str(cab.set_traction))
+
+	# Пять секунд НАСТЕННОГО времени: темп мира 1:1, значит и модельного столько
+	# же. Ждём кадрами, а не сном: сокет опрашивается в кадре.
+	#
+	# ПО ДОРОГЕ МЕРЯЕМ ДВА ЧИСЛА, без которых нельзя выбрать сглаживание показа
+	# (решение ClearAhead-t5h §4: «сначала замерить, годится ли тот же буфер»):
+	# как часто приходят снапшоты и как далеко машина прыгает между ними.
+	var until := Time.get_ticks_msec() + 5000
+	var gaps: Array[float] = []
+	var frames: Array[float] = []
+	var still := 0
+	var last_seq := int(w.stats.get("channel_seq", 0))
+	var last_at := Time.get_ticks_usec()
+	var last_pos := machine.global_position
+	while Time.get_ticks_msec() < until:
+		await process_frame
+		# ПЛАВНОСТЬ МЕРЯЕТСЯ ПОКАДРОВО, а не по снапшотам: дёрганье — это когда
+		# машина стоит несколько кадров и прыгает на один. Замер по снапшотам
+		# такого не видит вовсе, он видит только шаг сервера.
+		var moved := last_pos.distance_to(machine.global_position)
+		frames.append(moved)
+		if moved < 0.001:
+			still += 1
+		last_pos = machine.global_position
+		var seq := int(w.stats.get("channel_seq", 0))
+		if seq != last_seq:
+			var now := Time.get_ticks_usec()
+			gaps.append(float(now - last_at) / 1000.0)
+			last_seq = seq
+			last_at = now
+	if gaps.size() > 2 and frames.size() > 2:
+		gaps.sort()
+		var sorted := frames.duplicate()
+		sorted.sort()
+		print("CAB PROBE: снапшотов %d, промежуток мин %.1f / медиана %.1f / макс %.1f мс"
+			% [gaps.size(), gaps[0], gaps[gaps.size() / 2], gaps[gaps.size() - 1]])
+		print("CAB PROBE: кадров %d, сдвиг за кадр медиана %.3f м, макс %.3f м, "
+			% [frames.size(), sorted[sorted.size() / 2], sorted[sorted.size() - 1]]
+			+ "неподвижных кадров %.0f%%" % [100.0 * float(still) / float(frames.size())])
+	var went := from.distance_to(machine.global_position)
+	_ok("машина проехала по миру", went > 5.0, "%.1f м за 5 с" % went)
+	_ok("скорость дошла до клиента", float(w.stats.get("stock_speed_ms", 0.0)) > 1.0,
+		"%.2f м/с" % float(w.stats.get("stock_speed_ms", 0.0)))
+
+	# И ОСТАНОВКА: полный тормоз, сброс тяги.
+	_press(KEY_0)
+	await _settled(cab)
+	# Ждём РОВНОГО НУЛЯ, а не «почти»: сервер гасит остаток скорости на месте, и
+	# «0.001 м/с» означало бы, что где-то остался ползущий хвост. Ждать не
+	# дольше восьми секунд: биение приходит раз в секунду модельного времени,
+	# значит нулевую скорость клиент узнает не позже этого.
+	var stopping := Time.get_ticks_msec() + 8000
+	while Time.get_ticks_msec() < stopping and float(w.stats.get("stock_speed_ms", 0.0)) != 0.0:
+		await process_frame
+	_ok("машина остановилась тормозом ровно", float(w.stats.get("stock_speed_ms", 0.0)) == 0.0,
+		"%.4f м/с" % float(w.stats.get("stock_speed_ms", 0.0)))
+	var stopped := machine.global_position
+	await process_frame
+	await process_frame
+	_ok("и стоит", stopped.distance_to(machine.global_position) < 0.01)
+
+	# Отпускаем тормоз, чтобы следующая проверка застала кабину в покое.
+	for i in range(cab.brake_notches):
+		_press(KEY_3)
+		await _settled(cab)
 
 
 ## КАМЕРА СМОТРИТ НА МАШИНУ, А НЕ НА ЧЕЛОВЕКА.
@@ -194,15 +301,22 @@ func _settled(cab: Cab) -> void:
 
 
 func _press(key: Key) -> void:
-	_key(key, true)
-	_key(key, false)
+	_key(key, true, false)
+	_key(key, false, false)
 
 
-func _key(key: Key, pressed: bool) -> void:
+## _press_shift — та же клавиша с Shift: у реверсора вторая сторона живёт на нём.
+func _press_shift(key: Key) -> void:
+	_key(key, true, true)
+	_key(key, false, true)
+
+
+func _key(key: Key, pressed: bool, shift: bool) -> void:
 	var ev := InputEventKey.new()
 	ev.keycode = key
 	ev.physical_keycode = key
 	ev.pressed = pressed
+	ev.shift_pressed = shift
 	Input.parse_input_event(ev)
 
 

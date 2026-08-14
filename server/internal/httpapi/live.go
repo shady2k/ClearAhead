@@ -7,6 +7,7 @@ import (
 
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
+	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
@@ -51,6 +52,10 @@ import (
 // границе тика (шов 4: единственный владелец состояния).
 type liveAPI struct {
 	e *engine.Engine
+	// net — сеть региона: положение машины живёт в s вдоль оси, а клиент читает
+	// u вдоль карты. Перевод делает партия (match.States) — одна проекция на оба
+	// транспорта, канал и эту ручку.
+	net *track.CompiledNetwork
 }
 
 // NewLiveHandler собирает ручку живого состояния.
@@ -58,7 +63,9 @@ type liveAPI struct {
 // Принимает движок, а не партию, и это не удобство вызова: партию у движка
 // нельзя взять иначе как снимком, и обработчик, которому дали бы её напрямую,
 // имел бы способ прочитать состояние мимо замка.
-func NewLiveHandler(e *engine.Engine) http.Handler { return &liveAPI{e: e} }
+func NewLiveHandler(e *engine.Engine, net *track.CompiledNetwork) http.Handler {
+	return &liveAPI{e: e, net: net}
+}
 
 // wireLive — тело ответа.
 //
@@ -70,10 +77,10 @@ func NewLiveHandler(e *engine.Engine) http.Handler { return &liveAPI{e: e} }
 // выводится из него, и два написания одной величины на проводе разошлись бы у
 // первого же клиента, который выбрал не то.
 type wireLive struct {
-	Region string        `json:"region"`
-	Match  string        `json:"match"`
-	Time   units.SimTime `json:"time"`
-	Units  []match.Unit  `json:"units"`
+	Region string            `json:"region"`
+	Match  string            `json:"match"`
+	Time   units.SimTime     `json:"time"`
+	Units  []match.UnitState `json:"units"`
 }
 
 func (a *liveAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -100,9 +107,13 @@ func (a *liveAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Переменная названа placed, а не units: имя units занято ПАКЕТОМ единиц
 	// измерения, и локальная переменная затенила бы его ровно в том месте, где
 	// рядом стоит units.SimTime.
-	placed := snap.Match.Units
+	placed, err := snap.Match.States(a.net)
+	if err != nil {
+		http.Error(w, "состояние партии не проецируется на провод", http.StatusInternalServerError)
+		return
+	}
 	if placed == nil {
-		placed = []match.Unit{}
+		placed = []match.UnitState{}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
