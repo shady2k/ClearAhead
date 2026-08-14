@@ -64,6 +64,9 @@ func set(t *testing.T) *content.Set {
 			"traction": map[string]any{
 				"adhesive_mass": 192.0, "continuous_force": 401.1, "continuous_speed": 53.6,
 			},
+			// Органы обязательны у машины с тягой: локомотив, которым нечем
+			// управлять, поедет только по команде автопилота, которого нет.
+			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
 			"appearance": "vid",
 		}},
 	}

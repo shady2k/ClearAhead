@@ -77,6 +77,26 @@ const (
 	ReasonNotGreeted = "not_greeted"
 	// ReasonAlreadyGreeted — второе рукопожатие в одном соединении.
 	ReasonAlreadyGreeted = "already_greeted"
+
+	// Причины отказа ДОМЕННЫХ команд. Первые пять пришли с первой командой —
+	// органами управления кабины (ClearAhead-6ygr).
+	//
+	// Почему причины домена живут в пакете провода: reason читается МАШИНОЙ, и
+	// он часть контракта наравне с именами полей. Разбросав их по доменным
+	// пакетам, мы получили бы список причин, которого нет целиком нигде, —
+	// а договор обязан перечислить их все (contract/channel.v1.json).
+
+	// ReasonUnknownUnit — такой единицы в партии нет.
+	ReasonUnknownUnit = "unknown_unit"
+	// ReasonNoControls — у машины нет органов управления (вагон).
+	ReasonNoControls = "no_controls"
+	// ReasonNotchOutOfRange — ступени с таким номером у этой машины нет.
+	ReasonNotchOutOfRange = "notch_out_of_range"
+	// ReasonUnknownReverser — неизвестное положение реверсора.
+	ReasonUnknownReverser = "unknown_reverser"
+	// ReasonTractionWithoutReverser — тяга при реверсоре в нуле: цепь тяги не
+	// собирается, и это устройство машины, а не наше правило игры.
+	ReasonTractionWithoutReverser = "traction_without_reverser"
 )
 
 // HelloRequest — первое сообщение клиента в канале.

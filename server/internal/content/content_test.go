@@ -50,6 +50,7 @@ func goodDoc(t *testing.T, body []byte) map[string]any {
 			"traction": map[string]any{
 				"adhesive_mass": 100.0, "continuous_force": 200.0, "continuous_speed": 40.0,
 			},
+			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
 			"appearance": "loco_x",
 		}},
 	}
@@ -135,6 +136,21 @@ func TestLoadRefusals(t *testing.T) {
 		want   string
 		broken func(doc map[string]any)
 	}{
+		// ОРГАНЫ УПРАВЛЕНИЯ (ClearAhead-6ygr). Локомотив без них — машина, которой
+		// нечем управлять; вагон с ними — перепутанные строки паспорта; нулевая
+		// ступень — рукоятка, которую нельзя сдвинуть.
+		{"локомотив без органов", "не объявлены органы управления", func(d map[string]any) {
+			delete(d["stock"].([]any)[0].(map[string]any), "controls")
+		}},
+		{"органы у машины без тяги", "у машины без тяги", func(d map[string]any) {
+			delete(d["stock"].([]any)[0].(map[string]any), "traction")
+		}},
+		{"ноль ступеней тяги", "traction_notches", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["traction_notches"] = 0
+		}},
+		{"ноль ступеней торможения", "brake_notches", func(d map[string]any) {
+			d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["brake_notches"] = 0
+		}},
 		{"неизвестное поле записи", "unknown field", func(d map[string]any) {
 			d["assets"].([]any)[0].(map[string]any)["colour"] = "красный"
 		}},

@@ -300,6 +300,16 @@ func (e *Engine) Snapshot() Snapshot {
 func (e *Engine) snapshotLocked() Snapshot {
 	m := *e.m
 	m.Units = append([]match.Unit(nil), e.m.Units...)
+	// КАРТА ОРГАНОВ КОПИРУЕТСЯ ТОЖЕ, и по той же причине, что срез единиц:
+	// копия структуры делит с движком и срез, и карту, а карта ещё и правится
+	// командами — то есть читатель снимка и фаза приёма писали бы в одну карту
+	// из разных горутин. Это не теория: гонку ловит -race на первой же команде.
+	if e.m.Controls != nil {
+		m.Controls = make(map[string]match.Controls, len(e.m.Controls))
+		for id, c := range e.m.Controls {
+			m.Controls[id] = c
+		}
+	}
 	return Snapshot{Tick: e.tick, Time: e.tick.Time(), Hash: e.hash, Match: m}
 }
 

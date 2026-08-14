@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/shady2k/ClearAhead/server/internal/channel"
+	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/contract"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
@@ -44,11 +45,30 @@ import (
 // под себя, не спросив вторую.
 func contractPath() string { return filepath.Join("..", "..", "..", "contract", "channel.v1.json") }
 
+const loco1ID = "01a3185c-6001-7242-8242-000000424242"
+
 func testMatch() *match.Match {
 	return &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
-		ID: "01a3185c-6001-7242-8242-000000424242", Name: "LOCO_1", Type: "VL80",
+		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
-	}}}
+	}},
+		Controls: map[string]match.Controls{loco1ID: match.Stopped()},
+	}
+}
+
+// shippedSet — БОЕВОЙ набор контента, а не фикстура.
+//
+// Договор проверяется о то, что игрок получит на самом деле: пределы ступеней
+// приезжают клиенту из паспорта, и фикстура со своими числами доказывала бы
+// согласие теста с тестом. Побочно это проверяет, что боевой content.json
+// вообще собирается — включая блок controls, добавленный вместе с командой.
+func shippedSet(t *testing.T) *content.Set {
+	t.Helper()
+	set, err := content.Load(filepath.Join("..", "..", "assets"))
+	if err != nil {
+		t.Fatalf("боевой набор контента не читается: %v", err)
+	}
+	return set
 }
 
 // talk — поднятый сервер и открытый сокет.
@@ -67,7 +87,7 @@ func dial(t *testing.T) *talk {
 		t.Fatalf("договор не читается: %v", err)
 	}
 	e := engine.New(testMatch())
-	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic()))
+	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t)))
 	t.Cleanup(srv.Close)
 
 	// Срок на весь разговор: тест, зависший на чтении сокета, обязан упасть
@@ -326,6 +346,12 @@ func TestServerConstantsMatchContract(t *testing.T) {
 		protocol.ReasonUnknownSession,
 		protocol.ReasonNotGreeted,
 		protocol.ReasonAlreadyGreeted,
+		// Причины первой доменной команды (ClearAhead-6ygr).
+		protocol.ReasonUnknownUnit,
+		protocol.ReasonNoControls,
+		protocol.ReasonNotchOutOfRange,
+		protocol.ReasonUnknownReverser,
+		protocol.ReasonTractionWithoutReverser,
 	}
 	for _, r := range reasons {
 		if !slicesContains(doc.RefusalReasons, r) {
@@ -339,13 +365,18 @@ func TestServerConstantsMatchContract(t *testing.T) {
 	if doc.Path != "/regions/{region}/"+channel.Path {
 		t.Fatalf("договор объявляет адрес %q", doc.Path)
 	}
+	// Команда объявлена договором ровно под тем именем, под которым
+	// зарегистрирована: разойдись они, и клиент звал бы метод, которого нет.
+	if _, ok := doc.Methods[channel.MethodSetControls]; !ok {
+		t.Fatalf("договор не объявляет команду %s: %v", channel.MethodSetControls, doc.Methods)
+	}
 }
 
 // TestWrongRegionIsNotFound — адрес несуществующего региона обязан отвечать
 // 404 ДО апгрейда: канал не открывается на то, чего нет.
 func TestWrongRegionIsNotFound(t *testing.T) {
 	e := engine.New(testMatch())
-	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic()))
+	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t)))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -365,4 +396,159 @@ func slicesContains(list []string, want string) bool {
 		}
 	}
 	return false
+}
+
+// readReplyAndSnapshot читает кадры, пока не увидит ОБА: ответ на свой запрос и
+// уведомление о снапшоте.
+//
+// ПОРЯДОК МЕЖДУ НИМИ НЕ ОПРЕДЕЛЁН, и это не небрежность сервера, а его
+// устройство: ответ пишет горутина соединения, снапшот — горутина рассылки, и
+// оба рождаются в одном тике — том, где правка применилась. Тест, требующий
+// определённого порядка, проверял бы удачу планировщика; клиенту порядок тоже не
+// нужен — ответ он находит по id, снапшот по отсутствию id.
+func readReplyAndSnapshot(c *talk) (wireReply, wireNotification) {
+	c.t.Helper()
+	var reply wireReply
+	var note wireNotification
+	var gotReply, gotNote bool
+	for !gotReply || !gotNote {
+		raw := c.read()
+		var probe struct {
+			ID json.RawMessage `json:"id"`
+		}
+		if err := json.Unmarshal(raw, &probe); err != nil {
+			c.t.Fatalf("кадр не разбирается: %v (%s)", err, raw)
+		}
+		if len(probe.ID) != 0 {
+			decodeStrict(c.t, raw, &reply)
+			gotReply = true
+			continue
+		}
+		decodeStrict(c.t, raw, &note)
+		gotNote = true
+	}
+	return reply, note
+}
+
+// TestControlsCommandOverSocketMatchesContract — ПЕРВАЯ ДОМЕННАЯ КОМАНДА через
+// настоящий сокет, от кадра до снапшота.
+//
+// Проверяется вся дорога разом, потому что порознь она уже проверена, а вместе —
+// нет: команда уходит кадром, применяется на границе тика, ответ несёт вставшее
+// положение, а следом САМ приходит снапшот — потому что состояние изменилось, а
+// не потому, что настал срок биения.
+func TestControlsCommandOverSocketMatchesContract(t *testing.T) {
+	c := dial(t)
+	if r := c.hello(`{"protocol_version":1}`); r.Error != nil {
+		t.Fatalf("рукопожатие отказало: %+v", r.Error)
+	}
+	// Движок крутится своей горутиной: команда применяется на границе тика, а
+	// тик здесь никто больше не даёт (Run не пущен — он читает настенные часы).
+	stop := make(chan struct{})
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.e.Step()
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+	defer func() { close(stop); <-ticked }()
+
+	c.send(`{"jsonrpc":"2.0","id":2,"method":"` + channel.MethodSetControls +
+		`","params":{"command_id":"c1","unit":"` + loco1ID +
+		`","traction":7,"brake":0,"reverser":"forward"}}`)
+
+	r, n := readReplyAndSnapshot(c)
+	if r.Error != nil {
+		t.Fatalf("команда отказала: %+v", r.Error)
+	}
+	c.validate(c.doc.Methods[channel.MethodSetControls].Result, r.Result)
+
+	// СНАПШОТ ПРИХОДИТ ОТ КОМАНДЫ, а не по расписанию: биение идёт раз в
+	// секунду модельного времени, а этот обязан прийти в тик применения.
+	if n.Method != channel.SnapshotMethod {
+		t.Fatalf("после команды пришло %q", n.Method)
+	}
+	c.validate(c.doc.Notifications[channel.SnapshotMethod].Params, n.Params)
+	var env struct {
+		Time  units.SimTime `json:"time"`
+		Units []struct {
+			Controls *struct {
+				Traction int    `json:"traction"`
+				Brake    int    `json:"brake"`
+				Reverser string `json:"reverser"`
+			} `json:"controls"`
+		} `json:"units"`
+	}
+	if err := json.Unmarshal(n.Params, &env); err != nil {
+		t.Fatalf("конверт не разбирается: %v", err)
+	}
+	if env.Time >= channel.MaxSnapshotAge {
+		t.Fatalf("снапшот пришёл в %s — не раньше срока биения %s", env.Time, channel.MaxSnapshotAge)
+	}
+	if len(env.Units) != 1 || env.Units[0].Controls == nil {
+		t.Fatalf("в снапшоте нет органов управления: %s", n.Params)
+	}
+	got := *env.Units[0].Controls
+	if got.Traction != 7 || got.Brake != 0 || got.Reverser != "forward" {
+		t.Fatalf("в снапшоте органы %+v, ожидалась ступень 7 вперёд", got)
+	}
+}
+
+// TestControlsRefusalMatchesContract — отказ доменной команды разбирается
+// машинно и объявлен договором.
+func TestControlsRefusalMatchesContract(t *testing.T) {
+	c := dial(t)
+	if r := c.hello(`{"protocol_version":1}`); r.Error != nil {
+		t.Fatalf("рукопожатие отказало: %+v", r.Error)
+	}
+	stop := make(chan struct{})
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.e.Step()
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+	defer func() { close(stop); <-ticked }()
+
+	// Ступень заведомо за пределом паспорта: у ВЛ80 их 33.
+	c.send(`{"jsonrpc":"2.0","id":2,"method":"` + channel.MethodSetControls +
+		`","params":{"unit":"` + loco1ID + `","traction":100,"brake":0,"reverser":"forward"}}`)
+	var r wireReply
+	decodeStrict(t, c.read(), &r)
+	if r.Error == nil {
+		t.Fatalf("ступень за пределом принята: %s", r.Result)
+	}
+	if r.Error.Code != c.doc.Errors["refused"] {
+		t.Fatalf("код отказа %d, договор объявляет %d", r.Error.Code, c.doc.Errors["refused"])
+	}
+	c.validate(c.doc.RefusalData, r.Error.Data)
+	var ref protocol.Refusal
+	if err := json.Unmarshal(r.Error.Data, &ref); err != nil {
+		t.Fatalf("причина не разбирается: %v", err)
+	}
+	if ref.Reason != protocol.ReasonNotchOutOfRange {
+		t.Fatalf("причина %q, ожидалась %q", ref.Reason, protocol.ReasonNotchOutOfRange)
+	}
+	if !slicesContains(c.doc.RefusalReasons, ref.Reason) {
+		t.Fatalf("причина %q не объявлена в договоре", ref.Reason)
+	}
+	// Отказ НЕ ПОРОЖДАЕТ СНАПШОТА: состояние не изменилось, и хеш тот же.
+	// Проверяется тем, что число ступени в партии осталось нулевым.
+	if got, _ := c.e.Snapshot().Match.ControlsOf(loco1ID); got != match.Stopped() {
+		t.Fatalf("после отказа в партии %+v", got)
+	}
 }

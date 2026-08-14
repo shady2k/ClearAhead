@@ -32,9 +32,11 @@
 package channel
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
+	"github.com/shady2k/ClearAhead/server/internal/rpc"
 )
 
 // MaxCachedCommands — сколько ответов на команды сессия помнит.
@@ -86,12 +88,32 @@ type session struct {
 	// заголовка id:. Заведётся заново вместе с доменными событиями.
 	snapshotSeq uint64
 	// done — ответы на уже обслуженные команды, в порядке поступления.
-	done  map[commandKey][]byte
+	done  map[commandKey]answer
 	order []commandKey
 }
 
+// answer — запомненный ответ на команду БЕЗ id.
+//
+// # Почему без id, и почему это выяснилось замером
+//
+// Первая редакция запоминала кадр ответа ЦЕЛИКОМ и отдавала его повтору байт в
+// байт — «id корреляционный, подменять его значило бы хранить не ответ, а его
+// пересказ». Звучало верно и было неверно: пробник на живом сервере показал,
+// что повтор с id 3 получает ответ с id 2, то есть ответ на СВОЙ запрос клиент
+// не получает никогда и ждёт его вечно.
+//
+// Корреляция и есть работа id: он обязан быть от ТОГО запроса, на который
+// отвечают. Одинаковым у повтора обязано быть ТЕЛО — результат или отказ, — и
+// оно хранится здесь.
+type answer struct {
+	// result — тело успешного ответа. nil, если команда отказала.
+	result json.RawMessage
+	// failure — отказ. nil, если команда прошла.
+	failure *rpc.Error
+}
+
 func newSession(id, actor string) *session {
-	return &session{id: id, actor: actor, done: map[commandKey][]byte{}}
+	return &session{id: id, actor: actor, done: map[commandKey]answer{}}
 }
 
 // nextSnapshotSeq выдаёт номер следующего полного снапшота.
@@ -102,15 +124,15 @@ func (s *session) nextSnapshotSeq() uint64 {
 	return s.snapshotSeq
 }
 
-// cachedReply возвращает ответ на уже обслуженную команду.
-func (s *session) cachedReply(commandID string) ([]byte, bool) {
+// cachedAnswer возвращает тело ответа на уже обслуженную команду.
+func (s *session) cachedAnswer(commandID string) (answer, bool) {
 	if commandID == "" {
-		return nil, false
+		return answer{}, false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	body, ok := s.done[commandKey{actor: s.actor, commandID: commandID}]
-	return body, ok
+	a, ok := s.done[commandKey{actor: s.actor, commandID: commandID}]
+	return a, ok
 }
 
 // remember запоминает ответ на команду.
@@ -120,7 +142,7 @@ func (s *session) cachedReply(commandID string) ([]byte, bool) {
 // заново. Отказ «стрелка занята» при повторе через секунду мог бы пройти —
 // и тогда клиент, пославший команду один раз и повторивший её из-за разрыва,
 // получил бы результат, которого не просил.
-func (s *session) remember(commandID string, reply []byte) {
+func (s *session) remember(commandID string, a answer) {
 	if commandID == "" {
 		return
 	}
@@ -130,7 +152,7 @@ func (s *session) remember(commandID string, reply []byte) {
 	if _, dup := s.done[key]; dup {
 		return
 	}
-	s.done[key] = reply
+	s.done[key] = a
 	s.order = append(s.order, key)
 	for len(s.order) > MaxCachedCommands {
 		delete(s.done, s.order[0])

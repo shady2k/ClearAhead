@@ -40,6 +40,10 @@
         "continuous_force": 401.1,
         "continuous_speed": 53.6
       },
+      "controls": {
+        "traction_notches": 33,
+        "brake_notches": 5
+      },
       "appearance": "loco_vl80"
     }
   ]

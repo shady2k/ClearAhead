@@ -2,6 +2,7 @@ package channel
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shady2k/ClearAhead/server/internal/command"
+	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
@@ -79,6 +82,10 @@ const Path = "channel"
 type Handler struct {
 	e   *engine.Engine
 	reg *registry
+	// set — набор контента. Нужен командам: пределы ступеней живут в паспорте
+	// машины, а не в мире. Канал его не читает сам и ничего в нём не ищет —
+	// только передаёт правке, которая проверяет им себя.
+	set *content.Set
 }
 
 // NewHandler собирает ручку канала.
@@ -90,8 +97,8 @@ type Handler struct {
 // Источник идентификаторов приходит ПАРАМЕТРОМ — правило пакета uuidv7:
 // генератор обязан быть внедряемым, иначе тест не получит предсказуемых
 // session_id и вынужден будет проверять «строка непустая» вместо равенства.
-func NewHandler(e *engine.Engine, ids uuidv7.Source) *Handler {
-	return &Handler{e: e, reg: newRegistry(ids)}
+func NewHandler(e *engine.Engine, ids uuidv7.Source, set *content.Set) *Handler {
+	return &Handler{e: e, reg: newRegistry(ids), set: set}
 }
 
 // connState — то, что принадлежит ОДНОМУ соединению.
@@ -193,8 +200,77 @@ func (h *Handler) newMux(st *connState) *rpc.Mux {
 		func(_ context.Context, req protocol.HelloRequest) (any, error) {
 			return h.hello(st, req)
 		})
-	// Доменных команд здесь нет и в этой вехе не будет: см. шапку пакета.
+	// ПЕРВАЯ ДОМЕННАЯ КОМАНДА — органы управления кабины (ClearAhead-6ygr).
+	//
+	// Веха канала закрылась, не назвав ни одной команды, и это был её
+	// объявленный критерий. Здесь он перестаёт действовать по условию, а не по
+	// забывчивости: пришёл первый потребитель, ради которого канал и делался.
+	//
+	// Сама команда живёт в internal/command, а не здесь: транспорт не должен
+	// становиться местом, где живёт игра.
+	rpc.Register[protocol.ControlsRequest](m, MethodSetControls,
+		func(ctx context.Context, req protocol.ControlsRequest) (any, error) {
+			return h.setControls(ctx, req)
+		})
 	return m
+}
+
+// MethodSetControls — имя команды на проводе.
+const MethodSetControls = "controls.set"
+
+// setControls — обработчик первой доменной команды.
+//
+// # Он НЕ правит партию сам
+//
+// Он кладёт правку в очередь движка и ждёт исхода. Разница принципиальна: мир
+// принадлежит движку, и правка применяется в фазе приёма — на границе тика, в
+// порядке поступления. Обработчик, правящий партию сам, был бы вторым писателем
+// в состояние, у которого один владелец.
+//
+// # Ожидание принадлежит СОЕДИНЕНИЮ, а не миру
+//
+// Тик не ждёт сети никогда, а вот ответ клиенту ждёт тика — до 100 мс.
+// Задержка названа и принята: вертикальный срез §6 меряет её тем, что «задержка
+// команды до 250 мс на фоне зарядки магистрали в десятки секунд не ощущается»,
+// а положение рукоятки клиент показывает локально и немедленно.
+//
+// Если соединение оборвалось, пока правка ждала тика, — она всё равно
+// применится. Это не потеря: команда принадлежит миру с того мгновения, как
+// принята, и отменять её от того, что клиенту стало некуда ответить, значило бы
+// делать состояние мира зависимым от состояния сети.
+func (h *Handler) setControls(ctx context.Context, req protocol.ControlsRequest) (any, error) {
+	done := h.e.Submit(command.SetControls{
+		Unit: req.Unit(),
+		Controls: match.Controls{
+			Traction: req.Traction(),
+			Brake:    req.Brake(),
+			Reverser: match.Reverser(req.Reverser()),
+		},
+		Set: h.set,
+	})
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// Ответ — ПОЛОЖЕНИЕ, КОТОРОЕ ВСТАЛО, а не эхо запроса: клиент показывает
+	// рукоятку локально и немедленно, и ответ обязан быть тем, с чем сверяются,
+	// а не повтором сказанного.
+	snap := h.e.Snapshot()
+	c, ok := snap.Match.ControlsOf(req.Unit())
+	if !ok {
+		return nil, fmt.Errorf("channel: органы единицы %s исчезли после правки", req.Unit())
+	}
+	return controlsResult{Unit: req.Unit(), Controls: c}, nil
+}
+
+// controlsResult — ответ на команду органов управления.
+type controlsResult struct {
+	Unit     string         `json:"unit"`
+	Controls match.Controls `json:"controls"`
 }
 
 // serve — цикл чтения соединения.
@@ -241,12 +317,14 @@ func (h *Handler) request(ctx context.Context, st *connState, raw []byte) []byte
 		return rpc.EncodeError(nil, ferr)
 	}
 	// ИДЕМПОТЕНТНОСТЬ ДО ВЫЗОВА, а не после: повтор обязан не применяться, а не
-	// применяться и отбрасываться. Ответ отдаётся тот же самый, байт в байт,
-	// включая id ПЕРВОГО запроса — id корреляционный, и подменять его в
-	// запомненном ответе значило бы хранить не ответ, а его пересказ.
+	// применяться и отбрасываться.
+	//
+	// Отдаётся то же ТЕЛО, но со СВОИМ id: корреляция и есть работа id, и ответ
+	// с чужим номером клиент не соотнесёт ни с одним своим запросом. Разбор,
+	// как это выяснилось замером, — у типа answer.
 	if st.session != nil {
-		if cached, ok := st.session.cachedReply(f.CommandID); ok {
-			return cached
+		if cached, ok := st.session.cachedAnswer(f.CommandID); ok {
+			return cached.frame(f.ID)
 		}
 	}
 	if st.session == nil && f.Method != "hello" {
@@ -256,24 +334,41 @@ func (h *Handler) request(ctx context.Context, st *connState, raw []byte) []byte
 	}
 
 	result, err := st.mux.Dispatch(ctx, f.Method, protocol.Input{Body: f.Params})
-	var reply []byte
-	if err != nil {
-		reply = rpc.EncodeError(f.ID, toError(err))
-	} else {
-		body, mErr := rpc.EncodeResult(f.ID, result)
+	a := answer{}
+	switch {
+	case err != nil:
+		a.failure = toError(err)
+	default:
+		body, mErr := json.Marshal(result)
 		if mErr != nil {
 			// Ответ обработчика не сворачивается в JSON — это дефект сервера,
 			// и клиенту о нём говорится внутренней ошибкой, а не молчанием.
-			reply = rpc.EncodeError(f.ID, &rpc.Error{Code: rpc.CodeInternal,
-				Message: fmt.Sprintf("ответ метода %s не сериализуется", f.Method)})
+			a.failure = &rpc.Error{Code: rpc.CodeInternal,
+				Message: fmt.Sprintf("ответ метода %s не сериализуется", f.Method)}
 		} else {
-			reply = body
+			a.result = body
 		}
 	}
 	if st.session != nil {
-		st.session.remember(f.CommandID, reply)
+		st.session.remember(f.CommandID, a)
 	}
-	return reply
+	return a.frame(f.ID)
+}
+
+// frame одевает запомненное тело в кадр ответа с НУЖНЫМ id.
+func (a answer) frame(id json.RawMessage) []byte {
+	if a.failure != nil {
+		return rpc.EncodeError(id, a.failure)
+	}
+	body, err := rpc.EncodeResult(id, a.result)
+	if err != nil {
+		// Сюда попасть нельзя: a.result — уже свёрнутый JSON, а id проверен
+		// разбором кадра. Ветка существует, чтобы у функции не было пути
+		// «вернуть nil» и оставить клиента без ответа.
+		return rpc.EncodeError(id, &rpc.Error{Code: rpc.CodeInternal,
+			Message: "ответ не собирается в кадр"})
+	}
+	return body
 }
 
 // toError переводит ошибку обработчика в отказ провода.
@@ -389,11 +484,18 @@ func (st *connState) write(ctx context.Context, body []byte) bool {
 // состоянием — клиент получил бы тело, о котором решение не принималось, а
 // сервер запомнил бы отправленным то, чего не отправлял.
 func (h *Handler) envelope(sess *session, snap engine.Snapshot) snapshotEnvelope {
-	placed := snap.Match.Units
-	if placed == nil {
-		// Пустой список, а не null: партия без состава — законное состояние
-		// мира, и клиент обязан увидеть «единиц нет», а не «поля нет».
-		placed = []match.Unit{}
+	// Пустой список, а не null: партия без состава — законное состояние мира, и
+	// клиент обязан увидеть «единиц нет», а не «поля нет».
+	placed := make([]wireUnit, 0, len(snap.Match.Units))
+	for _, u := range snap.Match.Units {
+		w := wireUnit{Unit: u}
+		if c, ok := snap.Match.ControlsOf(u.ID); ok {
+			// Копия под указателем берётся у ЛОКАЛЬНОЙ переменной цикла:
+			// иначе все единицы указывали бы на одно значение.
+			cc := c
+			w.Controls = &cc
+		}
+		placed = append(placed, w)
 	}
 	return snapshotEnvelope{
 		ProtocolVersion: protocol.ProtocolVersion,
@@ -453,7 +555,22 @@ type snapshotEnvelope struct {
 	Match       string `json:"match"`
 	// Time — модельное время партии, микросекунды СТРОКОЙ (units.SimTime).
 	Time  units.SimTime `json:"time"`
-	Units []match.Unit  `json:"units"`
+	Units []wireUnit    `json:"units"`
+}
+
+// wireUnit — единица на проводе: то, что записано в расстановке, плюс
+// положение органов управления.
+//
+// Встраиванием, а не переписыванием полей: имена id, name, type и at живут в
+// одном месте (match.Unit), и вторая их запись разошлась бы с первой при первом
+// же переименовании.
+//
+// Controls УКАЗАТЕЛЕМ и с omitempty: у вагона органов нет вовсе, и нули в его
+// строке означали бы контроллер на нулевой позиции у машины, где контроллера
+// нет. Отсутствие поля и есть «управлять нечем».
+type wireUnit struct {
+	match.Unit
+	Controls *match.Controls `json:"controls,omitempty"`
 }
 
 // ПРОВОД ЗДЕСЬ НЕ РАЗБИРАЕТСЯ — ни в одну сторону, кроме той, что идёт через

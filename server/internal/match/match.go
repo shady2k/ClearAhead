@@ -82,6 +82,16 @@ type Match struct {
 	ID     string
 	Region string
 	Units  []Unit
+	// Controls — положение органов управления по единицам, ключ — ID единицы.
+	//
+	// ОТДЕЛЬНОЙ КАРТОЙ, а не полем внутри Unit, и это не про удобство доступа.
+	// Unit — то, что записано в ФАЙЛЕ РАССТАНОВКИ: место, тип, имя. Положение
+	// рукояток в файле не пишется и писаться не должно — иначе автор карты
+	// раздавал бы машинам ступень тяги, а разбор с DisallowUnknownFields обязан
+	// такую расстановку отвергнуть. Документ и состояние живут порознь.
+	//
+	// Разбор классов фактов — в controls.go.
+	Controls map[string]Controls `json:"-"`
 }
 
 // document — файл расстановки как он записан.
@@ -192,6 +202,16 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			}
 		}
 		occupied[u.At.Element] = append(occupied[u.At.Element], [2]units.Distance{from, to})
+		// ОРГАНЫ ЗАВОДЯТСЯ ВМЕСТЕ С МАШИНОЙ, а не от первой команды: машина,
+		// стоящая на путях, имеет положение рукояток — нулевую тягу и реверсор
+		// в нуле, — и «состояния ещё нет» у неё не бывает. Пустая карта тут
+		// означала бы, что до первой команды у локомотива нет кабины.
+		if st.Controls != nil {
+			if m.Controls == nil {
+				m.Controls = map[string]Controls{}
+			}
+			m.Controls[u.ID] = Stopped()
+		}
 	}
 	m.Units = append([]Unit(nil), list...)
 	return nil

@@ -37,7 +37,13 @@
       "id": "string",
       "name": "string?",
       "type": "string",
-      "at": "point_u"
+      "at": "point_u",
+      "controls": "controls?"
+    },
+    "controls": {
+      "traction": "uint",
+      "brake": "uint",
+      "reverser": "string"
     },
     "point_u": {
       "element": "string",
@@ -59,6 +65,17 @@
       "reason": "string",
       "resource_id": "string?",
       "held_by": "string?"
+    },
+    "controls_params": {
+      "unit": "string",
+      "traction": "uint",
+      "brake": "uint",
+      "reverser": "string",
+      "command_id": "string?"
+    },
+    "controls_result": {
+      "unit": "string",
+      "controls": "controls"
     }
   },
 
@@ -67,6 +84,11 @@
       "params": "hello_params",
       "result": "hello_result",
       "note": "одно на соединение; первым кадром; command_id не требуется — рукопожатие состояние партии не меняет"
+    },
+    "controls.set": {
+      "params": "controls_params",
+      "result": "controls_result",
+      "note": "ставит положение ВСЕХ органов разом: частичная правка не отличима от постановки нуля. Пределы ступеней — у типа машины в /content (controls.traction_notches, controls.brake_notches), клиент их не выдумывает. Ответ несёт положение, КОТОРОЕ ВСТАЛО, а не эхо запроса"
     }
   },
 
@@ -92,7 +114,12 @@
     "unsupported_protocol_version",
     "unknown_session",
     "not_greeted",
-    "already_greeted"
+    "already_greeted",
+    "unknown_unit",
+    "no_controls",
+    "notch_out_of_range",
+    "unknown_reverser",
+    "traction_without_reverser"
   ],
 
   "forbidden_up": [
@@ -105,6 +132,7 @@
     "key": ["session_id", "actor_id", "command_id"],
     "command_id": "params.command_id; запрос БЕЗ него состояние партии не меняет",
     "actor_id": "берётся из соединения, а не из params: иначе любой клиент командует от чужого имени",
-    "repeat": "повтор возвращает ТОТ ЖЕ ответ байт в байт, включая отказ и id первого запроса"
+    "repeat": "повтор НЕ применяется второй раз и возвращает ТО ЖЕ ТЕЛО ответа (включая отказ), но с id СВОЕГО запроса: id корреляционный, и ответ с чужим номером клиент не соотнесёт ни с чем",
+    "ordering": "ответ на команду и уведомление о снапшоте, порождённые одним тиком, между собой НЕ упорядочены: их пишут разные горутины. Клиент находит ответ по id, снапшот — по его отсутствию"
   }
 }
