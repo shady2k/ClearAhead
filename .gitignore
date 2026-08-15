@@ -28,3 +28,6 @@ export_presets.cfg
 
 # macOS
 .DS_Store
+
+# .nodeterm — состояние холста nodeterm: оснастка рабочего места, а не проекта.
+.nodeterm/

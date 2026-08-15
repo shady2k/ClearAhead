@@ -13,6 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/command"
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
@@ -248,9 +249,11 @@ func (h *Handler) setControls(ctx context.Context, req protocol.ControlsRequest)
 	done := h.e.Submit(command.SetControls{
 		Unit: req.Unit(),
 		Controls: match.Controls{
-			Traction: req.Traction(),
-			Brake:    req.Brake(),
-			Reverser: match.Reverser(req.Reverser()),
+			Traction:    req.Traction(),
+			Brake:       req.Brake(),
+			Reverser:    match.Reverser(req.Reverser()),
+			Handle:      brake.Handle(req.Handle()),
+			Independent: req.Independent(),
 		},
 		Set: h.set,
 	})

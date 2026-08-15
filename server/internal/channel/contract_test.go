@@ -479,7 +479,12 @@ func TestControlsCommandOverSocketMatchesContract(t *testing.T) {
 
 	c.send(`{"jsonrpc":"2.0","id":2,"method":"` + channel.MethodSetControls +
 		`","params":{"command_id":"c1","unit":"` + loco1ID +
-		`","traction":7,"brake":0,"reverser":"forward"}}`)
+		`","traction":7,"brake":0,"reverser":"forward",` +
+		// КРАН МАШИНИСТА В КОМАНДЕ ОБЯЗАТЕЛЕН у машины с магистралью: команда
+		// ставит положение ВСЕХ органов разом, и опустить ручку значило бы
+		// сделать «не трогать» неотличимым от «поставить». Отказ на пустом
+		// положении проверяется отдельно (match).
+		`"handle":"run","independent":"0"}}`)
 
 	r, n := readReplyAndSnapshot(c)
 	if r.Error != nil {
@@ -500,7 +505,15 @@ func TestControlsCommandOverSocketMatchesContract(t *testing.T) {
 				Traction int    `json:"traction"`
 				Brake    int    `json:"brake"`
 				Reverser string `json:"reverser"`
+				Handle   string `json:"handle"`
 			} `json:"controls"`
+			// Air — давления пневматики. Указатель, потому что у машины без
+			// магистрали блока нет вовсе, и это законно.
+			Air *struct {
+				Main     string `json:"main"`
+				Pipe     string `json:"pipe"`
+				Cylinder string `json:"cylinder"`
+			} `json:"air"`
 		} `json:"units"`
 	}
 	if err := json.Unmarshal(n.Params, &env); err != nil {

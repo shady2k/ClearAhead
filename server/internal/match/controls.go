@@ -3,6 +3,8 @@ package match
 import (
 	"fmt"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
+
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
@@ -67,9 +69,23 @@ type Controls struct {
 	// Traction — ступень контроллера тяги: 0..traction_notches паспорта.
 	Traction int `json:"traction"`
 	// Brake — ступень служебного торможения: 0..brake_notches паспорта.
+	//
+	// ПРИМЕНЯЕТСЯ ТОЛЬКО У МАШИНЫ БЕЗ ПНЕВМАТИКИ. У машины с магистралью глубину
+	// торможения задаёт разрядка, и ступеней нет — есть положение крана. Поле
+	// оставлено, а не снесено, потому что тормозная система у машин РАЗНАЯ, и
+	// «одно число вместо давления» — законная система, а не недоделка.
 	Brake int `json:"brake"`
 	// Reverser — положение реверсора.
 	Reverser Reverser `json:"reverser"`
+	// Handle — положение ручки крана машиниста. Пусто у машины без пневматики.
+	Handle brake.Handle `json:"handle,omitempty"`
+	// Independent — задание крана вспомогательного тормоза локомотива.
+	//
+	// ЗДЕСЬ, А НЕ В СОСТОЯНИИ ПНЕВМАТИКИ, потому что это КОМАНДА: машинист
+	// поставил ручку, кран держит. Давления — следствие, и они живут в
+	// Match.Air; смешать их значило бы позволить клиенту «выставить» давление в
+	// магистрали.
+	Independent brake.Pressure `json:"independent,omitempty"`
 }
 
 // Stopped — положение органов у стоящей машины.
@@ -78,6 +94,19 @@ type Controls struct {
 // нельзя случайно править из вызывающего.
 func Stopped() Controls {
 	return Controls{Traction: 0, Brake: 0, Reverser: ReverserNeutral}
+}
+
+// StoppedWithAir — то же у машины С ПНЕВМАТИКОЙ: ручка крана в ПОЕЗДНОМ
+// положении.
+//
+// Поездное, а не перекрыша и не торможение, и это решение о начале партии:
+// машина поставлена на путь с заряженной магистралью (brake.Charged), а
+// поездное — единственное положение, которое эту зарядку поддерживает. Любое
+// другое означало бы, что партия начинается с ручки, которую никто не ставил.
+func StoppedWithAir() Controls {
+	c := Stopped()
+	c.Handle = brake.HandleRun
+	return c
 }
 
 // SetControls ставит органы управления единицы.
@@ -136,6 +165,30 @@ func (m *Match) SetControls(unitID string, c Controls, set *content.Set) error {
 			Text: fmt.Sprintf("ступень торможения %d, у типа %s их %d",
 				c.Brake, u.Type, st.Controls.BrakeNotches)}
 	}
+	// ПНЕВМАТИКА: кран машиниста и кран вспомогательного тормоза. Проверяется
+	// ПРОТИВ МАШИНЫ, а не вообще: команда крану, которого на этой машине нет, —
+	// отказ, а не молчаливый ноль. Тормозная система у машин разная, и пульт
+	// обязан узнать об этом отказом, а не тем, что рукоятка не слушается.
+	air, hasAir := st.AirBrake()
+	if c.Handle != "" && !hasAir {
+		return &protocol.Refusal{Reason: protocol.ReasonNoControls, ResourceID: unitID,
+			Text: fmt.Sprintf("у единицы %s (тип %s) нет тормозной магистрали — крана машиниста тоже нет",
+				label, u.Type)}
+	}
+	if hasAir {
+		if !c.Handle.Known() {
+			return &protocol.Refusal{Reason: protocol.ReasonUnknownHandle, ResourceID: unitID,
+				Text: fmt.Sprintf("положение крана машиниста %q: знаю %v", c.Handle, brake.Handles)}
+		}
+		if _, err := air.SetIndependent(c.Independent); c.Independent != 0 && err != nil {
+			return &protocol.Refusal{Reason: protocol.ReasonNotchOutOfRange, ResourceID: unitID,
+				Text: err.Error()}
+		}
+	} else if c.Independent != 0 {
+		return &protocol.Refusal{Reason: protocol.ReasonNoControls, ResourceID: unitID,
+			Text: fmt.Sprintf("у единицы %s (тип %s) нет крана вспомогательного тормоза", label, u.Type)}
+	}
+
 	// ТЯГА ПРИ РЕВЕРСОРЕ В НУЛЕ — ОТКАЗ, А НЕ ТИХИЙ НОЛЬ.
 	//
 	// Это не наше правило игры, а устройство машины: при нулевом реверсоре цепь

@@ -363,3 +363,105 @@ func TestBrakeStaysWithinAdhesionAtStart(t *testing.T) {
 			brake.TonnesForce(), limit.TonnesForce())
 	}
 }
+
+// vl80Slipping — та же боевая машина, но с ОБЪЯВЛЕННЫМ пределом двигателей.
+// Отдельной функцией, а не полем в vl80: без предела машина не буксует вовсе, и
+// прежние проверки огибающей обязаны видеть её прежней.
+func vl80Slipping(t *testing.T) Locomotive {
+	t.Helper()
+	l := vl80(t)
+	l.MaxForce = MilliAdhesion(1000).On(tonnes(t, 91.8).Weight()) // 900 кН
+	return l
+}
+
+// TestFullNotchSlipsFromStandstill — ГЛАВНОЕ СЛЕДСТВИЕ: с места на последней
+// позиции машина БУКСУЕТ, а не едет.
+//
+// Проверка заведена по замечанию владельца 2026-08-15: «можно установить
+// контроллер сразу на 33 и он поедет, а должен буксовать». До разведения
+// пределов это было невозможно по построению — доля бралась от числа, уже
+// ограниченного сцеплением.
+func TestFullNotchSlipsFromStandstill(t *testing.T) {
+	l := vl80Slipping(t)
+	full, slipping := l.Traction(0, 1000)
+	if !slipping {
+		t.Fatalf("на полной позиции с места не забуксовала: сила %.1f кН, сцепление держит %.1f кН",
+			full.Kilonewtons(), l.AdhesionLimit(0).Kilonewtons())
+	}
+	// И ЕДЕТ ХУЖЕ, а не так же: буксование обязано СТОИТЬ силы, иначе машинисту
+	// всё равно, буксует он или нет.
+	if full >= l.AdhesionLimit(0) {
+		t.Fatalf("буксующая машина даёт %.1f кН при сцеплении %.1f кН — буксование бесплатно",
+			full.Kilonewtons(), l.AdhesionLimit(0).Kilonewtons())
+	}
+}
+
+// TestGentleNotchDoesNotSlip — и обратное: осторожный набор позиции не буксует.
+// Без этой половины «буксует на полной» доказывало бы лишь то, что машина
+// буксует всегда.
+func TestGentleNotchDoesNotSlip(t *testing.T) {
+	l := vl80Slipping(t)
+	hold := l.AdhesionLimit(0)
+	for notch := 1; notch <= 33; notch++ {
+		permille := int64(notch) * 1000 / 33
+		f, slipping := l.Traction(0, permille)
+		want := units.Force(divRound(int64(l.TractionLimit(0))*permille, 1000))
+		if want <= hold {
+			if slipping {
+				t.Fatalf("позиция %d: буксует, хотя двигатели просят %.1f кН при сцеплении %.1f кН",
+					notch, want.Kilonewtons(), hold.Kilonewtons())
+			}
+			if f != want {
+				t.Fatalf("позиция %d: сила %.1f кН, ожидалась %.1f кН", notch, f.Kilonewtons(), want.Kilonewtons())
+			}
+		} else if !slipping {
+			t.Fatalf("позиция %d: двигатели просят %.1f кН больше сцепления %.1f кН, а буксования нет",
+				notch, want.Kilonewtons(), hold.Kilonewtons())
+		}
+	}
+	// ГРАНИЦА НАЗВАНА ЧИСЛОМ: до какой позиции машина трогается без буксования.
+	last := 0
+	for notch := 1; notch <= 33; notch++ {
+		if _, slipping := l.Traction(0, int64(notch)*1000/33); !slipping {
+			last = notch
+		}
+	}
+	if last <= 1 || last >= 33 {
+		t.Fatalf("без буксования берутся позиции до %d из 33 — граница вырождена", last)
+	}
+	t.Logf("с места без буксования берутся позиции до %d из 33 (сцепление держит %.1f кН, двигатели дают %.1f кН)",
+		last, hold.Kilonewtons(), l.TractionLimit(0).Kilonewtons())
+}
+
+// TestNoMaxForceKeepsOldBehaviour — машина без объявленного предела двигателей
+// не буксует вовсе, и это законно, а не недосмотр: у неё ограничение другой
+// природы, и подставлять ей электровозное значило бы выдумать.
+func TestNoMaxForceKeepsOldBehaviour(t *testing.T) {
+	l := vl80Slipping(t)
+	l.MaxForce = 0
+	f, slipping := l.Traction(0, 1000)
+	if slipping {
+		t.Fatal("машина без объявленного предела двигателей забуксовала")
+	}
+	if f != l.TractiveEffort(0) {
+		t.Fatalf("сила %.1f кН, ожидалась прежняя огибающая %.1f кН", f.Kilonewtons(), l.TractiveEffort(0).Kilonewtons())
+	}
+}
+
+// TestSlipEasesWithSpeed — на ходу буксовать труднее, чем с места, и это не
+// вкус: сцепление с ростом скорости падает, но и предел мощности падает быстрее,
+// поэтому позиция, срывавшая машину на месте, на скорости её держит.
+func TestSlipEasesWithSpeed(t *testing.T) {
+	l := vl80Slipping(t)
+	fast, err := units.KmhToSpeed(60)
+	if err != nil {
+		t.Fatalf("скорость: %v", err)
+	}
+	if _, slipping := l.Traction(0, 1000); !slipping {
+		t.Fatal("с места на полной позиции не буксует — предпосылка проверки неверна")
+	}
+	if _, slipping := l.Traction(fast, 1000); slipping {
+		t.Fatalf("на 60 км/ч полная позиция всё ещё буксует: двигатели дают %.1f кН, сцепление держит %.1f кН",
+			l.TractionLimit(fast).Kilonewtons(), l.AdhesionLimit(fast).Kilonewtons())
+	}
+}

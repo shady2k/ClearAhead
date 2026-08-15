@@ -34,15 +34,35 @@
       "mass": 192,
       "max_speed": 110,
       "resistance": { "a": 1.9, "b": 0.01, "c": 0.0003 },
-      "brake": { "shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3 },
+      "brake": {
+        "shoes": "cast_iron",
+        "braked_axles": 8,
+        "axle_force": 137.3,
+        "air": {
+          "charge": 5.4,
+          "full_service_drop": 1.5,
+          "cylinder_full": 3.8,
+          "service_rate": 0.22,
+          "emergency_rate": 0.9,
+          "charge_rate": 0.6,
+          "leak_rate": 0.02,
+          "main_min": 7.5,
+          "main_max": 9.0,
+          "compressor_rate": 0.2,
+          "cylinder_rate": 0.9,
+          "independent_max": 4.0
+        }
+      },
       "traction": {
         "adhesive_mass": 192,
         "continuous_force": 401.1,
-        "continuous_speed": 53.6
+        "continuous_speed": 53.6,
+        "max_force": 900
       },
       "controls": {
         "traction_notches": 33,
-        "brake_notches": 5
+        "brake_notches": 5,
+        "notch_rate": 1.0
       },
       "appearance": "loco_vl80"
     }

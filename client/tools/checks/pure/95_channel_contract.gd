@@ -63,9 +63,30 @@ func _check_display_kinematics(doc) -> void:
 	_ok("версия кинематики совпадает с договором",
 		DisplayMotion.VERSION == int(decl.get("version", -1)),
 		"клиент %d, договор %s" % [DisplayMotion.VERSION, str(decl.get("version"))])
-	_ok("буфер показа совпадает с договором",
-		DisplayMotion.BUFFER_US == int(decl.get("buffer_ms", -1)) * 1000,
-		"клиент %d мкс, договор %s мс" % [DisplayMotion.BUFFER_US, str(decl.get("buffer_ms"))])
+	# БУФЕР СВЕРЯЕТСЯ ГРАНИЦАМИ, А НЕ ЗНАЧЕНИЕМ. Числа буфера в договоре нет
+	# нарочно: с версии 3 он замер, а не константа, и зависит от канала игрока.
+	# Сверять здесь нечего, кроме объявленных границ и коэффициентов — но их
+	# сверять НАДО: разойдись потолок, и сервер мерил бы расхождение с картинкой,
+	# которой у игрока не бывает.
+	var buf: Dictionary = decl.get("buffer", {}) as Dictionary
+	_ok("правило буфера объявлено в договоре", not buf.is_empty())
+	if buf.is_empty():
+		return
+	for pair in [
+		["start_ms", DisplayMotion.BUFFER_START_US / 1000],
+		["ceil_ms", DisplayMotion.BUFFER_CEIL_US / 1000],
+		["window", DisplayMotion.BUFFER_WINDOW],
+	]:
+		_ok("буфер: %s совпадает с договором" % pair[0],
+			int(buf.get(pair[0], -1)) == int(pair[1]),
+			"клиент %d, договор %s" % [int(pair[1]), str(buf.get(pair[0]))])
+	for pair in [
+		["margin", DisplayMotion.BUFFER_MARGIN],
+		["shrink", DisplayMotion.BUFFER_SHRINK],
+	]:
+		_ok("буфер: %s совпадает с договором" % pair[0],
+			is_equal_approx(float(buf.get(pair[0], -1.0)), float(pair[1])),
+			"клиент %s, договор %s" % [str(pair[1]), str(buf.get(pair[0]))])
 
 
 ## Конверт, собранный ПО ДОГОВОРУ, обязан быть разобран клиентом полностью.

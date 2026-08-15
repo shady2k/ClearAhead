@@ -222,12 +222,14 @@ func _on_closed(reason: String) -> void:
 ## Отклик рукоятки НА ЭКРАНЕ клиент показывает сам и немедленно (cab.gd); сюда
 ## приходит истина, и она может отличаться — тогда рукоятка встанет туда, куда
 ## её поставил сервер.
-func set_controls(unit: String, traction: int, brake: int, reverser: String) -> int:
+func set_controls(unit: String, traction: int, brake: int, reverser: String,
+		handle: String = "", independent_milli: int = 0) -> int:
 	if not greeted:
 		return -1
 	_next_command += 1
 	var id := _pipe.send(CONTROLS_METHOD,
-		controls_params("c%d" % _next_command, unit, traction, brake, reverser))
+		controls_params("c%d" % _next_command, unit, traction, brake, reverser,
+			handle, independent_milli))
 	if id >= 0:
 		_commands[id] = unit
 	return id
@@ -240,15 +242,28 @@ func set_controls(unit: String, traction: int, brake: int, reverser: String) -> 
 ## Собранный в проверке заново, он согласился бы с клиентом в любой общей
 ## ошибке — той самой, из-за которой клиент однажды читал переименованное поле и
 ## не падал.
+## ПНЕВМАТИКА ПОПАДАЕТ В ПАРАМЕТРЫ ТОЛЬКО У МАШИНЫ, У КОТОРОЙ ОНА ЕСТЬ, и это
+## не экономия байтов. Тормозная система — свойство машины: сервер отвергает
+## положение крана у машины без магистрали и требует его у машины с магистралью.
+## Пустая строка здесь значит «у этой машины крана нет», и поле не кладётся вовсе
+## — иначе клиент утверждал бы про машину то, чего о ней не знает.
+##
+## Давление вспомогательного — в ТЫСЯЧНЫХ кгс/см² строкой: та же шкала и то же
+## правило провода, что у расстояний (GDScript читает числа JSON как float).
 static func controls_params(command_id: String, unit: String,
-		traction: int, brake: int, reverser: String) -> Dictionary:
-	return {
+		traction: int, brake: int, reverser: String,
+		handle: String = "", independent_milli: int = 0) -> Dictionary:
+	var out := {
 		"command_id": command_id,
 		"unit": unit,
 		"traction": traction,
 		"brake": brake,
 		"reverser": reverser,
 	}
+	if handle != "":
+		out["handle"] = handle
+		out["independent"] = str(independent_milli)
+	return out
 
 
 func _on_answered(id: int, result: Variant, error: Dictionary) -> void:

@@ -44,6 +44,7 @@ import (
 	"math"
 	"os"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
@@ -95,6 +96,30 @@ type Match struct {
 	// Motions — состояние физики по единицам: где машина и как быстро идёт.
 	// Разбор — в motion.go.
 	Motions map[string]Motion `json:"-"`
+	// Notches — ФАКТИЧЕСКАЯ позиция главного контроллера по единицам, тысячными
+	// позиции.
+	//
+	// Отдельно от Controls, и это то же разделение, что у давлений: Controls —
+	// то, что ЗАДАЛ машинист, а здесь то, что ВСТАЛО на машине. Позиция ЭКГ
+	// приходит к заданию своим темпом (content.ControlsSpec.NotchRate), и
+	// смешать их значило бы вернуть упрощение «рукоятка есть позиция», ради
+	// снятия которого поле и заведено.
+	//
+	// В ТЫСЯЧНЫХ, потому что за тик 100 мс при темпе 1 позиция в секунду
+	// набегает одна десятая позиции: в целых она бы не набежала никогда.
+	Notches map[string]int `json:"-"`
+	// Air — состояние ПНЕВМАТИКИ по единицам: давления в магистрали, цилиндре и
+	// главных резервуарах.
+	//
+	// Отдельной картой по той же причине, что Controls и Motions: это состояние
+	// партии, а не запись файла расстановки. И отдельно ОТ Controls, хотя ручкой
+	// крана управляет тот же машинист: положение ручки — команда, давления —
+	// следствие, и смешать их значило бы позволить клиенту «выставить» давление
+	// в магистрали.
+	//
+	// Ключа нет у машины без пневматики — та тормозит одним числом, и давлений у
+	// неё не существует (content.StockType.AirBrake).
+	Air map[string]brake.State `json:"-"`
 	// Turnouts — положение остряков по устройствам: "straight" или "diverging".
 	//
 	// СОСТОЯНИЕ, А НЕ КОМАНДА. Переводить стрелки — работа диспетчера, и её
@@ -111,6 +136,40 @@ const (
 	TurnoutStraight  = "straight"
 	TurnoutDiverging = "diverging"
 )
+
+// AirOf — состояние пневматики единицы. Второе значение ложно у машины без
+// магистрали: у неё давлений не существует, и нули под их видом были бы враньём.
+func (m Match) AirOf(unitID string) (brake.State, bool) {
+	s, ok := m.Air[unitID]
+	return s, ok
+}
+
+// SetAir — записать состояние пневматики. Заводить ключ здесь НЕЛЬЗЯ: наличие
+// пневматики решается паспортом при постановке машины, и молчаливое появление
+// магистрали у машины, у которой её нет, — та самая подстановка, которую проект
+// запрещает.
+func (m *Match) SetAir(unitID string, s brake.State) {
+	if _, ok := m.Air[unitID]; !ok {
+		return
+	}
+	m.Air[unitID] = s
+}
+
+// NotchOf — фактическая позиция контроллера, тысячными позиции.
+func (m Match) NotchOf(unitID string) (int, bool) {
+	n, ok := m.Notches[unitID]
+	return n, ok
+}
+
+// SetNotch — записать фактическую позицию. Ключ здесь НЕ заводится: позиция
+// есть у машины с органами управления, и молчаливое появление её у вагона —
+// та же подстановка, что молчаливая магистраль.
+func (m *Match) SetNotch(unitID string, milli int) {
+	if _, ok := m.Notches[unitID]; !ok {
+		return
+	}
+	m.Notches[unitID] = milli
+}
 
 // TurnoutAt — положение остряка устройства. Неизвестное устройство — прямая:
 // стрелка, о которой партия ничего не знает, стоит по главному пути.
@@ -237,7 +296,13 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			if m.Controls == nil {
 				m.Controls = map[string]Controls{}
 			}
-			m.Controls[u.ID] = Stopped()
+			// У машины с пневматикой ручка крана заводится в поездном
+			// положении: магистраль заряжена, и держать зарядку умеет только оно.
+			if _, hasAir := st.AirBrake(); hasAir {
+				m.Controls[u.ID] = StoppedWithAir()
+			} else {
+				m.Controls[u.ID] = Stopped()
+			}
 		}
 		// СОСТОЯНИЕ ФИЗИКИ ЗАВОДИТСЯ ВМЕСТЕ С МАШИНОЙ, у всего, что катится:
 		// стоящая машина имеет положение и нулевую скорость, а «состояния ещё
@@ -250,6 +315,25 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			m.Motions = map[string]Motion{}
 		}
 		m.Motions[u.ID] = mo
+		// ПНЕВМАТИКА ЗАВОДИТСЯ ЗАРЯЖЕННОЙ, а не пустой, и это решение о начале
+		// партии, а не удобство: машина, поставленная на путь, стоит с заряженной
+		// магистралью и отпущенными колодками — так её и оставляют. Пустая
+		// магистраль означала бы, что каждая партия начинается с зарядки, которой
+		// никто не просил, а машина при этом стояла бы заторможенной наглухо.
+		if air, ok := st.AirBrake(); ok {
+			if m.Air == nil {
+				m.Air = map[string]brake.State{}
+			}
+			m.Air[u.ID] = brake.Charged(air)
+		}
+		// Позиция контроллера заводится нулевой вместе с машиной: стоящая машина
+		// имеет позицию, и «её ещё нет» у неё не бывает.
+		if st.Controls != nil {
+			if m.Notches == nil {
+				m.Notches = map[string]int{}
+			}
+			m.Notches[u.ID] = 0
+		}
 	}
 	m.Units = append([]Unit(nil), list...)
 	return nil

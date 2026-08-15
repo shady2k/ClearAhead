@@ -76,14 +76,22 @@ func _run(w: Node) -> void:
 	# считались бы от чужого начала.
 	_press(KEY_0)
 	await _settled(cab)
-	# «Всё в ноль» ставит ПОЛНЫЙ тормоз (машинист этим движением останавливается,
-	# а не катится), поэтому исходное для замеров положение — отпущенный тормоз.
-	# Первый прогон зонда об это и споткнулся: он ждал от «4» первой ступени, а
-	# тормоз уже стоял на пятой.
-	for i in range(cab.brake_notches):
-		_press(KEY_3)
+	# «0» — ЭКСТРЕННАЯ ОСТАНОВКА, а не «всё в ноль»: она ставит кран в экстренное
+	# и вспомогательный на полное (машинист этим движением останавливается, а не
+	# катится). Поэтому исходное для замеров положение — отпущенный тормоз, и
+	# ведём к нему ОБА крана. Первый прогон зонда об это и споткнулся: ждал от
+	# ручки первой ступени, а она стояла в экстренном.
+	for i in range(Cab.HANDLES.size()):
+		_press(KEY_A)
 		await _settled(cab)
-	_ok("тормоз отпущен клавишей «3»", cab.set_brake == 0, str(cab.set_brake))
+	_press(KEY_D)
+	await _settled(cab)
+	for i in range(12):
+		_press(KEY_Z)
+		await _settled(cab)
+	_ok("кран отпущен клавишей A, вспомогательный — Z",
+		cab.set_handle == "run" and cab.set_independent == 0,
+		"кран %s, вспомогательный %.2f" % [cab.set_handle, cab.set_independent / 1000.0])
 
 	_press(KEY_R)
 	await _settled(cab)
@@ -100,11 +108,48 @@ func _run(w: Node) -> void:
 	await _settled(cab)
 	_ok("нажатие «1» сбросило ступень", cab.set_traction == 2, str(cab.set_traction))
 
-	# ТОРМОЗ: своя пара клавиш, и она не должна трогать тягу.
-	_press(KEY_4)
+	# W/S — ВТОРОЕ ИМЯ ТОЙ ЖЕ РУКОЯТКИ, заведено 2026-08-15 по слову владельца
+	# («камерой в кабине управляют мышью»). Проверяется здесь, а не принимается на
+	# веру: клавиша, которую никто не нажимал, ничем не лучше ненаписанной, а
+	# отобрать её у камеры и забыть отдать машине — ровно один недосмотр.
+	_press(KEY_W)
 	await _settled(cab)
-	_ok("нажатие «4» дало ступень тормоза", cab.set_brake == 1, str(cab.set_brake))
-	_ok("тормоз не тронул тягу", cab.set_traction == 2, str(cab.set_traction))
+	_ok("W добавило ступень тяги", cab.set_traction == 3, str(cab.set_traction))
+	_press(KEY_S)
+	await _settled(cab)
+	_ok("S сбросило ступень тяги", cab.set_traction == 2, str(cab.set_traction))
+
+	# ТОРМОЗ — КРАНОМ МАШИНИСТА, а не ступенью. Ступени у машины с магистралью
+	# нет вовсе (ClearAhead-4mwn), и проверять её здесь значило бы проверять
+	# число, которое ни на что не влияет.
+	_ok("кабина знает про магистраль", cab.has_air and cab.handle != "",
+		"кран %s, давления есть %s" % [cab.handle, cab.has_air])
+	var was_handle: String = cab.handle
+	_press(KEY_D)
+	await _settled(cab)
+	_ok("D увёл кран по сектору", cab.set_handle != was_handle,
+		"%s -> %s" % [was_handle, cab.set_handle])
+	_ok("кран не тронул тягу", cab.set_traction == 2, str(cab.set_traction))
+	# ДО СЛУЖЕБНОГО, А НЕ НА ОДНО ПОЛОЖЕНИЕ. Первый заход останавливался на
+	# перекрыше, а она лишь ТРАВИТ (0.02 кгс/см² в секунду), и «магистраль
+	# разряжается» проходило при 5.40 из 5.40 — то есть доказывало округление, а
+	# не работу крана.
+	await _handle_to(cab, "service")
+	# ПОРОГ — ПЕРВАЯ СТУПЕНЬ ТОРМОЖЕНИЯ (0.5 кгс/см² разрядки): величина
+	# инструкции, а не «хоть сколько-нибудь».
+	var step_milli := 500
+	var fell: bool = await _wait_until(
+		func() -> bool: return cab.charge_milli - cab.pipe_pressure >= step_milli, 15.0)
+	_ok("магистраль разряжается служебным на первую ступень", fell,
+		"разрядка %.2f при зарядном %.2f" % [
+			(cab.charge_milli - cab.pipe_pressure) / 1000.0, cab.charge_milli / 1000.0])
+	var filled: bool = await _wait_until(
+		func() -> bool: return cab.cylinder_pressure >= step_milli, 15.0)
+	_ok("цилиндр наполнился от разрядки", filled, "%.2f" % (cab.cylinder_pressure / 1000.0))
+	while cab.handle != was_handle:
+		_press(KEY_A)
+		await _settled(cab)
+	_ok("A вернул кран назад по сектору", cab.set_handle == was_handle, cab.set_handle)
 
 	# РЕВЕРСОР ПОД ТЯГОЙ НЕ ХОДИТ, и клавиша об этом знает: команда не уходит
 	# вовсе, а не отказывается сервером.
@@ -117,7 +162,10 @@ func _run(w: Node) -> void:
 	_press(KEY_0)
 	await _settled(cab)
 	_ok("«0» сбросило тягу", cab.set_traction == 0, str(cab.set_traction))
-	_ok("«0» поставило полный тормоз", cab.set_brake == cab.brake_notches, str(cab.set_brake))
+	# «ВСЁ В НОЛЬ» У МАШИНЫ С МАГИСТРАЛЬЮ — ЭКСТРЕННОЕ. Проверяется положение
+	# крана, а не ступень: ступень у такой машины ни на что не влияет, и утверждать
+	# про неё значило бы объявлять аварийную клавишу работающей, ничего не проверив.
+	_ok("«0» поставило кран в экстренное", cab.set_handle == "emergency", cab.set_handle)
 	_ok("«0» вернуло реверсор в ноль", cab.set_reverser == "neutral", cab.set_reverser)
 
 	# И оставляем мир там, откуда взяли: отпущенный тормоз при нулевой тяге.
@@ -151,10 +199,26 @@ func _check_ride(w: Node) -> void:
 	# «всё в ноль», то есть ПОЛНЫМ тормозом, и машина под ним никуда не поедет.
 	# Первый заход на этом и споткнулся — «0.0 м за 5 с», — и это была ошибка
 	# зонда, а не мира.
-	for i in range(cab.brake_notches):
-		_press(KEY_3)
+	# ОТПУСК — ЭТО ЗАРЯДКА, И ОНА ЗАНИМАЕТ ВРЕМЯ. Кран ставится в поездное, а
+	# дальше ЖДЁМ, пока цилиндр опорожнится: команда мгновенна, пневматика — нет,
+	# и «поставил и поехал» проверяло бы мир, в котором тормоз отпускается
+	# щелчком. Ведём ручку к отпуску до упора, потом одним шагом в поездное.
+	for i in range(Cab.HANDLES.size()):
+		_press(KEY_A)
 		await _settled(cab)
-	_ok("тормоз отпущен перед поездкой", cab.set_brake == 0, str(cab.set_brake))
+	_press(KEY_D)
+	await _settled(cab)
+	# И ВСПОМОГАТЕЛЬНЫЙ ТОЖЕ. Он держит цилиндр НЕЗАВИСИМО от магистрали — в том
+	# и смысл крана № 254, — поэтому заряженная магистраль колодки не отпускает,
+	# пока не отпущен он. Первый заход зонда на этом и споткнулся: кран в
+	# поездном, магистраль 5.40, цилиндр 4.00, машина проехала 0.1 м за 5 с.
+	for i in range(12):
+		_press(KEY_Z)
+		await _settled(cab)
+	var freed: bool = await _wait_until(func() -> bool: return cab.cylinder_pressure == 0, 20.0)
+	_ok("тормоз отпущен краном перед поездкой", freed and cab.handle == "run",
+		"кран %s, цилиндр %.2f, магистраль %.2f" % [cab.handle,
+			cab.cylinder_pressure / 1000.0, cab.pipe_pressure / 1000.0])
 
 	var from := machine.global_position
 	# ЕДЕМ В СТОРОНУ СТРЕЛКИ (Shift+R — реверсор назад), а не к упору.
@@ -170,6 +234,14 @@ func _check_ride(w: Node) -> void:
 		_press(KEY_2)
 		await _settled(cab)
 	_ok("набрана тяга", cab.set_traction == 10, str(cab.set_traction))
+	# И ЖДЁМ, ПОКА КОНТРОЛЛЕР ДОЙДЁТ. Рукоятка — задание, позиция идёт к нему
+	# своим темпом (позиция в секунду), и мерить разгон сразу после команды значит
+	# мерить НАБОР ПОЗИЦИЙ, а не тягу. Первый заход после этой правки так и
+	# споткнулся: 4.4 м за 5 с вместо 12.7.
+	var reached: bool = await _wait_until(
+		func() -> bool: return cab.notch_milli >= 10 * 1000, 30.0)
+	_ok("контроллер дошёл до заданной позиции", reached,
+		"позиция %.1f из заданных 10" % [float(cab.notch_milli) / 1000.0])
 
 	# Пять секунд НАСТЕННОГО времени: темп мира 1:1, значит и модельного столько
 	# же. Ждём кадрами, а не сном: сокет опрашивается в кадре.
@@ -181,6 +253,14 @@ func _check_ride(w: Node) -> void:
 	var gaps: Array[float] = []
 	var frames: Array[float] = []
 	var still := 0
+	# ОТРЫВ КАМЕРЫ ОТ МАШИНЫ — замер, которым куплена жалоба владельца «камера не
+	# едет за локомотивом». Прежняя проверка наводки стояла ПОСЛЕ поездки и на
+	# СТОЯЩЕЙ машине, поэтому дефект прошёл мимо неё: фокус выставлялся однажды, в
+	# миг посадки, и, пока машина не двигалась, был верен. Мерить надо ВО ВРЕМЯ
+	# хода и по худшему кадру, а не по среднему: отстающая камера догоняет на
+	# остановке, и среднее её выгородит.
+	var orbit_ride: OrbitCamera = w.camera as OrbitCamera
+	var orbit_gap := 0.0
 	var last_seq := int(w.stats.get("channel_seq", 0))
 	var last_at := Time.get_ticks_usec()
 	var last_pos := machine.global_position
@@ -194,6 +274,8 @@ func _check_ride(w: Node) -> void:
 		if moved < 0.001:
 			still += 1
 		last_pos = machine.global_position
+		if orbit_ride != null:
+			orbit_gap = maxf(orbit_gap, orbit_ride.focus.distance_to(machine.global_position))
 		var seq := int(w.stats.get("channel_seq", 0))
 		if seq != last_seq:
 			var now := Time.get_ticks_usec()
@@ -211,8 +293,108 @@ func _check_ride(w: Node) -> void:
 			+ "неподвижных кадров %.0f%%" % [100.0 * float(still) / float(frames.size())])
 	var went := from.distance_to(machine.global_position)
 	_ok("машина проехала по миру", went > 5.0, "%.1f м за 5 с" % went)
+	# Допуск 0.5 м — тот же, что у наводки на стоящей: он про «на машине ли
+	# фокус», а не про плавность. Отрыв в метры означал бы, что камера привязана
+	# к месту, а не к машине.
+	_ok("камера ехала за машиной", orbit_ride != null and orbit_gap < 0.5,
+		"самый большой отрыв фокуса %.2f м за поездку %.1f м" % [orbit_gap, went])
 	_ok("скорость дошла до клиента", float(w.stats.get("stock_speed_ms", 0.0)) > 1.0,
 		"%.2f м/с" % float(w.stats.get("stock_speed_ms", 0.0)))
+
+	# РЫВКИ ПРИ ТОРМОЖЕНИИ. Владелец: «нажимаешь экстренный, а поезд рывками то
+	# останавливается, то едет быстрее. Ну и прыжки локомотива тоже видно».
+	#
+	# ЧИТАЕТСЯ СТОРОЖ МИРА, А НЕ МЕРЯЕТСЯ САМИМ ЗОНДОМ, и это исправление
+	# собственной ошибки. Первая редакция считала сдвиг между своими await
+	# process_frame — и находила «скачки» по полметра там, где сторож внутри
+	# _process не видел ничего. Причина в измерителе: продолжение корутины и кадр
+	# движка не одно и то же событие, и в одну итерацию зонда укладывалось два
+	# кадра мира. Мерить надо там, где рисуют.
+	var jerks_before := int(w.stats.get("display_jerks", 0))
+	var slips_before := int(w.stats.get("display_clock_slips", 0))
+	_press(KEY_0)
+	await _settled(cab)
+	# СКОЛЬКО РАЗНЫХ ЗНАЧЕНИЙ ПОКАЗАЛА СТРЕЛКА. Если их около десяти на сотню
+	# кадров — прибор идёт ступенькой темпа снапшотов, и интерполяция не работает,
+	# что бы она ни считала. Владелец говорит «стрелки на приборах рывками» третий
+	# раз, и на этот раз ответом будет число.
+	var seen_vals := {}
+	var notch_vals := {}
+	var frames_seen := 0
+	var probe_until := Time.get_ticks_msec() + 3000
+	while Time.get_ticks_msec() < probe_until:
+		await process_frame
+		var v: Dictionary = cab.shown(w._display.show_us())
+		seen_vals[snappedf(float(v.get("cyl", 0.0)), 0.5)] = true
+		notch_vals[snappedf(float(v.get("notch", 0.0)), 0.5)] = true
+		frames_seen += 1
+	print("CAB PROBE: стрелка ТЦ — %d разных значений на %d кадров, позиция контроллера — %d"
+		% [seen_vals.size(), frames_seen, notch_vals.size()])
+	# И ТЕМП СНИМКОВ У СТОЯЩЕЙ МАШИНЫ. Это и есть жалоба владельца целиком:
+	# «поначалу всё плавно, а потом раз в секунду». Раз в секунду — это БИЕНИЕ,
+	# то есть состояние, которое сервер считает неизменным. Пока давления не
+	# входили в хеш, работающая пневматика стоящей машины была «неизменной».
+	var at_rest: bool = await _wait_until(
+		func() -> bool: return float(w.stats.get("stock_speed_ms", 0.0)) == 0.0, 20.0)
+	# ПНЕВМАТИКА ДОЛЖНА РАБОТАТЬ ВО ВРЕМЯ ЗАМЕРА, иначе меряется покой. Первый
+	# заход этого не сделал и получил ровно биение — 1.0 снимка в секунду, — что
+	# было верным ответом на неверный вопрос.
+	# КРАН В ОТПУСК, А НЕ В СЛУЖЕБНОЕ. Служебное разряжает магистраль, а после
+	# экстренного она УЖЕ пуста: разряжать нечего, давления стоят, и замер ловил
+	# биение — то есть верный ответ на неверный вопрос (ОТКАЗ «1.0 снимка в
+	# секунду» на живом прогоне). Отпуск заряжает пустую магистраль всегда, и
+	# работающая пневматика у стоящей машины — это ровно он.
+	var at_release: bool = await _handle_to(cab, "release")
+	_ok("кран доведён до отпуска из экстренного", at_release, cab.handle)
+	var seq0 := int(w.stats.get("channel_seq", 0))
+	var t0 := Time.get_ticks_msec()
+	await _wait_until(func() -> bool: return Time.get_ticks_msec() - t0 > 3000, 6.0)
+	var per_sec := float(int(w.stats.get("channel_seq", 0)) - seq0) * 1000.0 		/ float(Time.get_ticks_msec() - t0)
+	_ok("у стоящей машины с работающей пневматикой снимки идут чаще биения",
+		at_rest and per_sec > 3.0, "%.1f снимка в секунду" % per_sec)
+
+	var until_stop := Time.get_ticks_msec() + 6000
+	while Time.get_ticks_msec() < until_stop:
+		await process_frame
+	var jerks := int(w.stats.get("display_jerks", 0)) - jerks_before
+	var slips := int(w.stats.get("display_clock_slips", 0)) - slips_before
+	_ok("показ не дёргался при торможении", jerks == 0,
+		"рывков %d, худший: %s" % [jerks, str(w.stats.get("display_jerk_worst", "нет"))])
+	_ok("часы показа шли ровно", slips == 0,
+		"расхождений %d, худшее: %s" % [slips, str(w.stats.get("display_clock_worst", "нет"))])
+
+	# БУКСОВАНИЕ ДОХОДИТ ДО КАБИНЫ. Сквозная проверка: рукоятка на последнюю
+	# позицию, контроллер идёт к ней своим темпом, и на позиции, которую сцепление
+	# не держит, машина срывается — а лампа на пульте это показывает.
+	#
+	# Проверяется ПРИЗНАК С СЕРВЕРА, а не догадка клиента: буксование выводит
+	# сервер, клиент его только рисует.
+	# СНАЧАЛА ПРИВЕСТИ МАШИНУ В РАБОЧЕЕ: прошлая проба кончила «0», то есть
+	# экстренным и реверсором в нуле. Под таким реверсором тяга ОТВЕРГАЕТСЯ
+	# сервером, и первый заход это и поймал — позиция осталась нулевой.
+	for i in range(Cab.HANDLES.size()):
+		_press(KEY_A)
+		await _settled(cab)
+	_press(KEY_D)
+	await _settled(cab)
+	for i in range(12):
+		_press(KEY_Z)
+		await _settled(cab)
+	await _wait_until(func() -> bool: return cab.cylinder_pressure == 0, 20.0)
+	_press(KEY_R)
+	await _settled(cab)
+	for i in range(cab.traction_notches):
+		_press(KEY_W)
+		await _settled(cab)
+	var slipped: bool = await _wait_until(func() -> bool: return cab.slipping, 45.0)
+	_ok("буксование дошло до кабины", slipped,
+		"позиция %.1f из %d, скорость %.2f м/с" % [float(cab.notch_milli) / 1000.0,
+			cab.traction_notches, float(w.stats.get("stock_speed_ms", 0.0))])
+	# И ПОЗИЦИЯ ОТСТАЁТ ОТ РУКОЯТКИ — иначе набор мгновенный, и срыв наступил бы
+	# в тот же миг, когда рукоятку двинули.
+	_ok("позиция контроллера отстаёт от рукоятки",
+		cab.notch_milli < cab.traction * 1000,
+		"рукоятка %d, позиция %.1f" % [cab.traction, float(cab.notch_milli) / 1000.0])
 
 	# И ОСТАНОВКА: полный тормоз, сброс тяги.
 	_press(KEY_0)
@@ -226,10 +408,30 @@ func _check_ride(w: Node) -> void:
 		await process_frame
 	_ok("машина остановилась тормозом ровно", float(w.stats.get("stock_speed_ms", 0.0)) == 0.0,
 		"%.4f м/с" % float(w.stats.get("stock_speed_ms", 0.0)))
+	# И СТОИТ — НО НЕ В ТОТ ЖЕ КАДР, и это исправление самой проверки.
+	#
+	# Показ живёт в прошлом на величину буфера (DisplayMotion): сервер отдал ноль,
+	# а показ в этот миг ещё проезжает последние известные метры. Требовать
+	# неподвижности В КАДРЕ ПРИХОДА НУЛЯ значит требовать, чтобы буфера не было
+	# вовсе, — то есть проверять не то. Проверка ловила это отказом («0.27 м за
+	# кадр при скорости 0.00») и была права насчёт числа и неправа насчёт вывода.
+	#
+	# Ждём, пока показ ДОГОНИТ, и только потом требуем покоя. Потолок ожидания —
+	# потолок буфера с запасом: дольше догонять нечего, и если догоняет — это уже
+	# отказ показа, а не его устройство.
+	var settle := Time.get_ticks_msec() + int(DisplayMotion.BUFFER_CEIL_US / 1000) * 2
+	var at := machine.global_position
+	while Time.get_ticks_msec() < settle:
+		await process_frame
+		if at.distance_to(machine.global_position) < 0.001:
+			break
+		at = machine.global_position
 	var stopped := machine.global_position
 	await process_frame
 	await process_frame
-	_ok("и стоит", stopped.distance_to(machine.global_position) < 0.01)
+	_ok("и стоит", stopped.distance_to(machine.global_position) < 0.01,
+		"сдвиг %.4f м, буфер показа %.0f мс" % [stopped.distance_to(machine.global_position),
+			float(w._display.buffer_us()) / 1000.0])
 
 	# Отпускаем тормоз, чтобы следующая проверка застала кабину в покое.
 	for i in range(cab.brake_notches):
@@ -288,6 +490,43 @@ func _check_camera(w: Node) -> void:
 ## коротким сроком, и это законный исход, а не отказ.
 const PRESS_WAIT := 0.5 ## с — сколько ждём, пока нажатие превратится в команду
 
+## _wait_until — ждать условия кадрами, не дольше срока. Нужен пневматике:
+## команда мгновенна, а зарядка магистрали и опорожнение цилиндра занимают
+## СЕКУНДЫ, и проверять их сразу после нажатия значило бы проверять мир, в
+## котором тормоз отпускается щелчком.
+func _wait_until(cond: Callable, seconds: float) -> bool:
+	var deadline := Time.get_ticks_msec() + int(seconds * 1000.0)
+	while Time.get_ticks_msec() < deadline:
+		if bool(cond.call()):
+			return true
+		await process_frame
+	return bool(cond.call())
+
+
+## _handle_to — ВЕСТИ КРАН ПО СЕКТОРУ ДО НАЗВАННОГО ПОЛОЖЕНИЯ, в ту сторону, в
+## которую идти надо.
+##
+## Заведена вместо двух одинаковых циклов «жми D, пока не служебное», и второй из
+## них ВИСЕЛ НАСМЕРТЬ. Перед ним зонд жмёт «0», а она ставит кран в экстренное —
+## последнее положение сектора. D дальше не идёт (Cab.shift_handle упирается в
+## предел и возвращает false), команда не уходит, cab.handle не меняется, и цикл
+## крутится вечно. Владелец увидел это как «тест в конце висит просто так».
+##
+## Число нажатий ОГРАНИЧЕНО длиной сектора: зонд, не доехавший до положения за
+## шесть шагов, обязан сказать об этом отказом, а не молчанием на сутки.
+func _handle_to(cab: Cab, want: String) -> bool:
+	for _i in Cab.HANDLES.size():
+		if cab.handle == want:
+			return true
+		var at := Cab.HANDLES.find(cab.handle)
+		var to := Cab.HANDLES.find(want)
+		if at < 0 or to < 0:
+			return false
+		_press(KEY_D if to > at else KEY_A)
+		await _settled(cab)
+	return cab.handle == want
+
+
 func _settled(cab: Cab) -> void:
 	var appeared := Time.get_ticks_msec() + int(PRESS_WAIT * 1000.0)
 	while cab.pending == 0 and Time.get_ticks_msec() < appeared:
@@ -298,6 +537,17 @@ func _settled(cab: Cab) -> void:
 	# Кадр сверху: ответ мог прийти в этот же миг, а состояние обновляется в
 	# обработчике сигнала.
 	await process_frame
+
+
+## _spread — размах ряда: сколько, медиана, худшее. Медиана, а не среднее:
+## одиночный скачок среднее сдвигает, а медиану — нет, и разница между ними и
+## есть то, что мы ищем.
+func _spread(v: Array[float]) -> String:
+	if v.is_empty():
+		return "нет кадров"
+	var s := v.duplicate()
+	s.sort()
+	return "%d кадров, медиана %.3f, макс %.3f м" % [s.size(), s[s.size() / 2], s[s.size() - 1]]
 
 
 func _press(key: Key) -> void:

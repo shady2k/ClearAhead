@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/match"
@@ -43,7 +44,18 @@ func network(t *testing.T) *track.CompiledNetwork {
 }
 
 // set — набор с боевыми числами ВЛ80: их же читает физика в бою.
+// set — набор контента для тестов движения. Контроллер у него ВСТАЁТ МГНОВЕННО
+// и предел двигателей не объявлен: прежние проверки замеряют огибающую и
+// интегрирование, и набор позиций по одной сломал бы их замеры, ничего не
+// проверив.
 func set(t *testing.T) *content.Set {
+	return setWith(t, nil)
+}
+
+// setWith — тот же набор с правкой паспорта. Правка ФУНКЦИЕЙ, а не вторым
+// файлом: два описания одной машины разошлись бы, и тест буксования проверял бы
+// не ту машину, что тест разгона.
+func setWith(t *testing.T, edit func(map[string]any)) *content.Set {
 	t.Helper()
 	dir := t.TempDir()
 	body := []byte("не glb, подрезка не запрашивается")
@@ -63,13 +75,26 @@ func set(t *testing.T) *content.Set {
 			"id": "VL80", "length": 34.18, "bogie_base": 24.71, "width": 3.63, "height": 5.4,
 			"mass": 192.0, "max_speed": 110.0,
 			"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
-			"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3},
+			// ПНЕВМАТИКА В ФИКСТУРЕ ТА ЖЕ, ЧТО В НАБОРЕ: тормоз у ВЛ80 —
+			// магистраль, и фикстура без неё проверяла бы другую машину.
+			"brake": map[string]any{
+				"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3,
+				"air": map[string]any{
+					"charge": 5.4, "full_service_drop": 1.5, "cylinder_full": 3.8,
+					"service_rate": 0.22, "emergency_rate": 0.9, "charge_rate": 0.6,
+					"leak_rate": 0.02, "main_min": 7.5, "main_max": 9.0,
+					"compressor_rate": 0.2, "cylinder_rate": 0.9, "independent_max": 4.0,
+				},
+			},
 			"traction": map[string]any{
 				"adhesive_mass": 192.0, "continuous_force": 401.1, "continuous_speed": 53.6,
 			},
 			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
 			"appearance": "vid",
 		}},
+	}
+	if edit != nil {
+		edit((doc["stock"].([]any))[0].(map[string]any))
 	}
 	raw, _ := json.Marshal(doc)
 	if err := os.WriteFile(filepath.Join(dir, content.FileName), raw, 0o600); err != nil {
@@ -98,7 +123,20 @@ func world(t *testing.T, u float64, facing netloc.Direction) (*World, *match.Mat
 		t.Fatalf("начальное состояние: %v", err)
 	}
 	m.SetMotion(locoID, mo)
-	m.Controls = map[string]match.Controls{locoID: match.Stopped()}
+	m.Controls = map[string]match.Controls{locoID: match.StoppedWithAir()}
+	// ПНЕВМАТИКА ЗАВОДИТСЯ ЗАРЯЖЕННОЙ, как и в настоящей партии (match.Load):
+	// без неё магистраль пуста, распределитель держит полное нажатие, и машина
+	// не тронется — то есть каждый тест движения проверял бы заторможенную
+	// машину.
+	if st, ok := s.StockType("VL80"); ok {
+		if air, ok := st.AirBrake(); ok {
+			m.Air = map[string]brake.State{locoID: brake.Charged(air)}
+		}
+	}
+	// ПОЗИЦИЯ КОНТРОЛЛЕРА ЗАВОДИТСЯ ВМЕСТЕ С МАШИНОЙ, как и в настоящей партии
+	// (match.Load): без ключа сила тяги не берётся вовсе, и каждый тест движения
+	// проверял бы стоящую машину.
+	m.Notches = map[string]int{locoID: 0}
 	return NewWorld(net, s), m
 }
 
@@ -296,7 +334,11 @@ func TestBrakeStopsAndDoesNotReverse(t *testing.T) {
 		t.Fatalf("машина не разогналась: %v", rolling.Speed)
 	}
 
-	drive(t, m, match.Controls{Traction: 0, Brake: 5, Reverser: match.ReverserForward})
+	// ПОЛНОЕ СЛУЖЕБНОЕ КРАНОМ, а не ступенью: у ВЛ80 есть магистраль, и глубину
+	// торможения задаёт разрядка. Ступень при этом не применяется вовсе, и
+	// оставить её здесь значило бы проверять тормоз, которого у этой машины нет.
+	drive(t, m, match.Controls{Traction: 0, Handle: brake.HandleService,
+		Reverser: match.ReverserForward})
 	step(t, w, m, 300) // тридцать секунд: заведомо больше тормозного пути
 	stopped := motion(t, m)
 	if stopped.Speed != 0 {
@@ -312,25 +354,46 @@ func TestBrakeStopsAndDoesNotReverse(t *testing.T) {
 	}
 }
 
-// TestBufferStopHoldsTheMachine — упор: дальше пути нет.
+// TestBufferStopHoldsTheMachine — упор: дальше пути нет, и встаёт КОНЕЦ машины.
 //
-// Машина едет в тупиковый конец главного пути и обязана встать В ГРАНИЦЕ
-// элемента, а не за ней: за границей пути не существует, и «немножко за» на
-// экране выглядит как машина, висящая в воздухе.
+// # Что здесь изменилось и почему прежнее утверждение умерло
+//
+// Тест требовал S == LengthS — «машина встала в границе элемента». Это было
+// верно про ТОЧКУ ОТСЧЁТА и неверно про машину: точка отсчёта — середина между
+// плоскостями автосцепок, значит половина машины (у ВЛ80 17.09 м) оказывалась ЗА
+// упором. Владелец увидел это в кадре: «уже закончились рельсы, а он едет».
+//
+// Проверяются три разных утверждения, и третье появилось из ошибки первой
+// починки: она ловила конец машины только при пересечении границы, и середина
+// свободно уходила за предел внутрь элемента, а потом отбрасывалась назад. То
+// есть машина не стояла у буфера, а колотилась об него с размахом в полмашины.
+// Отсюда «и стоит она дальше»: покой обязан быть покоем, а не размахом.
 func TestBufferStopHoldsTheMachine(t *testing.T) {
 	w, m := world(t, 150, netloc.DirForward)
 	el := w.net.Elements[seedmap.StationMain]
+	st, ok := set(t).StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе нет паспорта VL80")
+	}
+	want := el.LengthS - halfLength(st)
 	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
 	step(t, w, m, 600)
 	got := motion(t, m)
 	if got.Element != seedmap.StationMain {
 		t.Fatalf("машина уехала с главного пути на %s — за ним ничего нет", got.Element)
 	}
-	if got.S != el.LengthS {
-		t.Fatalf("встала на %s, а конец элемента %s", got.S, el.LengthS)
+	if got.S != want {
+		t.Fatalf("встала серединой на %s, а конец машины должен быть у порта: %s (элемент %s, полдлины %s)",
+			got.S, want, el.LengthS, halfLength(st))
 	}
 	if got.Speed != 0 {
 		t.Fatalf("упёрлась, но скорость %v", got.Speed)
+	}
+	// И СТОИТ: ещё сто тиков под полной тягой ничего не меняют. Без этого
+	// утверждения «упёрлась» проходило бы и у машины, которая бьётся об упор.
+	step(t, w, m, 100)
+	if again := motion(t, m); again.S != want || again.Speed != 0 {
+		t.Fatalf("упёршаяся машина под тягой сдвинулась: %s -> %s, скорость %v", want, again.S, again.Speed)
 	}
 }
 
@@ -447,4 +510,195 @@ func rel(got, want float64) float64 {
 
 func formatKN(f units.Force) string {
 	return strconv.FormatFloat(f.Kilonewtons(), 'f', 1, 64)
+}
+
+// stopDistance — сколько машина проедет от начала торможения до остановки при
+// данном положении крана. Возвращает путь и то, упёрлась ли она в конец
+// элемента: остановка об упор — не торможение, и путать их нельзя.
+func stopDistance(t *testing.T, handle brake.Handle) (units.Distance, bool) {
+	t.Helper()
+	w, m := world(t, 5, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, w, m, 30)
+	from := motion(t, m)
+	if from.Speed <= 0 {
+		t.Fatalf("машина не разогналась: %v", from.Speed)
+	}
+	drive(t, m, match.Controls{Traction: 0, Reverser: match.ReverserForward, Handle: handle})
+	step(t, w, m, 600)
+	to := motion(t, m)
+	if to.Speed != 0 {
+		t.Fatalf("за 60 с машина не остановилась: %v", to.Speed)
+	}
+	el := w.net.Elements[seedmap.StationMain]
+	return to.S - from.S, to.S == el.LengthS
+}
+
+// TestBrakeHandleStopsTheMachine — ТОРМОЗ РАБОТАЕТ КРАНОМ, а не ступенью.
+//
+// Проверка заведена вместе с пневматикой (ClearAhead-4mwn) и ловит ровно тот
+// способ сломать её, которым она чуть не сломалась при заведении: у машины
+// появилась магистраль, ступень перестала действовать, а прежний тест
+// торможения продолжал проходить — потому что машина успевала доехать до упора
+// и вставала об него. Поэтому здесь ДВА утверждения, а не одно: остановилась и
+// остановилась НЕ ОБ УПОР.
+func TestBrakeHandleStopsTheMachine(t *testing.T) {
+	dist, atStop := stopDistance(t, brake.HandleService)
+	if atStop {
+		t.Fatal("машина встала об упор, а не под тормозом — проверка ничего не доказала")
+	}
+	if dist <= 0 {
+		t.Fatalf("тормозной путь %s", dist)
+	}
+	// ПОЕЗДНОЕ ПОЛОЖЕНИЕ НЕ ТОРМОЗИТ: тот же разгон при ручке в поездном обязан
+	// дать ЗАМЕТНО больший выбег. Без этой половины «тормоз работает» доказывало
+	// бы лишь то, что машина когда-нибудь останавливается.
+	w, m := world(t, 5, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, w, m, 30)
+	from := motion(t, m)
+	drive(t, m, match.Controls{Traction: 0, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, w, m, 600)
+	coast := motion(t, m).S - from.S
+	if coast <= dist {
+		t.Fatalf("выбег без тормоза %s не длиннее тормозного пути %s", coast, dist)
+	}
+	t.Logf("тормозной путь служебным %s, выбег в поездном %s", dist, coast)
+}
+
+// TestEmergencyStopsShorterThanService — экстренное короче служебного, и это
+// СЛЕДСТВИЕ ТЕМПА РАЗРЯДКИ, а не отдельное число тормозной силы: полное нажатие
+// у обоих одно, но экстренное набирает его быстрее, и разница — путь, пройденный
+// за время наполнения цилиндра.
+func TestEmergencyStopsShorterThanService(t *testing.T) {
+	service, atStopS := stopDistance(t, brake.HandleService)
+	emergency, atStopE := stopDistance(t, brake.HandleEmergency)
+	if atStopS || atStopE {
+		t.Fatal("машина встала об упор — сравнивать нечего")
+	}
+	if emergency >= service {
+		t.Fatalf("экстренное %s не короче служебного %s", emergency, service)
+	}
+	t.Logf("тормозной путь: служебное %s, экстренное %s (короче на %s)",
+		service, emergency, service-emergency)
+}
+
+// slowWorld — партия с машиной, у которой объявлены ТЕМП НАБОРА позиций и предел
+// двигателей: та, на которой видно и постепенный набор, и буксование.
+func slowWorld(t *testing.T, u float64) (*World, *match.Match) {
+	t.Helper()
+	s := setWith(t, func(st map[string]any) {
+		st["controls"] = map[string]any{
+			"traction_notches": 33, "brake_notches": 5, "notch_rate": 1.0,
+		}
+		tr := st["traction"].(map[string]any)
+		tr["max_force"] = 900.0
+	})
+	net := network(t)
+	m := &match.Match{ID: "M1", Region: net.MapID, Units: []match.Unit{{
+		ID: locoID, Name: "LOCO_1", Type: "VL80",
+		At: netloc.PointU{Element: seedmap.StationMain, U: u, Direction: netloc.DirForward},
+	}}}
+	mo, err := match.StartMotion(m.Units[0], net.Elements[seedmap.StationMain])
+	if err != nil {
+		t.Fatalf("начальное состояние: %v", err)
+	}
+	m.SetMotion(locoID, mo)
+	m.Controls = map[string]match.Controls{locoID: match.StoppedWithAir()}
+	if st, ok := s.StockType("VL80"); ok {
+		if air, ok := st.AirBrake(); ok {
+			m.Air = map[string]brake.State{locoID: brake.Charged(air)}
+		}
+	}
+	m.Notches = map[string]int{locoID: 0}
+	return NewWorld(net, s), m
+}
+
+// TestControllerRampsToTheHandle — РУКОЯТКА ЕСТЬ ЗАДАНИЕ, а не позиция.
+//
+// Замечание владельца 2026-08-15: «двигатель не может выдать сразу 100 %
+// мощности». До этого дня позиция ЭКГ равнялась положению рукоятки в тот же миг,
+// и это было записано упрощением в спеке кабины §2. Проверяется следствие:
+// поставили рукоятку на последнюю позицию — контроллер пошёл к ней, а не
+// прыгнул.
+func TestControllerRampsToTheHandle(t *testing.T) {
+	w, m := world(t, 5, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, w, m, 1) // один тик, 100 мс
+	got, _ := m.NotchOf(locoID)
+	// Темп в фикстуре не объявлен — контроллер встаёт мгновенно, и это прежнее
+	// поведение. Проверяется, что позиция ВООБЩЕ ведётся отдельно от рукоятки.
+	if got != 33*1000 {
+		t.Fatalf("позиция %d тысячных, ожидалось 33000 при необъявленном темпе", got)
+	}
+}
+
+// TestSlowControllerTakesTimeToFullPower — с объявленным темпом машина набирает
+// позиции по одной, и это ВИДНО В ПУТИ: за первые секунды она проходит заметно
+// меньше, чем с мгновенным контроллером.
+func TestSlowControllerTakesTimeToFullPower(t *testing.T) {
+	fast, mf := world(t, 5, netloc.DirForward)
+	drive(t, mf, match.Controls{Traction: 33, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, fast, mf, 50)
+	quick := motion(t, mf)
+
+	slow, ms := slowWorld(t, 5)
+	drive(t, ms, match.Controls{Traction: 33, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	step(t, slow, ms, 50)
+	gradual := motion(t, ms)
+	// И ПОЗИЦИЯ НЕ ДОШЛА ДО РУКОЯТКИ: пять секунд при темпе позиция в секунду —
+	// это пятая часть пути от нуля до тридцать третьей.
+	if got, _ := ms.NotchOf(locoID); got >= 33*1000 {
+		t.Fatalf("за 5 с контроллер дошёл до %d тысячных — набор мгновенный", got)
+	}
+	if gradual.Speed >= quick.Speed {
+		t.Fatalf("медленный набор дал скорость %v, мгновенный — %v: разницы нет",
+			gradual.Speed, quick.Speed)
+	}
+	t.Logf("за 5 с: мгновенный контроллер %v, набор по позиции в секунду %v",
+		quick.Speed, gradual.Speed)
+}
+
+// TestFullHandleSlipsOnTheWay — БУКСОВАНИЕ НАСТУПАЕТ ПО ДОРОГЕ К РУКОЯТКЕ, а не
+// в тот миг, когда её двинули.
+//
+// Это следствие двух правок разом, и проверять их порознь нечестно: рукоятка
+// стала заданием (контроллер идёт к ней своим темпом), а сила тяги перестала
+// быть минимумом из мощности и сцепления. Машинист ставит последнюю позицию —
+// машина трогается спокойно, набирает позиции и срывается тогда, когда двигатели
+// запросят больше, чем удержит рельс.
+func TestFullHandleSlipsOnTheWay(t *testing.T) {
+	w, m := slowWorld(t, 5)
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward,
+		Handle: brake.HandleRun})
+	// Сразу после команды машина ещё не буксует: позиция нулевая.
+	step(t, w, m, 1)
+	if motion(t, m).Slipping {
+		t.Fatal("забуксовала на первом же тике — контроллер прыгнул к рукоятке")
+	}
+	// А по дороге — обязана.
+	slipped := false
+	notchAtSlip := 0
+	for range 400 {
+		step(t, w, m, 1)
+		if motion(t, m).Slipping {
+			slipped = true
+			notchAtSlip, _ = m.NotchOf(locoID)
+			break
+		}
+	}
+	if !slipped {
+		got, _ := m.NotchOf(locoID)
+		t.Fatalf("за 40 с машина не забуксовала ни разу; позиция дошла до %d тысячных", got)
+	}
+	if notchAtSlip <= 1000 {
+		t.Fatalf("сорвалась на позиции %d тысячных — это первая же, набора не было", notchAtSlip)
+	}
+	t.Logf("сорвалась на позиции %.1f из 33", float64(notchAtSlip)/1000.0)
 }

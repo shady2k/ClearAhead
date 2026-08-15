@@ -94,6 +94,11 @@ const (
 	ReasonNotchOutOfRange = "notch_out_of_range"
 	// ReasonUnknownReverser — неизвестное положение реверсора.
 	ReasonUnknownReverser = "unknown_reverser"
+	// ReasonUnknownHandle — неизвестное положение ручки крана машиниста.
+	// Отдельная причина от реверсора: обе рукоятки перечислением, но перечни у
+	// них разные, и общий код заставил бы клиента гадать, какую именно он не
+	// угадал.
+	ReasonUnknownHandle = "unknown_brake_handle"
 	// ReasonTractionWithoutReverser — тяга при реверсоре в нуле: цепь тяги не
 	// собирается, и это устройство машины, а не наше правило игры.
 	ReasonTractionWithoutReverser = "traction_without_reverser"

@@ -151,10 +151,19 @@ func _check_controls(ch: LiveChannel, doc, snaps: Array) -> void:
 	ch.controls_refused.connect(func(reason: String, _t: String) -> void: refused.append(reason))
 
 	var before := snaps.size()
-	ch.set_controls(unit_id, 7, 0, "forward")
+	# КРАН МАШИНИСТА В КОМАНДЕ: у машины с тормозной магистралью он обязателен —
+	# команда ставит положение ВСЕХ органов разом. Берётся ПРИСЛАННЫЙ, а не
+	# выдуманный: какое положение у машины сейчас, знает снапшот.
+	var handle := String(_controls_now(ch, unit_id).get("handle", ""))
+	ch.set_controls(unit_id, 7, 0, "forward", handle)
 	var answered := await _until(func() -> bool: return not accepted.is_empty() or not refused.is_empty())
-	_ok("сервер ответил на команду органов", answered, str(refused))
-	if not answered or accepted.is_empty():
+	# ПРИНЯТА, А НЕ ПРОСТО ОТВЕЧЕНА, и разница здесь куплена дефектом: отказ —
+	# тоже ответ, и пока проверка спрашивала «ответил ли», она проходила зелёной,
+	# а семь проверок ниже молча не выполнялись вовсе. Так и случилось в день,
+	# когда у машины появилась магистраль и команда без крана стала отказной.
+	_ok("команда органов ПРИНЯТА, а не отказана", not accepted.is_empty(),
+		"отказы: %s" % str(refused))
+	if accepted.is_empty():
 		return
 	var stood: Dictionary = accepted[0]
 	var bad: String = doc.validate("controls", stood)
@@ -176,7 +185,7 @@ func _check_controls(ch: LiveChannel, doc, snaps: Array) -> void:
 		_ok("в снапшоте органы той же машины", int(seen.get("traction", -1)) == 7, str(seen))
 
 	# СТУПЕНЬ ЗА ПРЕДЕЛОМ ПАСПОРТА — отказ с объявленной причиной.
-	ch.set_controls(unit_id, notches + 1, 0, "forward")
+	ch.set_controls(unit_id, notches + 1, 0, "forward", handle)
 	var said := await _until(func() -> bool: return not refused.is_empty())
 	_ok("ступень за пределом отказана", said, str(accepted.size()))
 	if said:
@@ -185,8 +194,23 @@ func _check_controls(ch: LiveChannel, doc, snaps: Array) -> void:
 
 	# И ВОЗВРАЩАЕМ МАШИНУ В НОЛЬ: проверка не оставляет мир в тяге, иначе
 	# следующий прогон начинался бы не с того состояния, о котором он думает.
-	ch.set_controls(unit_id, 0, 0, "neutral")
+	ch.set_controls(unit_id, 0, 0, "neutral", handle)
 	await _until(func() -> bool: return accepted.size() > 1)
+
+
+## _controls_now — органы машины по последнему снапшоту. Нужен, чтобы команда
+## несла ТО положение крана, которое у машины есть: подставить своё значило бы
+## проверять договор против собственной догадки о машине.
+func _controls_now(ch: LiveChannel, unit_id: String) -> Dictionary:
+	if ch.last_snapshot == null:
+		return {}
+	for raw in ch.last_snapshot.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) == unit_id:
+			var c: Variant = u.get("controls", {})
+			if typeof(c) == TYPE_DICTIONARY:
+				return c as Dictionary
+	return {}
 
 
 ## ОТКАЗ — тоже часть договора: клиент разбирает его машинно.

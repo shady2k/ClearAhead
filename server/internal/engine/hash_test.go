@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
@@ -89,5 +90,53 @@ func TestEngineSealsHashEveryTick(t *testing.T) {
 	e.Step()
 	if got := e.Snapshot().Hash; got == start.Hash {
 		t.Fatal("правка партии не изменила хеш")
+	}
+}
+
+// TestStateHashNoticesPneumatics — ХЕШ ЗАМЕЧАЕТ РАБОТУ ПНЕВМАТИКИ У СТОЯЩЕЙ
+// МАШИНЫ.
+//
+// Проверка заведена по жалобе владельца 2026-08-15: «дёргаются именно стрелки
+// манометров; поначалу всё плавно, а потом они начинают обновляться раз в
+// секунду». Поначалу плавно — потому что машина ехала и хеш менялся положением;
+// раз в секунду — как только она встала, а давления продолжали меняться: их в
+// хеше не было, рассылка идёт ПО СМЕНЕ ХЕША, и снапшоты сводились к секундному
+// биению.
+//
+// Это ТРЕТИЙ случай одного рода: до давлений так же забывали органы управления и
+// состояние физики, и обе прошлые потери записаны в комментариях у самого хеша.
+func TestStateHashNoticesPneumatics(t *testing.T) {
+	before := two()
+	before.Air = map[string]brake.State{"a": {Main: 9_000_000, Pipe: 5_400_000, Cylinder: 0}}
+	after := two()
+	after.Air = map[string]brake.State{"a": {Main: 9_000_000, Pipe: 5_400_000, Cylinder: 1_000}}
+	if StateHash(before) == StateHash(after) {
+		t.Fatal("наполнение цилиндра на тысячную кгс/см² не изменило хеш — снапшот не уйдёт")
+	}
+	// И магистраль, и резервуары — каждое порознь: пропущенное поле не заметит
+	// именно своих изменений, а общая проверка «хоть что-то менялось» это скрыла
+	// бы.
+	pipe := two()
+	pipe.Air = map[string]brake.State{"a": {Main: 9_000_000, Pipe: 5_399_000, Cylinder: 0}}
+	if StateHash(before) == StateHash(pipe) {
+		t.Fatal("разрядка магистрали не изменила хеш")
+	}
+	main := two()
+	main.Air = map[string]brake.State{"a": {Main: 8_999_000, Pipe: 5_400_000, Cylinder: 0}}
+	if StateHash(before) == StateHash(main) {
+		t.Fatal("расход главных резервуаров не изменил хеш")
+	}
+}
+
+// TestStateHashNoticesController — позиция контроллера ползёт к рукоятке и на
+// стоянке: поставил рукоятку, машина ещё не тронулась, а позиция уже идёт. Без
+// неё в хеше ползунок тяги на пульте шагал бы раз в секунду.
+func TestStateHashNoticesController(t *testing.T) {
+	before := two()
+	before.Notches = map[string]int{"a": 0}
+	after := two()
+	after.Notches = map[string]int{"a": 20}
+	if StateHash(before) == StateHash(after) {
+		t.Fatal("продвижение контроллера на две сотых позиции не изменило хеш")
 	}
 }

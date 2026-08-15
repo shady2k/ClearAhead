@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/physics"
 	"github.com/shady2k/ClearAhead/server/internal/units"
@@ -142,6 +143,11 @@ type StockType struct {
 	// запроса нет невалидного представления.
 	loco   physics.Locomotive
 	isLoco bool
+	// air — уставки пневматики, переведённые в домен. hasAir разводит «машина
+	// тормозит давлением» и «машина тормозит одним числом»: у второй пульт не
+	// рисует ни манометров, ни крана, и это разные машины, а не одна с нулями.
+	air    brake.Spec
+	hasAir bool
 }
 
 // ControlsSpec — органы управления машины: их пределы и дискретность.
@@ -186,6 +192,30 @@ type ControlsSpec struct {
 	TractionNotches int `json:"traction_notches"`
 	// BrakeNotches — сколько ступеней служебного торможения, не считая нулевой.
 	BrakeNotches int `json:"brake_notches"`
+	// NotchRate — сколько позиций в секунду проходит главный контроллер.
+	//
+	// # Почему рукоятка — ЗАДАНИЕ, а не позиция
+	//
+	// Потому что так устроена машина, и до 2026-08-15 это было записано как
+	// упрощение: «на настоящем ВЛ80С машинист двигает главную рукоятку КМ-84 и
+	// КОМАНДУЕТ главному контроллеру набирай, сбрасывай, стой. Позиция ЭКГ —
+	// РЕЗУЛЬТАТ, а не то, что выставляют. У нас машинист ставит ступень напрямую»
+	// (спека кабины §2). Упрощение снято по замечанию владельца: «двигатель не
+	// может выдать сразу 100 % мощности».
+	//
+	// Следствие видно сразу: поставить рукоятку на последнюю позицию можно, но
+	// машина придёт туда через десятки секунд, набирая позиции по одной, — и
+	// забуксует не в тот миг, когда рукоятку двинули, а когда контроллер дойдёт
+	// до позиции, которую сцепление не держит.
+	//
+	// ЧИСЛО ПРЕДВАРИТЕЛЬНОЕ: у ЭКГ-8Ж переход с позиции на позицию занимает около
+	// секунды, отсюда порядок 1 позиция в секунду. Источник не назначен, и число
+	// названо тем, что оно есть.
+	//
+	// Ноль значит «контроллер встаёт мгновенно» — прежнее поведение. Это законная
+	// машина: у тепловоза с гидропередачей набор устроен иначе, и электровозное
+	// число ему не подходит.
+	NotchRate float64 `json:"notch_rate,omitempty"`
 }
 
 // ResistanceSpec — три коэффициента ПТР как их пишет автор набора.
@@ -217,6 +247,76 @@ type BrakeSpec struct {
 	// тоннах-силы (14.0 тс), а тонна-сила зависит от принятого g. Перевод
 	// сделан здесь один раз при g = 9.80665: 14.0 тс = 137.3 кН.
 	AxleForceKN float64 `json:"axle_force"`
+	// Air — ПНЕВМАТИКА: магистраль, краны, цилиндр. Отсутствие значит, что
+	// машина тормозит ОДНИМ ЧИСЛОМ — полным нажатием по нажатию рукоятки, — а не
+	// давлением.
+	//
+	// # Почему необязателен, хотя тормоз обязателен
+	//
+	// Потому что тормозная система у машин РАЗНАЯ (слово владельца 2026-08-15), и
+	// пневматика — не единственная: у моторвагонной секции электропневматический
+	// тормоз со своими положениями, у дрезины может не быть магистрали вовсе.
+	// Обязательным здесь остаётся то, что верно для всего катящегося: колодки,
+	// оси и расчётное нажатие. КАК это нажатие набирается — свойство системы.
+	//
+	// Число ступеней (ControlsSpec.BrakeNotches) при заполненном блоке не
+	// применяется: глубину торможения задаёт разрядка магистрали, и она
+	// непрерывна.
+	Air *AirBrakeSpec `json:"air,omitempty"`
+}
+
+// AirBrakeSpec — уставки автоматического тормоза как их пишет автор набора,
+// кгс/см² и кгс/см² в секунду.
+//
+// # Откуда числа
+//
+// Типовые уставки грузового поезда: зарядное давление магистрали 5.3–5.5,
+// первая ступень служебного торможения — разрядка 0.5–0.6, полное служебное —
+// около 1.5–1.7, темп служебной разрядки 0.2–0.25 в секунду, экстренной — не
+// менее 0.8. Главные резервуары ВЛ80 — 7.5…9.0 с автоматическим пуском
+// компрессора. Кран вспомогательного тормоза № 254 держит в цилиндре до 4.0.
+//
+// НАЗВАНЫ ПРЕДВАРИТЕЛЬНЫМИ, как профиль норм и эпюра переводных брусьев:
+// источник не назначен, числа взяты типовыми и дают правдоподобное поведение.
+// Проверить их по документу — работа автора набора, и место для этого здесь: они
+// в паспорте, а не в коде.
+type AirBrakeSpec struct {
+	ChargeKgf          float64 `json:"charge"`
+	FullServiceDropKgf float64 `json:"full_service_drop"`
+	CylinderFullKgf    float64 `json:"cylinder_full"`
+	ServiceRateKgfS    float64 `json:"service_rate"`
+	EmergencyRateKgfS  float64 `json:"emergency_rate"`
+	ChargeRateKgfS     float64 `json:"charge_rate"`
+	LeakRateKgfS       float64 `json:"leak_rate"`
+	MainMinKgf         float64 `json:"main_min"`
+	MainMaxKgf         float64 `json:"main_max"`
+	CompressorRateKgfS float64 `json:"compressor_rate"`
+	CylinderRateKgfS   float64 `json:"cylinder_rate"`
+	// IndependentMaxKgf — предельное давление крана вспомогательного тормоза
+	// локомотива. НОЛЬ ЗНАЧИТ, ЧТО КРАНА НЕТ (разбор — у brake.Spec).
+	IndependentMaxKgf float64 `json:"independent_max,omitempty"`
+}
+
+// Air — уставки, переведённые в домен. Пусто у машины без пневматики.
+func (b BrakeSpec) Domain() (brake.Spec, bool) {
+	if b.Air == nil {
+		return brake.Spec{}, false
+	}
+	a := b.Air
+	return brake.Spec{
+		Charge:          brake.FromKgf(a.ChargeKgf),
+		FullServiceDrop: brake.FromKgf(a.FullServiceDropKgf),
+		CylinderFull:    brake.FromKgf(a.CylinderFullKgf),
+		ServiceRate:     brake.FromKgf(a.ServiceRateKgfS),
+		EmergencyRate:   brake.FromKgf(a.EmergencyRateKgfS),
+		ChargeRate:      brake.FromKgf(a.ChargeRateKgfS),
+		LeakRate:        brake.FromKgf(a.LeakRateKgfS),
+		MainMin:         brake.FromKgf(a.MainMinKgf),
+		MainMax:         brake.FromKgf(a.MainMaxKgf),
+		CompressorRate:  brake.FromKgf(a.CompressorRateKgfS),
+		CylinderRate:    brake.FromKgf(a.CylinderRateKgfS),
+		IndependentMax:  brake.FromKgf(a.IndependentMaxKgf),
+	}, true
 }
 
 // TractionSpec — тяговые свойства локомотива.
@@ -258,6 +358,27 @@ type TractionSpec struct {
 	// g = 9.80665: 40.9 тс = 401.1 кН.
 	ContinuousForceKN  float64 `json:"continuous_force"`
 	ContinuousSpeedKmh float64 `json:"continuous_speed"`
+	// MaxForceKN — наибольшая сила тяги, которую дают ДВИГАТЕЛИ, килоньютоны.
+	//
+	// # Зачем она отдельно от длительного режима
+	//
+	// Потому что буксование — это разница между тем, что дают двигатели, и тем,
+	// что удержит рельс, и пока сила тяги была минимумом из мощности и сцепления,
+	// этой разницы не существовало вовсе: доля бралась от уже ограниченного
+	// числа, и последняя позиция контроллера была безопасна по построению.
+	// Владелец это заметил: «можно установить контроллер сразу на 33 и он
+	// поедет, а должен буксовать».
+	//
+	// ЧИСЛО ПРЕДВАРИТЕЛЬНОЕ. Оно назначает, на какой позиции машина срывается с
+	// места, и проверяется следствием: при 900 кН и сцепном весе 192 т с места
+	// без буксования берутся позиции до 23 из 33 (замер:
+	// physics.TestGentleNotchDoesNotSlip). Источник не назначен, порядок взят
+	// правдоподобным, и до проверки по документу число обязано выглядеть тем,
+	// что оно есть.
+	//
+	// Ноль значит «предел двигателей не объявлен»: машина не буксует, сила тяги
+	// остаётся прежней огибающей. Законная машина, а не недописанный паспорт.
+	MaxForceKN float64 `json:"max_force,omitempty"`
 }
 
 // Locomotive — паспорт в доменных единицах и признак того, что это локомотив.
@@ -265,6 +386,11 @@ type TractionSpec struct {
 // Возвращает готовое значение, а не считает: перевод и проверки случились при
 // загрузке набора (loadStock), и отказать здесь уже нечему.
 func (t StockType) Locomotive() (physics.Locomotive, bool) { return t.loco, t.isLoco }
+
+// AirBrake — уставки пневматики машины. Второе значение ложно у машины, которая
+// тормозит одним числом, а не давлением: спрашивающий обязан различать эти
+// случаи, а не получать нули под видом уставок.
+func (t StockType) AirBrake() (brake.Spec, bool) { return t.air, t.hasAir }
 
 // loadStock проверяет и укладывает паспорта.
 func (s *Set) loadStock(types []StockType) error {
@@ -370,6 +496,15 @@ func (t *StockType) compilePhysics() error {
 	if err != nil {
 		return fmt.Errorf("content: тип %s: расчётное нажатие на ось: %w", t.ID, err)
 	}
+	// ПНЕВМАТИКА — ДО замыкания ниже, и порядок этот вынужденный: локальное имя
+	// brake затенило бы пакет brake, а проверять уставки надо им.
+	if air, ok := t.Brake.Domain(); ok {
+		if err := air.Validate(); err != nil {
+			return fmt.Errorf("content: тип %s: %w", t.ID, err)
+		}
+		t.air = air
+		t.hasAir = true
+	}
 	brake := func(l physics.Locomotive) physics.Locomotive {
 		l.Shoes = shoes
 		l.AxleBrakeForce = axleBrake
@@ -416,11 +551,26 @@ func (t *StockType) compilePhysics() error {
 	}
 	// Мощность на ободе — произведение силы на скорость режима. Ньютон на
 	// микрометр в секунду даёт микроватты, отсюда деление на миллион.
+	// Предел двигателей необязателен: ноль значит «не объявлен», и машина не
+	// буксует (разбор — у physics.TractionLimit).
+	var maxForce units.Force
+	if tr.MaxForceKN > 0 {
+		maxForce, err = units.KilonewtonsToForce(tr.MaxForceKN)
+		if err != nil {
+			return fmt.Errorf("content: тип %s: предел двигателей: %w", t.ID, err)
+		}
+		if maxForce < force {
+			return fmt.Errorf("content: тип %s: traction.max_force = %g кН меньше силы длительного "+
+				"режима %g кН — двигатели не могут быть слабее собственного длительного режима",
+				t.ID, tr.MaxForceKN, tr.ContinuousForceKN)
+		}
+	}
 	t.loco = brake(physics.Locomotive{
 		Mass:         mass,
 		AdhesiveMass: adhesive,
 		RimPower:     int64(force) * int64(speed) / 1_000_000,
 		MaxSpeed:     maxSpeed,
+		MaxForce:     maxForce,
 		Res:          res,
 	})
 	t.isLoco = true

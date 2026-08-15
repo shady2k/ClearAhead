@@ -232,6 +232,11 @@ var world: Node3D
 var ui_label: RichTextLabel
 ## Подсказка подошедшему. Пустая и невидимая, пока предложить нечего.
 var ui_prompt: Label
+## Пульт кабины: рукоятки, скорость и клавиши. Живёт ВСЕГДА, когда машинист
+## сидит, и не гасится вместе с отладочной панелью — разбор у его постройки.
+## Пульт машиниста: приборы и рукоятки. Появляется при посадке, гаснет при
+## высадке — как и строка выше, и отдельно от отладочной панели.
+var ui_panel: CabPanel
 var camera: Camera3D
 ## Мир спрашивает СЛОЙ, а не трубу: манифест, сеть, рельеф, объекты — вопросами,
 ## а не адресами. Ни кода ответа, ни имени заголовка отсюда не видно (WorldApi).
@@ -253,6 +258,21 @@ var _stock_elements := {}
 
 ## Кинематика показа: где рисовать машины между снапшотами (ClearAhead-t5h §6).
 var _display := DisplayMotion.new()
+## Сторож рывка показа: время прошлого кадра, счётчик и худший шаг. Разбор — у
+## _watch_jerk.
+var _jerk_frame_us := 0
+var _jerk_show_us := 0
+var _jerk_pushes := 0
+## Буфер показа на прошлом кадре: сторож часов вычитает его изменение из
+## ожидаемого шага — с версии 3 кинематики буфер мерится и меняется на ходу.
+var _jerk_buffer_us := 0
+## Сколько раз показ отдал разом промежуток на границе элемента. Не рывок —
+## объявленная цена правила 1, но цена, которую видно числом.
+var _border_steps := 0
+var _clock_slips := 0
+var _clock_worst_ms := 0.0
+var _jerk_count := 0
+var _jerk_step_max := 0.0
 
 ## Подпись состава на последнем применённом снапшоте. По ней решается,
 ## перестраивать ли постановку: биение приходит не реже раза в секунду
@@ -344,6 +364,7 @@ const REBUILD_BUDGET_US := 8000
 const VersionSetScript := preload("res://scripts/version_set.gd")
 const VersionRebuildScript := preload("res://scripts/version_rebuild.gd")
 const GrassFieldScript := preload("res://scripts/grass_field.gd")
+const CabPanelScript := preload("res://scripts/cab_panel.gd")
 
 
 ## configure — всё, что мир получает СНАРУЖИ, одним вызовом и до входа в дерево.
@@ -636,6 +657,9 @@ func _build_scene() -> void:
 	ui_prompt.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ui_prompt.grow_horizontal = Control.GROW_DIRECTION_BOTH
 	ui_prompt.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	# Отступ ставится не здесь, а рядом с пультом (_refresh_ui): подсказка обязана
+	# стоять ВЫШЕ него, а его высота известна только после того, как он окажется в
+	# дереве и спросит окно.
 	ui_prompt.offset_top = -96.0
 	ui_prompt.add_theme_font_size_override("font_size", 18)
 	var prompt_box := StyleBoxFlat.new()
@@ -645,6 +669,19 @@ func _build_scene() -> void:
 	ui_prompt.add_theme_stylebox_override("normal", prompt_box)
 	ui_prompt.visible = false
 	ui.add_child(ui_prompt)
+
+	# ЗДЕСЬ БЫЛА ТЕКСТОВАЯ СТРОКА КАБИНЫ (ui_cab), заведённая тем же днём на
+	# несколько часов раньше пульта. Она снесена, а не оставлена рядом: два места,
+	# показывающие одно и то же положение рукояток, — это два места, где оно может
+	# разойтись, и второе из них ничего не добавляло. Довод, ради которого она
+	# появлялась, остался в силе и исполнен пультом: рукоятки обязаны быть видны
+	# ВСЕГДА, а не в отладочной панели, которую в игре включают клавишей H.
+	# ПУЛЬТ С ПРИБОРАМИ. Приборы без чисел он не рисует сам (разбор — в его шапке).
+	ui_panel = CabPanelScript.new()
+	ui_panel.setup(cab)
+	ui_panel.changed.connect(_send_controls)
+	ui_panel.visible = false
+	ui.add_child(ui_panel)
 
 
 ## _apply_fog_to_reach — плотность дымки из дальности взгляда.
@@ -1013,12 +1050,30 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 	# каждый кадр между снимками (разбор — у DisplayMotion): сервер шлёт десять
 	# раз в секунду, экран рисует шестьдесят, и без досчёта машина дёргается —
 	# замерено, прыжки до 0.47 м.
-	_display.push(snap.time_us, snap.units)
+	# ПОДПИСЬ ОТДАЁТСЯ КИНЕМАТИКЕ: по ней она отличает «сервер молчал, потому что
+	# нечего было слать» от «снимок опоздал». Первое — не дефект и буфер растить не
+	# должно, второе — дефект. Считается она здесь всё равно, строкой выше.
+	_display.push(snap.time_us, snap.units, signature)
 	_move_stock(snap)
 	# Кабина берёт положение рукояток из снапшота: истина о машине приходит
 	# оттуда, а не остаётся тем, что игрок в последний раз выставил.
 	if cab.aboard():
 		cab.confirm(_controls_of(cab.unit_id))
+		# ПОРЯДОК ЗДЕСЬ ЗНАЧИМ, и это починка настоящего дефекта.
+		#
+		# Cab.air кладёт снимок В РЯД ПОКАЗА, и в снимок идут ВСЕ показания разом —
+		# давления, скорость, позиция контроллера. Значит скорость и позиция обязаны
+		# быть уже обновлены, когда снимок складывается: раньше cab.machine стояла
+		# СТРОКОЙ НИЖЕ, а cab.speed_kmh ставилась вообще не здесь, а в _refresh_panel
+		# следующего кадра. Запись со временем T несла величины момента T−1.
+		#
+		# Видно это было так: машина упёрлась в тупик, состояние перестало
+		# меняться, снимки упали до биения — и последняя запись ряда держала
+		# ДОУПОРНУЮ скорость до следующего биения. Владелец: «уже закончились рельсы,
+		# а у тебя спидометр показывает скорость».
+		cab.speed_kmh = float(stats.get("stock_speed_ms", 0.0)) * 3.6
+		cab.machine(_unit_of(cab.unit_id))
+		cab.air(_air_of(cab.unit_id), snap.time_us)
 		_cab_stats()
 	if _loaded and ui_label != null:
 		_refresh_ui()
@@ -1027,10 +1082,16 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 ## _move_stock — числа о движении в отчёт. Само движение показывает _process.
 func _move_stock(snap: LiveChannel.Snapshot) -> void:
 	var fastest := 0.0
+	# ЭЛЕМЕНТ, НА КОТОРОМ МАШИНА СЕЙЧАС, — в отчёт. Число служебное: им зонд
+	# проверяет, приходятся ли скачки показа на смену элемента (правило 1
+	# DisplayMotion не интерполирует через границу).
+	stats["stock_element"] = ""
 	for raw in snap.units:
 		var d := raw as Dictionary
 		var v := String(d.get("speed", "0")).to_int() / 1e6
 		fastest = maxf(fastest, absf(v))
+		var at := d.get("at", {}) as Dictionary
+		stats["stock_element"] = String(at.get("element", ""))
 	stats["stock_speed_ms"] = fastest
 
 
@@ -1044,12 +1105,65 @@ func _show_stock() -> void:
 	if _stock_units.is_empty() or _stock_elements.is_empty():
 		return
 	var moved := 0
+	var now_us := Time.get_ticks_usec()
+	var frame_us: int = now_us - _jerk_frame_us if _jerk_frame_us > 0 else 0
+	_jerk_frame_us = now_us
+	# ЧАСЫ ПОКАЗА — рядом с положением. Разошлись с ожидаемым — значит скачок
+	# положения объясняется ими, а не физикой.
+	var show_us := _display.show_us()
+	var show_step: int = show_us - _jerk_show_us if _jerk_show_us > 0 else 0
+	_jerk_show_us = show_us
+	var pushes: int = _display.pushes
+	var pushed: int = pushes - _jerk_pushes
+	_jerk_pushes = pushes
+	# СДВИГ БОЛЬШЕ НЕ ПОСТОЯНЕН, и ожидание сторожа переписано под это.
+	#
+	# Часы показа — это настенные часы со сдвигом на буфер, и до версии 3
+	# кинематики буфер был константой: сдвиг постоянен, значит за кадр часы
+	# обязаны пройти ровно кадр. С версии 3 буфер МЕРИТСЯ и меняется на ходу, а
+	# show = wall − buffer, то есть Δshow = Δwall − Δbuffer. Не вычтя Δbuffer,
+	# сторож красил бы работу буфера как дефект — и красил (ОТКАЗ «расхождений 3»
+	# на живом прогоне, все три — рост буфера).
+	#
+	# И НИЖНЯЯ ГРАНИЦА НУЛЁМ: часы показа монотонны (разбор — там же), поэтому
+	# рост буфера их не отматывает назад, а ОСТАНАВЛИВАЕТ. Ожидать отрицательного
+	# шага значит ожидать того, чего правило показа не делает.
+	var buffer_us: int = _display.buffer_us()
+	var buffer_step: int = buffer_us - _jerk_buffer_us if _jerk_buffer_us > 0 else 0
+	_jerk_buffer_us = buffer_us
+	# БУФЕР — НА ЭКРАН. Он стал величиной состояния, а величина состояния, которую
+	# не видно, объясняет картинку только на разборе постфактум.
+	stats["display_buffer_ms"] = float(buffer_us) / 1000.0
+	stats["display_buffer_worst_ms"] = float(_display.buffer_worst_us) / 1000.0
+	if frame_us > 0 and show_step != 0:
+		var expect_step: int = maxi(frame_us - buffer_step, 0)
+		var slip_ms := float(show_step - expect_step) / 1000.0
+		# ПОРОГ 25 МС, А НЕ 5. Пять миллисекунд были верны, пока сдвиг часов показа
+		# был постоянен: тогда любое отклонение означало перестановку привязки.
+		# С версии 3 буфер мерится и меняется на ходу, а меняется он на приходе
+		# снимка — то есть внутри кадра, и на несколько его собственных чтений
+		# часов. Остаток в единицы миллисекунд — это работа буфера, а не дефект.
+		# То, ради чего сторож заведён, было в сотнях миллисекунд: −694, +838, +143.
+		if absf(slip_ms) > 25.0:
+			_clock_slips += 1
+			stats["display_clock_slips"] = _clock_slips
+			if absf(slip_ms) > absf(_clock_worst_ms):
+				_clock_worst_ms = slip_ms
+				stats["display_clock_worst"] = "%.1f мс (кадр %.1f мс, снимков %d)" % [
+					slip_ms, float(frame_us) / 1000.0, pushed]
+			if _clock_slips <= 10:
+				print("ЧАСЫ ПОКАЗА ДЁРНУЛИСЬ #%d: за кадр %.1f мс они прошли %.1f мс "
+					% [_clock_slips, float(frame_us) / 1000.0, float(show_step) / 1000.0]
+					+ "(расхождение %.1f мс); снимков в кадре %d, снапшот #%d"
+					% [slip_ms, pushed, int(stats.get("channel_seq", 0))])
 	for u_raw in _stock_units:
 		var u := u_raw as RollingStock.Unit
 		var at := _display.at(u.id)
 		if at.is_empty():
 			continue
 		var was := u.u_m
+		var was_el: String = u.element.id if u.element != null else ""
+		var was_pos: Vector3 = u.node.global_position if u.node != null else Vector3.ZERO
 		var note := RollingStock.move(u, at, _stock_elements)
 		if note != "":
 			# Отказ перестановки — на экран, а не в тишину: машина, оставшаяся
@@ -1059,7 +1173,83 @@ func _show_stock() -> void:
 			continue
 		if not is_equal_approx(was, u.u_m):
 			moved += 1
+		var crossed: bool = was_el != "" and was_el != (u.element.id if u.element != null else "")
+		_watch_jerk(u, was_pos, frame_us, show_step, pushed, crossed, buffer_us)
 	stats["stock_moved"] = moved
+	stats["display_border_steps"] = _border_steps
+
+
+## _watch_jerk — СТОРОЖ РЫВКА ПОКАЗА: ловит кадр, в котором машина сдвинулась
+## заметно дальше, чем позволяет её же скорость.
+##
+## Заведён 2026-08-15 по жалобе владельца: «нажимаешь экстренный, а поезд рывками
+## то останавливается, то едет быстрее. Ну и прыжки локомотива тоже видно». И
+## по его же вопросу — «почему ты не можешь залогировать это всё, когда я набираю
+## make drive?». Ответ: могу, и вот. Зонд ловит рывок в своей поездке, а игрок —
+## в своей, и числа игрока весомее: ловится то, что он видит.
+##
+## ПОРОГ — ТРОЙНАЯ ОЖИДАЕМАЯ, но не меньше 0.2 м. Тройная, потому что кадр может
+## законно оказаться вдвое длиннее соседнего (сборка меша, пересадка травы), и
+## двойной порог красил бы обычную неровность кадра. Нижняя граница нужна на
+## малой скорости: у стоящей машины ожидаемая нулевая, и любое дрожание в
+## микрометр было бы «в бесконечность раз больше».
+##
+## Числа печатаются В ЛОГ и считаются в панель. Лог — потому что рывок редкий и
+## его надо поймать, а не увидеть; панель — чтобы было видно, что сторож жив.
+func _watch_jerk(u: RollingStock.Unit, was_pos: Vector3, frame_us: int,
+		show_step: int, pushed: int, crossed: bool, buffer_us: int) -> void:
+	if u.node == null or frame_us <= 0 or was_pos == Vector3.ZERO:
+		return
+	var step := was_pos.distance_to(u.node.global_position)
+	var speed: float = float(stats.get("stock_speed_ms", 0.0))
+	var expect := speed * float(frame_us) / 1e6
+	# ОЖИДАЕМОЕ БЕРЁТСЯ ПО ДВУМ ИСТОЧНИКАМ, И ЭТО ПОЧИНКА САМОГО СТОРОЖА.
+	#
+	# stock_speed_ms — скорость ПОСЛЕДНЕГО снапшота, а показ идёт на буфер позади:
+	# он показывает мгновение, в которое машина ещё ехала. На торможении эти два
+	# числа расходятся кратно, и сторож объявлял рывком нормальный ход показа —
+	# ЗАМЕР: восемь «рывков» по 0.27…0.44 м подряд при серверной скорости 0.00, то
+	# есть машина доезжала на экране те метры, которые сервер уже отдал.
+	#
+	# Поэтому шаг считается законным, если его объясняет ЛИБО скорость сервера,
+	# ЛИБО собственный шаг показа на прошлом кадре: настоящий рывок — это РАЗРЫВ,
+	# он в десятки раз больше соседних шагов, и от соседей он не спрячется. Тот, из-за
+	# которого сторож заведён, был 12.6 м при соседях по 0.13 — тридцать пределов.
+	var limit: float = maxf(maxf(expect, u.shown_step_m) * 3.0, 0.2)
+	u.shown_step_m = step
+	# ГРАНИЦА ЭЛЕМЕНТА — ОБЪЯВЛЕННАЯ ЦЕНА, А НЕ РАЗРЫВ.
+	#
+	# Правило 1 кинематики показа: через границу не интерполируем — держим старый
+	# снимок, пока время не дойдёт до нового. Значит на переходе показ ОБЯЗАН
+	# отдать разом то, что машина прошла за один промежуток снимков. Предел
+	# поэтому — промежуток, и берётся он не с потолка: буфер показа и ЕСТЬ
+	# замеренный промежуток с запасом (DisplayMotion).
+	#
+	# Считается это ОТДЕЛЬНЫМ ЧИСЛОМ, а не прощается молча: 0.72 м на каждой
+	# стрелке — цена, которую платит игрок, и она обязана быть видна. Уберёт её
+	# отрезок пути на проводе (ClearAhead-7n0v), а до тех пор её надо знать.
+	if crossed:
+		var border: float = speed * float(buffer_us) / 1e6
+		if step <= maxf(limit, border):
+			_border_steps += 1
+			return
+	_jerk_step_max = maxf(_jerk_step_max, step)
+	if step <= limit:
+		return
+	_jerk_count += 1
+	stats["display_jerks"] = _jerk_count
+	stats["display_jerk_worst"] = "%.3f м при ожидаемых %.3f (кадр %.1f мс, скорость %.2f м/с)" % [
+		step, expect, float(frame_us) / 1000.0, speed]
+	# Печатаем ПЕРВЫЕ ДЕСЯТЬ и молчим дальше: рывок, повторяющийся сто раз в
+	# секунду, залил бы лог и скрыл в нём всё остальное, включая себя же.
+	if _jerk_count <= 10:
+		print("РЫВОК ПОКАЗА #%d: %.3f м за кадр %.1f мс при скорости %.2f м/с (ожидалось %.3f м)"
+			% [_jerk_count, step, float(frame_us) / 1000.0, speed, expect]
+			+ "; ЧАСЫ ПОКАЗА прошли %.1f мс, снимков в кадре %d"
+			% [float(show_step) / 1000.0, pushed]
+			+ "; машина %s, элемент %s, u = %.2f м, снапшот #%d возрастом %.0f мс"
+			% [u.id.substr(0, 8), (u.element.id if u.element != null else "?").substr(0, 8), u.u_m,
+				int(stats.get("channel_seq", 0)), _display.age_ms()])
 
 
 ## _on_controls_set — сервер принял команду и вернул положение, КОТОРОЕ ВСТАЛО.
@@ -1089,7 +1279,8 @@ func _on_controls_refused(reason: String, text: String) -> void:
 func _send_controls() -> void:
 	if channel == null or not cab.aboard():
 		return
-	if channel.set_controls(cab.unit_id, cab.traction, cab.brake, cab.reverser) < 0:
+	if channel.set_controls(cab.unit_id, cab.traction, cab.brake, cab.reverser,
+			cab.handle, cab.independent) < 0:
 		# Канал закрыт — команда не ушла. Рукоятка откатывается: показывать её
 		# набранной значило бы обещать тягу, о которой сервер не услышал.
 		cab.refused("канал закрыт — команда не ушла")
@@ -2475,12 +2666,18 @@ func _bind_cab() -> void:
 		if u.id == unit_id:
 			type_id = u.type_id
 			break
-	var limits: Dictionary = ((_stock_types.get(type_id, {}) as Dictionary).get("controls", {})) as Dictionary
+	# ПАСПОРТ ЦЕЛИКОМ, а не один блок controls: приборам пульта нужны ШКАЛЫ, и
+	# они у машины свои — зарядное давление, предел цилиндра, потолок резервуаров,
+	# конструкционная скорость. Выдумать их клиенту нельзя, а взять больше
+	# неоткуда: всё это уже приехало в наборе контента.
+	var passport: Dictionary = _stock_types.get(type_id, {}) as Dictionary
+	var limits: Dictionary = (passport.get("controls", {})) as Dictionary
 	if limits.is_empty():
 		cab.leave()
 		errors.append("у машины %s нет объявленных органов управления — рукоятки не двигаются" % type_id)
 		return
-	cab.bind(unit_id, limits, _controls_of(unit_id))
+	cab.bind(unit_id, passport, _controls_of(unit_id))
+	cab.air(_air_of(unit_id))
 	_cab_stats()
 	_look_at_machine(unit_id)
 
@@ -2528,6 +2725,29 @@ func _cab_stats() -> void:
 
 
 ## _controls_of — положение органов машины из последнего снапшота.
+func _unit_of(unit_id: String) -> Dictionary:
+	if channel == null or channel.last_snapshot == null:
+		return {}
+	for raw in channel.last_snapshot.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) == unit_id:
+			return u
+	return {}
+
+
+func _air_of(unit_id: String) -> Dictionary:
+	if channel == null or channel.last_snapshot == null:
+		return {}
+	for raw in channel.last_snapshot.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) == unit_id:
+			var a: Variant = u.get("air", {})
+			if typeof(a) == TYPE_DICTIONARY:
+				return a as Dictionary
+			return {}
+	return {}
+
+
 func _controls_of(unit_id: String) -> Dictionary:
 	if channel == null or channel.last_snapshot == null:
 		return {}
@@ -2648,19 +2868,44 @@ func _role_bbox(elements: Array[TrackGeom.Element]) -> Rect2:
 ## Слушается ВСЕГДА, в том числе когда ввод у мира отобран паузой: числа
 ## отладки — не действие в мире, и посмотреть их из-под меню законно. Тем эта
 ## клавиша и отличается от E, V и F, которые гаснут вместе с вводом.
-## РУКОЯТКИ НА ЦИФРАХ, и это вынужденный выбор, а не вкус: буквы и стрелки уже
-## заняты ходьбой (WASD), камерой (стрелки), посадкой (E), видом (V, F), паузой
-## показа (P) и панелью (H). Цифры свободны и ложатся парами.
+## РУКОЯТКИ НА ЦИФРАХ — И НА W/S ТОЖЕ.
 ##
-##   1 / 2 — контроллер тяги на ступень вниз / вверх
-##   3 / 4 — тормоз на ступень вниз / вверх
-##   R     — реверсор вперёд, Shift+R — назад (только при нулевой тяге)
-##   0     — всё в ноль: тяга сброшена, тормоз полный, реверсор в ноль
+## Цифры выбраны были вынужденно: буквы и стрелки считались занятыми ходьбой
+## (WASD), камерой (стрелки), посадкой (E), видом (V, F), паузой показа (P) и
+## панелью (H). Довод оказался неверен ровно для кабины, и поправил его владелец
+## 2026-08-15: «когда мы в кабине, мы управляем камерой мышью, как это уже
+## реализовано во многих играх». В кабине ноги выключены целиком
+## (driver.gd::_physics_process), клавиатурную панораму у обзора отбирает посадка
+## (OrbitCamera.set_keys) — значит буквы там не заняты НИЧЕМ, и держать тягу
+## только на цифрах не за что.
+##
+## ЦИФРЫ ПРИ ЭТОМ ОСТАЮТСЯ, а не заменяются: пары 1/2 и 3/4 показывают, что тяга
+## и тормоз — однородные ступенчатые органы, и это видно по клавишам. W/S — второе
+## имя для тяги, то, что рука ищет первым.
+##
+##   W / S, 2 / 1 — контроллер тяги на ступень вверх / вниз
+##   4 / 3        — тормоз на ступень вверх / вниз
+##   R            — реверсор вперёд, Shift+R — назад (только при нулевой тяге)
+##   0            — ЭКСТРЕННАЯ ОСТАНОВКА, а не «всё в ноль»: тяга сброшена,
+##                  кран в экстренное, вспомогательный на полное, реверсор в
+##                  ноль. Прежнее название врало и до пневматики — тормоз оно
+##                  ставило ПОЛНЫЙ, а не нулевой.
 const CAB_KEYS := {
 	KEY_1: "traction-",
 	KEY_2: "traction+",
+	KEY_S: "traction-",
+	KEY_W: "traction+",
 	KEY_3: "brake-",
 	KEY_4: "brake+",
+	# КРАН МАШИНИСТА ВЕДЁТСЯ СОСЕДНИМ ПОЛОЖЕНИЕМ, а не ставится сразу: у ручки
+	# нет способа попасть из отпуска в экстренное, минуя сектор. A — к отпуску,
+	# D — к торможению, то есть влево и вправо по нарисованному сектору.
+	KEY_A: "handle-",
+	KEY_D: "handle+",
+	# ВСПОМОГАТЕЛЬНЫЙ НА Z/X, а не на Q/E: E занята выходом из кабины, и вторая
+	# роль у той же клавиши означала бы, что подсказка врёт одному из двух.
+	KEY_Z: "independent-",
+	KEY_X: "independent+",
 	KEY_R: "reverser",
 	KEY_0: "release",
 }
@@ -2671,6 +2916,15 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	var key := event as InputEventKey
 	if not key.pressed or key.echo:
+		return
+	# F1 — СПИСОК КЛАВИШ. У мира, а не у пульта: клавиатура принадлежит ему, и
+	# вторая точка приёма клавиш означала бы, что порядок их разбора зависит от
+	# того, кто первый подписался.
+	if key.keycode == KEY_F1:
+		if ui_panel != null:
+			ui_panel.keys_shown = not ui_panel.keys_shown
+			ui_panel.queue_redraw()
+		get_viewport().set_input_as_handled()
 		return
 	if key.keycode == KEY_H:
 		if ui_label != null:
@@ -2694,6 +2948,14 @@ func _unhandled_input(event: InputEvent) -> void:
 			moved = cab.notch_brake(1)
 		"reverser":
 			moved = cab.shift_reverser(-1 if key.shift_pressed else 1)
+		"handle-":
+			moved = cab.shift_handle(-1)
+		"handle+":
+			moved = cab.shift_handle(1)
+		"independent-":
+			moved = cab.notch_independent(-1)
+		"independent+":
+			moved = cab.notch_independent(1)
 		"release":
 			moved = cab.release_all()
 	if moved:
@@ -2702,6 +2964,38 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _refresh_ui() -> void:
 	ui_label.text = _hud_text()
+
+
+## _refresh_panel — ПУЛЬТ КАЖДЫЙ КАДР, а не по снапшоту.
+##
+## Это починка настоящего дефекта, а не оптимизация. Пульт стоял в _refresh_ui,
+## а её зовут по приходу снапшота — десять раз в секунду. Значит стрелка меняла
+## положение десять раз в секунду при шестидесяти кадрах: интерполяция показаний
+## считалась исправно, и её никто не показывал. Владелец увидел ровно это:
+## «стрелки на приборах идут рывками» — дважды, потому что первый раз я починил
+## не то.
+##
+## Мгновение показа берётся ЗДЕСЬ ЖЕ, у тех же часов, по которым ставится машина
+## (_show_stock вызывается строкой выше в _process): разойдясь, стрелка и машина
+## показывали бы разные моменты одного мира.
+func _refresh_panel() -> void:
+	if ui_panel == null:
+		return
+	var on := cab.aboard()
+	ui_panel.visible = on
+	# ПОДСКАЗКА ВЫШЕ ПУЛЬТА, и её место пересчитывается вместе с ним: пульт
+	# растёт от высоты окна, и постоянный отступ увёл бы её под приборы на
+	# первом же другом разрешении.
+	if ui_prompt != null:
+		ui_prompt.offset_top = -((ui_panel.height() if on else 0.0) + 96.0)
+	if not on:
+		return
+	# ЗДЕСЬ БОЛЬШЕ НЕ СТАВИТСЯ СКОРОСТЬ. Скорость кладёт мир, но кладёт её ТАМ,
+	# ГДЕ ОНА ПРИХОДИТ (_on_snapshot), а не кадром позже: приборы складываются в
+	# ряд показа в момент снапшота, и величина, поставленная после, попадала в
+	# запись следующего снимка. Разбор — там же.
+	ui_panel.show_us = _display.show_us()
+	ui_panel.queue_redraw()
 
 
 func _hud_text() -> String:
@@ -2732,7 +3026,7 @@ func _hud_text() -> String:
 		# машинист (четыре класса фактов, ClearAhead-0na).
 		l.append("  скорость %.1f км/ч (с сервера; клиент между снимками не досчитывает)" % [
 			float(stats.get("stock_speed_ms", 0.0)) * 3.6])
-		l.append("  [i]1/2 тяга, 3/4 тормоз, R реверсор (Shift+R назад), 0 всё в ноль[/i]")
+		l.append("  [i]W/S тяга, A/D кран машиниста, Z/X вспомогательный, R реверсор, 0 экстренная остановка[/i]")
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [
 			stats.get("epoch"), stats.get("revision"), stats.get("network_model_hash"),
@@ -2862,8 +3156,17 @@ func _hud_text() -> String:
 		else:
 			l.append("  [color=#ffc060]вид: габаритной коробкой у %d из %d — ассет не доехал[/color]" % [
 				total - shown, total])
-		l.append("  [i]скорости в состоянии по-прежнему нет: машина стоит. Время — есть,")
-		l.append("  оно идёт тиком сервера и приходит каналом (строка ниже).[/i]")
+		# ЗДЕСЬ СТОЯЛО «скорости в состоянии по-прежнему нет: машина стоит».
+		# Правдой это было до 8ee08ab, где физика встала в фазу хода; с того дня
+		# подпись пережила свой код и врала ровно про то, ради чего её читают.
+		# Снята 2026-08-15 вместе с ClearAhead-nsc и правкой пути в кабину.
+		if float(stats.get("stock_speed_ms", 0.0)) > 0.0:
+			l.append("  [i]машина ИДЁТ: %.2f м/с. Скорость — производное физики сервера,[/i]" % [
+				float(stats.get("stock_speed_ms", 0.0))])
+			l.append("  [i]а не положение рукоятки; клиент между снимками не досчитывает.[/i]")
+		else:
+			l.append("  [i]машина стоит. Рукоятки — в кабине (E у машины, ROLE=driver),[/i]")
+			l.append("  [i]время идёт тиком сервера и приходит каналом (строка ниже).[/i]")
 	else:
 		l.append("[i]подвижного состава в партии нет — это законный мир, а не отказ[/i]")
 	# СТРОКА «решётка стрелки не отдаётся вовсе» СНЯТА 2026-08-15 вместе с
@@ -3419,6 +3722,9 @@ func _process(_delta: float) -> void:
 	# потому что это положение вещей мира: от него зависит и камера, наведённая
 	# на машину, и то, что видит игрок в кадре.
 	_show_stock()
+	# Пульт — сразу за машинами и по тем же часам: приборы показывают то же
+	# мгновение, что и положение (разбор — у _refresh_panel).
+	_refresh_panel()
 	# Опрос головы проекций идёт САМЫМ ПЕРВЫМ: ему не нужны ни камера, ни трава,
 	# и он не должен ждать их готовности — мир вправе сменить версию в любой
 	# момент, в том числе до первого кадра.

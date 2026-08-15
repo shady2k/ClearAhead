@@ -21,6 +21,21 @@ const ContractDoc := preload("res://tools/contract_doc.gd")
 ## наших ступеней торможения). Связаны они с паспортом не файлом, а этой
 ## строкой: проверяется арифметика рукояток, а не то, что сервер сегодня прислал.
 const LIMITS := {"traction_notches": 33, "brake_notches": 5}
+## ПАСПОРТ ТОЙ ЖЕ ФОРМЫ, ЧТО ПРИХОДИТ С СЕРВЕРА, а не один блок органов: кабина
+## берёт из него ещё и шкалы приборов, и урезанная фикстура проверяла бы машину,
+## которой в наборе не бывает. Числа — те же, что у ВЛ80 в content.json.
+const PASSPORT := {
+	"controls": LIMITS,
+	"max_speed": 110.0,
+	"brake": {
+		"air": {
+			"charge": 5.4,
+			"cylinder_full": 3.8,
+			"main_max": 9.0,
+			"independent_max": 4.0,
+		},
+	},
+}
 const STOPPED := {"traction": 0, "brake": 0, "reverser": "neutral"}
 
 
@@ -33,7 +48,7 @@ func run() -> void:
 
 func _bound() -> Cab:
 	var cab := Cab.new()
-	cab.bind("U1", LIMITS, STOPPED)
+	cab.bind("U1", PASSPORT, STOPPED)
 	return cab
 
 

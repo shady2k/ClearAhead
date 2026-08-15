@@ -3,6 +3,8 @@ package match
 import (
 	"fmt"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
+
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
@@ -45,6 +47,11 @@ type Motion struct {
 	S units.Distance `json:"s"`
 	// Speed — скорость вдоль роста u элемента, со знаком.
 	Speed units.Speed `json:"speed"`
+	// Slipping — БУКСУЕТ ЛИ машина: двигатели просят больше, чем удержит
+	// сцепление. Состояние, а не команда; на провод уходит признаком, потому что
+	// иначе буксование необъяснимо — машина просто едет хуже, чем должна, и
+	// машинист ищет неисправность там, где её нет.
+	Slipping bool `json:"slipping,omitempty"`
 	// Facing — как машина повёрнута относительно роста u ЭТОГО элемента.
 	//
 	// Меняется при переходе на элемент, встречный по направлению: машина не
@@ -118,6 +125,19 @@ type UnitState struct {
 	Speed units.Speed `json:"speed"`
 	// Controls — положение органов. Отсутствует у машины без кабины.
 	Controls *Controls `json:"controls,omitempty"`
+	// Slipping — буксует ли машина. Признак СОСТОЯНИЯ, а не органа: выставить его
+	// нельзя, он следствие того, что двигатели просят больше сцепления.
+	Slipping bool `json:"slipping,omitempty"`
+	// Notch — ФАКТИЧЕСКАЯ позиция главного контроллера, тысячными позиции.
+	// Отличается от Controls.Traction, которое есть ЗАДАНИЕ машиниста: позиция
+	// идёт к заданию своим темпом, и показывать одно вместо другого значило бы
+	// врать про то, чем машина тянет прямо сейчас.
+	Notch int `json:"notch"`
+	// Air — ДАВЛЕНИЯ пневматики. Отсутствует у машины без тормозной магистрали:
+	// у неё их не существует, и нули под их видом были бы приборами, которые
+	// врут. Отдельно от Controls, потому что это СЛЕДСТВИЕ, а не орган:
+	// выставить давление командой нельзя.
+	Air *brake.State `json:"air,omitempty"`
 }
 
 // States — все единицы партии в координатах провода.
@@ -140,10 +160,18 @@ func (m Match) States(net *track.CompiledNetwork) ([]UnitState, error) {
 			}
 			st.At = at
 			st.Speed = mo.Speed
+			st.Slipping = mo.Slipping
 		}
 		if c, ok := m.ControlsOf(u.ID); ok {
 			cc := c
 			st.Controls = &cc
+		}
+		if n, ok := m.NotchOf(u.ID); ok {
+			st.Notch = n
+		}
+		if a, ok := m.AirOf(u.ID); ok {
+			aa := a
+			st.Air = &aa
 		}
 		out = append(out, st)
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/shady2k/ClearAhead/server/internal/brake"
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 )
 
@@ -30,10 +31,12 @@ import (
 // «контроллер на нуле», второе — «клиент не назвал тягу». Первое законно,
 // второе отказ формы, и различить их можно только указателем.
 type ControlsRequest struct {
-	unit     string
-	traction int
-	brake    int
-	reverser string
+	unit        string
+	traction    int
+	brake       int
+	reverser    string
+	handle      string
+	independent brake.Pressure
 }
 
 func (*ControlsRequest) sealed() {}
@@ -49,6 +52,16 @@ type controlsParams struct {
 	Traction *int    `json:"traction"`
 	Brake    *int    `json:"brake"`
 	Reverser *string `json:"reverser"`
+	// Handle и Independent — ПНЕВМАТИКА, и они необязательны здесь, в отличие от
+	// трёх органов выше.
+	//
+	// Не потому, что их можно не слать, а потому, что ЕСТЬ ЛИ ОНИ У МАШИНЫ —
+	// вопрос к её паспорту, а паспорта у пакета протокола нет. Машина с
+	// магистралью без положения крана получит отказ, машина без магистрали — с
+	// положением; оба отказа выносит match.SetControls, у которого есть набор.
+	// Требовать их здесь значило бы объявить, что магистраль есть у всего.
+	Handle      *string         `json:"handle,omitempty"`
+	Independent *brake.Pressure `json:"independent,omitempty"`
 	// CommandID объявлен, чтобы строгий разбор не отверг ключ идемпотентности:
 	// его читает транспорт (rpc.Frame), а не обработчик.
 	CommandID string `json:"command_id,omitempty"`
@@ -94,6 +107,15 @@ func (r *ControlsRequest) Parse(in Input) error {
 		return fmt.Errorf("protocol: положение реверсора пусто")
 	}
 	r.unit, r.traction, r.brake, r.reverser = p.Unit, *p.Traction, *p.Brake, *p.Reverser
+	if p.Handle != nil {
+		r.handle = *p.Handle
+	}
+	if p.Independent != nil {
+		if *p.Independent < 0 {
+			return fmt.Errorf("protocol: давление вспомогательного тормоза %s отрицательно", *p.Independent)
+		}
+		r.independent = *p.Independent
+	}
 	return nil
 }
 
@@ -113,3 +135,10 @@ func (r ControlsRequest) Brake() int { return r.brake }
 // и отказ по неизвестному положению придёт оттуда — вместе с перечнем
 // известных.
 func (r ControlsRequest) Reverser() string { return r.reverser }
+
+// Handle — положение крана машиниста. Пусто значит «не прислано»: у машины с
+// магистралью это отказ (match.SetControls), у машины без неё — законно.
+func (r ControlsRequest) Handle() string { return r.handle }
+
+// Independent — задание крана вспомогательного тормоза, микро-кгс/см².
+func (r ControlsRequest) Independent() brake.Pressure { return r.independent }

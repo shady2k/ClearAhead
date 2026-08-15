@@ -57,11 +57,45 @@ var brake_notches := 0
 var traction := 0
 var brake := 0
 var reverser := "neutral"
+## Положение ручки крана машиниста. Пусто значит, что у машины НЕТ ТОРМОЗНОЙ
+## МАГИСТРАЛИ, — тормозная система свойство машины, и «крана нет» отличается от
+## «кран в первом положении». Пульт такой рукоятки не рисует, а команда её не
+## несёт (LiveChannel.controls_params).
+var handle := ""
+## Задание крана вспомогательного тормоза, ТЫСЯЧНЫЕ кгс/см² (шкала провода).
+var independent := 0
+## Предел вспомогательного крана из паспорта. Ноль — крана нет.
+var independent_max := 0
 
 ## Вставшее — то, что подтвердил сервер.
 var set_traction := 0
 var set_brake := 0
 var set_reverser := "neutral"
+var set_handle := ""
+var set_independent := 0
+## Давления, пришедшие снапшотом, ТЫСЯЧНЫЕ кгс/см². Это СЛЕДСТВИЕ, а не орган:
+## выставить их нельзя, они приходят с сервера и показываются приборами.
+## БУКСОВАНИЕ и ФАКТИЧЕСКАЯ позиция контроллера — с сервера. Оба следствия, а не
+## органы: рукоятка несёт только своё положение, а позицию, силу и срыв выводит
+## сервер (слово владельца 2026-08-15).
+var slipping := false
+var notch_milli := 0
+var main_pressure := 0
+var pipe_pressure := 0
+var cylinder_pressure := 0
+var has_air := false
+## Шкалы приборов, ТЫСЯЧНЫЕ кгс/см², и конструкционная скорость — всё из
+## паспорта. Ноль значит «у машины этого нет».
+var charge_milli := 0
+var cylinder_full_milli := 0
+var main_max_milli := 0
+var max_speed_kmh := 0.0
+
+
+## _milli — кгс/см² паспорта в тысячные провода. Одно место перевода: два
+## разошлись бы округлением.
+static func _milli(v: Variant) -> int:
+	return int(round(float(v) * 1000.0))
 
 ## pending — сколько команд ждут ответа. Больше нуля — рукоятка показана
 ## оптимистично, и это видно в HUD.
@@ -73,16 +107,29 @@ var refusal := ""
 
 
 ## bind — сесть в кабину машины: пределы из паспорта, положение с сервера.
-func bind(unit: String, limits: Dictionary, controls: Dictionary) -> void:
+func bind(unit: String, passport: Dictionary, controls: Dictionary) -> void:
 	unit_id = unit
+	var limits: Dictionary = (passport.get("controls", {})) as Dictionary
 	traction_notches = int(limits.get("traction_notches", 0))
 	brake_notches = int(limits.get("brake_notches", 0))
 	pending = 0
 	refusal = ""
+	max_speed_kmh = float(passport.get("max_speed", 0.0))
+	# ШКАЛЫ ПРИБОРОВ — ИЗ ПАСПОРТА, а не из головы. Манометр, у которого предел
+	# выдуман клиентом, показывает верное давление на неверной шкале, и стрелка
+	# врёт ровно тем, чем врал бы сам прибор. Пустой блок air значит, что у машины
+	# НЕТ МАГИСТРАЛИ: приборов и крана пульт для неё не рисует.
+	var air_spec: Dictionary = ((passport.get("brake", {}) as Dictionary).get("air", {})) as Dictionary
+	independent_max = _milli(air_spec.get("independent_max", 0.0))
+	charge_milli = _milli(air_spec.get("charge", 0.0))
+	cylinder_full_milli = _milli(air_spec.get("cylinder_full", 0.0))
+	main_max_milli = _milli(air_spec.get("main_max", 0.0))
 	confirm(controls)
 	traction = set_traction
 	brake = set_brake
 	reverser = set_reverser
+	handle = set_handle
+	independent = set_independent
 
 
 ## leave — выйти из кабины.
@@ -108,10 +155,200 @@ func confirm(controls: Dictionary) -> void:
 	set_traction = int(controls.get("traction", 0))
 	set_brake = int(controls.get("brake", 0))
 	set_reverser = String(controls.get("reverser", "neutral"))
+	# КРАН ПРИХОДИТ ТОЛЬКО ОТ МАШИНЫ, У КОТОРОЙ ОН ЕСТЬ. Умолчания здесь нет
+	# нарочно: пустая строка означает «крана нет», и подставить «поездное» значило
+	# бы нарисовать на пульте рукоятку, которой у машины не существует.
+	set_handle = String(controls.get("handle", ""))
+	set_independent = int(controls.get("independent", "0"))
 	if pending <= 0:
 		traction = set_traction
 		brake = set_brake
 		reverser = set_reverser
+		handle = set_handle
+		independent = set_independent
+
+
+## air — давления снапшота. Приходят отдельно от органов, потому что это
+## следствие, а не команда: приборы показывают их, но выставить их нельзя.
+##
+## СНИМКИ КОПЯТСЯ ДЛЯ ПОКАЗА, а не только замещают друг друга: давления приходят
+## десять раз в секунду, а рисуется шестьдесят, и стрелка, показывающая последнее
+## пришедшее, стоит пять кадров и прыгает на шестом. Владелец это и увидел: «на
+## приборах стрелки рывками идут».
+## machine — состояние машины, которое НЕ является органом управления:
+## фактическая позиция контроллера и признак буксования.
+func machine(unit: Dictionary) -> void:
+	notch_milli = int(unit.get("notch", 0))
+	slipping = bool(unit.get("slipping", false))
+
+
+func air(pressures: Dictionary, at_us: int = 0) -> void:
+	has_air = not pressures.is_empty()
+	if not has_air:
+		return
+	main_pressure = int(pressures.get("main", "0"))
+	pipe_pressure = int(pressures.get("pipe", "0"))
+	cylinder_pressure = int(pressures.get("cylinder", "0"))
+	if at_us <= 0:
+		return
+	if not _dial.is_empty() and int((_dial[_dial.size() - 1] as Dictionary)["t"]) == at_us:
+		return
+	# ПОЗИЦИЯ КОНТРОЛЛЕРА — В ТОТ ЖЕ РЯД. Она ползёт на сервере непрерывно (набор
+	# по позиции в секунду), а приходит десятью снимками, и без интерполяции
+	# ползунок тяги шагает десять раз в секунду при шестидесяти кадрах. Владелец
+	# назвал это «стрелки на приборах рывками» — и был прав ТРЕТИЙ раз: давления я
+	# сгладил, а позицию забыл, хотя она единственная, что непрерывно меняется на
+	# разгоне.
+	_dial.append({"t": at_us, "main": main_pressure, "pipe": pipe_pressure,
+		"cyl": cylinder_pressure, "kmh": speed_kmh, "notch": notch_milli})
+	while _dial.size() > 4:
+		_dial.remove_at(0)
+
+
+## _dial — снимки приборов: {t, main, pipe, cyl, kmh}. Четыре, как у кинематики
+## положения: показу нужны два, ещё два — запас на задержавшийся снимок.
+var _dial: Array = []
+
+
+## shown — что показывают приборы В ЭТО МГНОВЕНИЕ модельного времени.
+##
+## ТО ЖЕ ПРАВИЛО, ЧТО У ПОЛОЖЕНИЯ МАШИНЫ (DisplayMotion): показываем состояние на
+## «сейчас минус буфер», интерполируя между двумя снимками. Второе правило рядом
+## с первым разошлось бы с ним, и стрелка отставала бы от машины — или обгоняла.
+##
+## Это ПОКАЗ, а не догадка о машине: между снимками мы не придумываем давление, а
+## показываем то, что уже прислано, в тот момент, к которому оно относится. Тем и
+## отличается от экстраполяции, которой у клиента нет (t5h §8).
+func shown(now_us: int) -> Dictionary:
+	var last := {"main": main_pressure, "pipe": pipe_pressure,
+		"cyl": cylinder_pressure, "kmh": speed_kmh, "notch": notch_milli}
+	if _dial.size() < 2 or now_us <= 0:
+		return last
+	var a: Dictionary = _dial[_dial.size() - 2]
+	var b: Dictionary = _dial[_dial.size() - 1]
+	for i in range(_dial.size() - 1):
+		var x: Dictionary = _dial[i]
+		var y: Dictionary = _dial[i + 1]
+		if now_us >= int(x["t"]) and now_us <= int(y["t"]):
+			a = x
+			b = y
+			break
+	if now_us >= int(b["t"]):
+		return {"main": b["main"], "pipe": b["pipe"], "cyl": b["cyl"], "kmh": b["kmh"],
+			"notch": b["notch"]}
+	if now_us <= int(a["t"]):
+		return {"main": a["main"], "pipe": a["pipe"], "cyl": a["cyl"], "kmh": a["kmh"],
+			"notch": a["notch"]}
+	var span := float(int(b["t"]) - int(a["t"]))
+	if span <= 0.0:
+		return last
+	var k := float(now_us - int(a["t"])) / span
+	return {
+		"main": lerpf(float(a["main"]), float(b["main"]), k),
+		"pipe": lerpf(float(a["pipe"]), float(b["pipe"]), k),
+		"cyl": lerpf(float(a["cyl"]), float(b["cyl"]), k),
+		"kmh": lerpf(float(a["kmh"]), float(b["kmh"]), k),
+		"notch": lerpf(float(a["notch"]), float(b["notch"]), k),
+	}
+
+
+## Положения крана в порядке ручки: от отпуска к экстренному. Порядок — договор
+## сервера (brake.Handles), и второе написание здесь разошлось бы с ним молча.
+const HANDLES := ["release", "run", "lap", "hold", "service", "emergency"]
+const HANDLE_NAMES := {
+	"release": "I отпуск и зарядка",
+	"run": "II поездное",
+	"lap": "III перекрыша без питания",
+	"hold": "IV перекрыша с питанием",
+	"service": "V служебное торможение",
+	"emergency": "VI экстренное",
+}
+
+
+## shift_handle — ВЕСТИ РУЧКУ СОСЕДНИМ ПОЛОЖЕНИЕМ, а не прыгать по ней.
+##
+## Соседним, потому что у настоящей ручки нет способа попасть из отпуска в
+## экстренное, минуя остальные, — она едет по сектору. Клавиша, ставящая
+## положение сразу, дала бы машинисту то, чего у него нет.
+func shift_handle(delta: int) -> bool:
+	if handle == "":
+		return false
+	var i := HANDLES.find(handle)
+	if i < 0:
+		return false
+	var want: int = clampi(i + delta, 0, HANDLES.size() - 1)
+	if want == i:
+		return false
+	handle = String(HANDLES[want])
+	return true
+
+
+## set_handle_at — поставить ручку в названное положение. Для МЫШИ: по сектору
+## крана тянут прямо, и вести её соседними положениями там незачем.
+func set_handle_at(pos: String) -> bool:
+	if handle == "" or not HANDLES.has(pos) or pos == handle:
+		return false
+	handle = pos
+	return true
+
+
+## ПРЯМАЯ ПОСТАНОВКА ОРГАНОВ — ДЛЯ МЫШИ. Клавиша ведёт орган соседним
+## положением, мышь ставит его туда, куда указали: у ползунка и у сектора крана
+## ход виден целиком, и заставлять игрока щёлкать двенадцать раз до нужной
+## ступени значило бы делать мышь худшей клавиатурой.
+##
+## Возвращают true, только когда положение ИЗМЕНИЛОСЬ: иначе ведение мыши слало
+## бы команду на каждый пиксель, а сервер отвечал бы на каждую.
+func set_traction_at(want: int) -> bool:
+	var v: int = clampi(want, 0, traction_notches)
+	# ТЯГА ПРИ НУЛЕВОМ РЕВЕРСОРЕ — отказ сервера, и предупредить о нём здесь
+	# честнее, чем послать заведомо отказную команду: рукоятка не дёрнется, а
+	# причина уже написана на пульте у реверсора.
+	if v > 0 and reverser == "neutral":
+		return false
+	if v == traction:
+		return false
+	traction = v
+	return true
+
+
+func set_reverser_at(pos: String) -> bool:
+	if pos == reverser or not REVERSERS.has(pos):
+		return false
+	# ПОД ТЯГОЙ РЕВЕРСОР НЕ ПЕРЕВОДИТСЯ — то же правило, что у клавиши.
+	if traction > 0:
+		return false
+	reverser = pos
+	return true
+
+
+func set_independent_at(want: int) -> bool:
+	if independent_max <= 0:
+		return false
+	var v: int = clampi(want, 0, independent_max)
+	if v == independent:
+		return false
+	independent = v
+	return true
+
+
+## speed_kmh — скорость машины для прибора. Приходит СНАРУЖИ (мир кладёт её из
+## снапшота): у кабины нет доступа к общему мешку чисел мира, она знает органы.
+var speed_kmh := 0.0
+
+
+## notch_independent — кран вспомогательного тормоза ступенью в десятую долю
+## предела. Своих ступеней у него нет: кран непрерывный, и десятая — шаг РУКИ, а
+## не машины. Названо, чтобы не сошло за число паспорта.
+func notch_independent(delta: int) -> bool:
+	if independent_max <= 0:
+		return false
+	var stepv: int = maxi(1, independent_max / 10)
+	var want: int = clampi(independent + delta * stepv, 0, independent_max)
+	if want == independent:
+		return false
+	independent = want
+	return true
 
 
 ## answered — сервер ответил на нашу команду.
@@ -182,11 +419,19 @@ func shift_reverser(delta: int) -> bool:
 func release_all() -> bool:
 	if not aboard():
 		return false
-	if traction == 0 and brake == brake_notches and reverser == "neutral":
+	# «ВСЁ В НОЛЬ» У МАШИНЫ С МАГИСТРАЛЬЮ — ЭТО ЭКСТРЕННОЕ, а не «полный тормоз
+	# ступенью». Ступеней у неё нет, и оставить их здесь значило бы, что клавиша
+	# аварийной остановки не останавливает: она ставила бы число, которое на этой
+	# машине ни на что не влияет.
+	var want_handle := "emergency" if handle != "" else handle
+	var want_indep := independent_max if independent_max > 0 else 0
+	if traction == 0 and brake == brake_notches and reverser == "neutral" 			and handle == want_handle and independent == want_indep:
 		return false
 	traction = 0
 	brake = brake_notches
 	reverser = "neutral"
+	handle = want_handle
+	independent = want_indep
 	return true
 
 
@@ -211,3 +456,10 @@ func text() -> String:
 	if refusal != "":
 		line += "\n  [color=#ff8080]%s[/color]" % refusal
 	return line
+
+
+## ЗДЕСЬ БЫЛА panel() — пульт СТРОКОЙ, живший несколько часов между жалобой
+## владельца «сел в локомотив, где HUD?» и настоящим пультом (cab_panel.gd).
+## Снесена вместе со своим _bar и узлом, который её показывал: рисованные приборы
+## отвечают на тот же вопрос лучше, а два ответа на один вопрос — это два места,
+## где они разойдутся.
