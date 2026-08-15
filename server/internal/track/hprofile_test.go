@@ -190,3 +190,32 @@ func TestHProfileInvalidRadiusError(t *testing.T) {
 		t.Fatalf("невалидный радиус должен дать ошибку")
 	}
 }
+
+// TestHProfileArcLengthIsUnsigned — длина дуги не зависит от СТОРОНЫ поворота.
+//
+// Знак угла говорит, куда кривая заворачивает, а не в какую сторону отсчитывать
+// длину. Без модуля правая кривая давала звено отрицательной длины, и первый же
+// запрос радиуса на таком элементе падал отказом; поймано 2026-08-15 проездом
+// машины по боковому пути переведённой стрелки, куда до появления команды
+// перевода она попасть не могла.
+func TestHProfileArcLengthIsUnsigned(t *testing.T) {
+	left, err := HProfileFrom([]mapfmt.HPrim{{Kind: "arc", Radius: 300, Angle: +0.1107}})
+	if err != nil {
+		t.Fatalf("левая кривая: %v", err)
+	}
+	right, err := HProfileFrom([]mapfmt.HPrim{{Kind: "arc", Radius: 300, Angle: -0.1107}})
+	if err != nil {
+		t.Fatalf("правая кривая: %v", err)
+	}
+	if right.LengthU() != left.LengthU() {
+		t.Fatalf("правая кривая длиной %s против левой %s — знак угла попал в длину",
+			right.LengthU(), left.LengthU())
+	}
+	if right.LengthU() <= 0 {
+		t.Fatalf("длина правой кривой %s", right.LengthU())
+	}
+	// Радиус на середине обязан спрашиваться без отказа: ровно это и падало.
+	if _, err := right.At(right.LengthU() / 2); err != nil {
+		t.Fatalf("радиус на середине правой кривой: %v", err)
+	}
+}

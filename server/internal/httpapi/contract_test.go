@@ -35,15 +35,28 @@ import (
 // ответ, и различитель заводится ЗАРАНЕЕ — поле в персистентных данных дешевле
 // всего добавить вслепую и дороже всего мигрировать (разбор в mapfmt.KindRail).
 type wireNetwork struct {
-	Region             string            `json:"region"`
-	Revision           int               `json:"revision"`
-	Elements           []wireElement     `json:"elements"`
-	Structures         []wireStructure   `json:"structures"`
-	TrackTypes         []wireTrackType   `json:"track_types"`
-	ConstructionRuns   []wireRun         `json:"construction_runs"`
-	TurnoutGrids       []wireTurnoutGrid `json:"turnout_grids"`
-	Features           []wireFeature     `json:"features"`
-	PlacementAlgorithm string            `json:"placement_algorithm"`
+	Region             string             `json:"region"`
+	Revision           int                `json:"revision"`
+	Elements           []wireElement      `json:"elements"`
+	Structures         []wireStructure    `json:"structures"`
+	TrackTypes         []wireTrackType    `json:"track_types"`
+	ConstructionRuns   []wireRun          `json:"construction_runs"`
+	TurnoutGrids       []wireTurnoutGrid  `json:"turnout_grids"`
+	TurnoutDrives      []wireTurnoutDrive `json:"turnout_drives"`
+	Features           []wireFeature      `json:"features"`
+	PlacementAlgorithm string             `json:"placement_algorithm"`
+}
+
+// wireTurnoutDrive — переводной механизм устройства: где станина с указателем и
+// табличкой и какого она вида. Адресуется как брус — по прямому проходу, — и
+// отметки z не несёт: её берут у элемента адреса.
+type wireTurnoutDrive struct {
+	Owner   string  `json:"owner"`
+	Name    string  `json:"name"`
+	Drive   string  `json:"drive"`
+	Element string  `json:"element"`
+	U       float64 `json:"u"`
+	Offset  float64 `json:"offset"`
 }
 
 // wireTurnoutGrid — решётка устройства: уровень 3 спеки §4, приехавший вместе с

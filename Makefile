@@ -208,6 +208,7 @@ help:
 	@echo '  make client-check-live  договор с сервером (сервер должен работать)'
 	@echo '  make walk-probe         ходит ли человек: стоит, идёт, вертит головой, всходит на путь'
 	@echo '  make stock-probe        стоит ли машина на рельсах: пять чисел против присланных'
+	@echo '  make turnout-probe      доходит ли клавиша до остряка: подошёл, нажал, указатель повернулся'
 	@echo '  make client-fixtures    переснять снимок сети с живого сервера'
 	@echo '  make client-shot        снимок экрана в $(SHOT), окно за экраном'
 	@echo
@@ -482,6 +483,24 @@ cab-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/cab_probe.gd -- \
 		--server=$(SERVER_URL) --region=$(REGION) --role=driver --board $(PROBE_REACH_ARG)
+
+
+## turnout-probe — ДОХОДИТ ЛИ КЛАВИША ДО ОСТРЯКА. Сервер должен быть уже поднят.
+##
+## Зачем зонд, а не проверка: чистая проверка меряет разбор привода и поворот
+## указателя, живая — команду канала, и обе не знают про клавиши. Не проверено
+## при этом самое главное — цепочка «подошёл, нажал, стрелка перевелась,
+## указатель повернулся»: каждое звено зелёное, а цепочки нет.
+##
+## Меряется ПРИСЛАННОЕ СЕРВЕРОМ положение, а не показанное клиентом: показать
+## можно что угодно.
+##
+## --headless НЕВОЗМОЖЕН (мир строится сценой, сцене нужен вьюпорт),
+## --role=driver обязателен: подходить к приводу некому.
+turnout-probe: client-import
+	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
+		--script res://tools/turnout_probe.gd -- \
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG)
 
 
 ## net-probe — НА КАКОМ ЭТАПЕ ТОРМОЗА. Сервер должен быть уже поднят.

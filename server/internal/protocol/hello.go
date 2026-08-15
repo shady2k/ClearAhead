@@ -102,6 +102,24 @@ const (
 	// ReasonTractionWithoutReverser — тяга при реверсоре в нуле: цепь тяги не
 	// собирается, и это устройство машины, а не наше правило игры.
 	ReasonTractionWithoutReverser = "traction_without_reverser"
+
+	// Причины отказа команды перевода стрелки (ClearAhead-duf, первая
+	// диспетчерская команда проекта).
+
+	// ReasonUnknownTurnout — такого устройства в регионе нет.
+	ReasonUnknownTurnout = "unknown_turnout"
+	// ReasonUnknownTurnoutPosition — неизвестное положение остряка.
+	//
+	// Отдельно от ReasonUnknownReverser и ReasonUnknownHandle по той же причине,
+	// по которой те разведены между собой: перечни у всех троих разные, и общий
+	// код заставил бы клиента гадать, какой именно он не угадал.
+	ReasonUnknownTurnoutPosition = "unknown_turnout_position"
+	// ReasonTurnoutOccupied — под составом стрелка не переводится.
+	//
+	// ПЕРВАЯ ПРИЧИНА С ДЕРЖАТЕЛЕМ: в held_by уезжает единица, накрывающая
+	// устройство. До неё поле держателя существовало в конверте отказа, но ни
+	// один отказ его не заполнял — все прежние конфликтом за ресурс не были.
+	ReasonTurnoutOccupied = "turnout_occupied"
 )
 
 // HelloRequest — первое сообщение клиента в канале.

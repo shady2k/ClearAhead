@@ -78,6 +78,7 @@ func run() -> void:
 
 	await _check_reconnect(ch, snaps, breaks)
 	await _check_controls(ch, doc, snaps)
+	await _check_turnout(ch, doc, snaps)
 	ch.stop()
 	ch.queue_free()
 	await _check_refusal(doc)
@@ -196,6 +197,72 @@ func _check_controls(ch: LiveChannel, doc, snaps: Array) -> void:
 	# следующий прогон начинался бы не с того состояния, о котором он думает.
 	ch.set_controls(unit_id, 0, 0, "neutral", handle)
 	await _until(func() -> bool: return accepted.size() > 1)
+
+
+## СТРЕЛКА — вторая доменная команда, тем же сокетом.
+##
+## Проверяется та же дорога, что у рукояток, плюс своё: положение стрелки едет в
+## КОНВЕРТЕ (а не у единицы), команда называет положение явно, и снапшот с новым
+## положением приходит САМ — то есть перевод попал в канонический хеш состояния.
+## Последнее не мелочь: трижды до этого забытое в хеше состояние доезжало до
+## клиента только секундным биением.
+func _check_turnout(ch: LiveChannel, doc, snaps: Array) -> void:
+	var last: LiveChannel.Snapshot = snaps[snaps.size() - 1]
+	_ok("в конверте приехали стрелки", not last.turnouts.is_empty(), str(last.turnouts.size()))
+	if last.turnouts.is_empty():
+		return
+	var sw := last.turnouts[0] as Dictionary
+	var bad: String = doc.validate("turnout", sw)
+	_ok("стрелка в конверте сходится с договором", bad == "", bad)
+	var sw_id := String(sw.get("id", ""))
+	var was := String(sw.get("position", ""))
+	_ok("положение остряка названо известным словом",
+		was == LiveChannel.TURNOUT_STRAIGHT or was == LiveChannel.TURNOUT_DIVERGING, was)
+	# МЕХАНИЗМ ЕДЕТ ВМЕСТЕ С ПОЛОЖЕНИЕМ: пульт узнаёт вид стрелки из снапшота, а
+	# не вторым запросом за геометрией.
+	_ok("механизм стрелки назван", String(sw.get("drive", "")) != "", str(sw))
+
+	var set_ok: Array[Dictionary] = []
+	var refused: Array[String] = []
+	ch.turnout_set.connect(func(t: String, p: String) -> void: set_ok.append({"t": t, "p": p}))
+	ch.turnout_refused.connect(func(reason: String, _t: String) -> void: refused.append(reason))
+
+	var want := LiveChannel.TURNOUT_DIVERGING if was == LiveChannel.TURNOUT_STRAIGHT \
+		else LiveChannel.TURNOUT_STRAIGHT
+	var before := snaps.size()
+	ch.set_turnout(sw_id, want)
+	var answered := await _until(func() -> bool: return not set_ok.is_empty() or not refused.is_empty())
+	_ok("команда перевода ПРИНЯТА, а не отказана", not set_ok.is_empty() and answered,
+		"отказы: %s" % str(refused))
+	if set_ok.is_empty():
+		return
+	_ok("ответ несёт положение, которое встало",
+		String((set_ok[0] as Dictionary)["p"]) == want, str(set_ok[0]))
+
+	var came := await _until(func() -> bool: return snaps.size() > before)
+	_ok("снапшот принёс новое положение стрелки сам", came)
+	if came:
+		var fresh: LiveChannel.Snapshot = snaps[snaps.size() - 1]
+		var seen := ""
+		for raw in fresh.turnouts:
+			var t := raw as Dictionary
+			if String(t.get("id", "")) == sw_id:
+				seen = String(t.get("position", ""))
+		_ok("в снапшоте та же стрелка переведена", seen == want, "%s -> %s" % [was, seen])
+
+	# НЕИЗВЕСТНОЕ ПОЛОЖЕНИЕ — отказ с объявленной причиной, а не тихий ноль.
+	refused.clear()
+	ch.set_turnout(sw_id, "боком")
+	var said := await _until(func() -> bool: return not refused.is_empty())
+	_ok("неизвестное положение отказано", said, str(set_ok.size()))
+	if said:
+		_ok("причина отказа объявлена договором", doc.refusal_reasons.has(refused[0]), refused[0])
+		_ok("причина именно про положение", refused[0] == "unknown_turnout_position", refused[0])
+
+	# И ВОЗВРАЩАЕМ СТРЕЛКУ КАК БЫЛА: проверка не оставляет мир переведённым,
+	# иначе следующий прогон начинался бы не с того состояния, о котором думает.
+	ch.set_turnout(sw_id, was)
+	await _until(func() -> bool: return set_ok.size() > 1)
 
 
 ## _controls_now — органы машины по последнему снапшоту. Нужен, чтобы команда

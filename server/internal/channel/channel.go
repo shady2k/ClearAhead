@@ -219,11 +219,21 @@ func (h *Handler) newMux(st *connState) *rpc.Mux {
 		func(ctx context.Context, req protocol.ControlsRequest) (any, error) {
 			return h.setControls(ctx, req)
 		})
+	// ВТОРАЯ ДОМЕННАЯ КОМАНДА — перевод стрелки (ClearAhead-duf). Первая
+	// команда, адресованная ПУТИ, а не машине: тем же каналом, тем же ключом
+	// идемпотентности, тем же порядком фаз тика.
+	rpc.Register[protocol.TurnoutRequest](m, MethodSetTurnout,
+		func(ctx context.Context, req protocol.TurnoutRequest) (any, error) {
+			return h.setTurnout(ctx, req)
+		})
 	return m
 }
 
 // MethodSetControls — имя команды на проводе.
 const MethodSetControls = "controls.set"
+
+// MethodSetTurnout — имя команды перевода стрелки на проводе.
+const MethodSetTurnout = "turnout.set"
 
 // setControls — обработчик первой доменной команды.
 //
@@ -280,6 +290,38 @@ func (h *Handler) setControls(ctx context.Context, req protocol.ControlsRequest)
 type controlsResult struct {
 	Unit     string         `json:"unit"`
 	Controls match.Controls `json:"controls"`
+}
+
+// setTurnout — обработчик команды перевода стрелки.
+//
+// Устроен так же, как setControls, и это не копия ради копии: правка кладётся в
+// очередь движка и ждёт тика, потому что мир принадлежит движку. Разойдись эти
+// два обработчика в устройстве — одна из команд правила бы партию мимо фазы
+// приёма.
+func (h *Handler) setTurnout(ctx context.Context, req protocol.TurnoutRequest) (any, error) {
+	done := h.e.Submit(command.SetTurnout{
+		Turnout:  req.Turnout(),
+		Position: req.Position(),
+		Net:      h.net,
+	})
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	// Ответ — ПОЛОЖЕНИЕ, КОТОРОЕ ВСТАЛО, а не эхо запроса: то же правило, что у
+	// кабины. Клиент показывает щелчок немедленно и сверяется с этим ответом.
+	snap := h.e.Snapshot()
+	return turnoutResult{Turnout: req.Turnout(), Position: snap.Match.TurnoutAt(req.Turnout())}, nil
+}
+
+// turnoutResult — ответ на команду перевода стрелки.
+type turnoutResult struct {
+	Turnout  string `json:"turnout"`
+	Position string `json:"position"`
 }
 
 // serve — цикл чтения соединения.
@@ -515,6 +557,7 @@ func (h *Handler) envelope(sess *session, snap engine.Snapshot) snapshotEnvelope
 		Match:           snap.Match.ID,
 		Time:            snap.Time,
 		Units:           placed,
+		Turnouts:        snap.Match.TurnoutStates(h.net),
 	}
 }
 
@@ -565,6 +608,13 @@ type snapshotEnvelope struct {
 	// Time — модельное время партии, микросекунды СТРОКОЙ (units.SimTime).
 	Time  units.SimTime     `json:"time"`
 	Units []match.UnitState `json:"units"`
+	// Turnouts — положение ВСЕХ стрелок региона.
+	//
+	// Живое состояние, а не геометрия: контракт отрисовки прямо говорит, что
+	// положения переведённой стрелки он не несёт (редакция 6 §1). Здесь оно и
+	// едет — целым списком, потому что снапшот полный, а стрелок на станции
+	// единицы.
+	Turnouts []match.TurnoutState `json:"turnouts"`
 }
 
 // Единицы на проводе — это match.UnitState, и собирает их партия, а не канал.

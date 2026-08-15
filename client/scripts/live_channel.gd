@@ -52,6 +52,12 @@ signal controls_set(unit: String, controls: Dictionary)
 ## машина), text — человеческая (её читает игрок).
 signal controls_refused(reason: String, text: String)
 
+## Сервер перевёл стрелку: пришло положение, КОТОРОЕ ВСТАЛО.
+signal turnout_set(turnout: String, position: String)
+
+## Сервер не перевёл стрелку и сказал, почему (занята составом, нет такой).
+signal turnout_refused(reason: String, text: String)
+
 ## Канал перестал быть живым и вот почему. Строка для человека: HUD показывает
 ## её как есть, а не переводит обратно в код.
 signal broke(reason: String)
@@ -68,6 +74,14 @@ const SNAPSHOT_METHOD := "snapshot"
 
 ## Имя команды органов управления.
 const CONTROLS_METHOD := "controls.set"
+
+## Имя команды перевода стрелки. Строка одна на клиент: второе её написание
+## разошлось бы с сервером молча.
+const TURNOUT_METHOD := "turnout.set"
+
+## Положения остряка на проводе. Те же строки, что у сервера и у привода в мире.
+const TURNOUT_STRAIGHT := "straight"
+const TURNOUT_DIVERGING := "diverging"
 
 ## Причины отказа, НА КОТОРЫЕ КЛИЕНТ ДЕЙСТВУЕТ по-разному.
 ##
@@ -108,6 +122,10 @@ class Snapshot extends RefCounted:
 	## RollingStock, у которого свой договор с этими полями, и второй разбор
 	## по дороге означал бы второе место, где живут их имена.
 	var units: Array = []
+	## turnouts — положение ВСЕХ стрелок региона: словари {id, name, position,
+	## drive, occupied_by}. Словарями по той же причине, что и единицы: их читает
+	## тот, кто ими распоряжается (мир и пульт), а не транспорт.
+	var turnouts: Array = []
 
 	func full() -> bool:
 		return kind == "full"
@@ -130,6 +148,9 @@ var _pipe: NetChannel = null
 var _hello_id := -1
 ## _commands — id запроса -> command_id, чтобы ответ нашёл свою команду.
 var _commands := {}
+## _turnout_commands — id запроса -> стрелка. Отдельно от _commands: ответы у
+## них разной формы, и общий словарь заставил бы разбирать ответ гаданием.
+var _turnout_commands := {}
 ## _next_command — счётчик ключей идемпотентности.
 ##
 ## Ключ обязан быть уникален в пределах сессии и ОДИНАКОВ у повтора: сервер по
@@ -235,6 +256,35 @@ func set_controls(unit: String, traction: int, brake: int, reverser: String,
 	return id
 
 
+## set_turnout — перевести стрелку В НАЗВАННОЕ положение.
+##
+## Именно в названное, а не «переключить»: команда без называния результата не
+## идемпотентна, и повтор после разрыва вернул бы остряк обратно (разбор — в
+## договоре, turnout.set). Какое положение противоположно нынешнему, решает тот,
+## кто знает нынешнее, — то есть мир по снапшоту.
+##
+## Возвращает id запроса или −1, если канал закрыт.
+func set_turnout(turnout: String, position: String) -> int:
+	if not greeted:
+		return -1
+	_next_command += 1
+	var id := _pipe.send(TURNOUT_METHOD, turnout_params("t%d" % _next_command, turnout, position))
+	if id >= 0:
+		_turnout_commands[id] = turnout
+	return id
+
+
+## turnout_params — params команды перевода. Статической РАДИ ПРОВЕРКИ: чистая
+## проверка контракта сверяет с договором ровно то, что отправляет клиент, а не
+## свой пересказ этого.
+static func turnout_params(command_id: String, turnout: String, position: String) -> Dictionary:
+	return {
+		"command_id": command_id,
+		"turnout": turnout,
+		"position": position,
+	}
+
+
 ## controls_params — params команды органов управления.
 ##
 ## Отдельной функцией и статической РАДИ ПРОВЕРКИ: чистая проверка контракта
@@ -267,6 +317,24 @@ static func controls_params(command_id: String, unit: String,
 
 
 func _on_answered(id: int, result: Variant, error: Dictionary) -> void:
+	if _turnout_commands.has(id):
+		_turnout_commands.erase(id)
+		if not error.is_empty():
+			var data: Variant = error.get("data", {})
+			var reason := ""
+			if typeof(data) == TYPE_DICTIONARY:
+				reason = String((data as Dictionary).get("reason", ""))
+			# Отказ перевода — НЕ ПОЛОМКА КАНАЛА, ровно как отказ рукоятки:
+			# «стрелка занята составом» — это ответ мира, а не расхождение с
+			# договором.
+			turnout_refused.emit(reason, String(error.get("message", "перевод отказан")))
+			return
+		if typeof(result) != TYPE_DICTIONARY:
+			_fail("ответ команды перевода не объект")
+			return
+		var res_sw := result as Dictionary
+		turnout_set.emit(String(res_sw.get("turnout", "")), String(res_sw.get("position", "")))
+		return
 	if _commands.has(id):
 		var unit := String(_commands[id])
 		_commands.erase(id)
@@ -353,6 +421,8 @@ func _take_envelope(env: Dictionary) -> void:
 	snap.time_us = String(env.get("time", "0")).to_int()
 	var raw_units: Variant = env.get("units", [])
 	snap.units = (raw_units as Array) if typeof(raw_units) == TYPE_ARRAY else []
+	var raw_sw: Variant = env.get("turnouts", [])
+	snap.turnouts = (raw_sw as Array) if typeof(raw_sw) == TYPE_ARRAY else []
 	if not snap.full():
 		# Разностных снапшотов не существует, и применить их клиент не умеет.
 		# Молча принять неизвестный вид значило бы схлопнуть мир на экране до

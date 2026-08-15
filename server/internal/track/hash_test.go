@@ -70,6 +70,10 @@ func TestNetworkModelHashCoversElementKind(t *testing.T) {
 		// Стрелка: её проходы — тоже элементы, и вид они берут у неё. Без этой
 		// половины подмена вида устройства прошла бы мимо хеша.
 		"вид стрелки": func(m *mapfmt.Map) { m.Topology.Turnouts[0].Kind = "road" },
+		// Переводной механизм: он решает, КАК стрелку переводят, то есть меняет
+		// поведение модели, а не картинку. Первая стрелка затравки ручная —
+		// подменяем её электроприводом.
+		"механизм стрелки": func(m *mapfmt.Map) { m.Topology.Turnouts[0].Drive = mapfmt.DriveElectric },
 	}
 	base := manifestOf(t, seedmap.Station()).NetworkModelHash
 	for name, corrupt := range cases {

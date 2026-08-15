@@ -47,7 +47,7 @@ func liveFixture() *engine.Engine {
 
 func TestLiveServesUnits(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewLiveHandler(liveFixture(), station(t)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
+	NewLiveHandler(liveFixture(), station(t), nil).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d", rec.Code)
 	}
@@ -93,7 +93,7 @@ func TestLiveServesUnits(t *testing.T) {
 // таймингов.
 func TestLiveCarriesModelTime(t *testing.T) {
 	e := liveFixture()
-	h := NewLiveHandler(e, station(t))
+	h := NewLiveHandler(e, station(t), nil)
 	read := func() units.SimTime {
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
@@ -120,7 +120,7 @@ func TestLiveCarriesModelTime(t *testing.T) {
 // а не 404: партия существует, состава в ней нет. 404 означал бы, что мира нет.
 func TestLiveEmptyMatchIsNotFound404(t *testing.T) {
 	rec := httptest.NewRecorder()
-	NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: "ST_A"}, nil), station(t)).
+	NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: "ST_A"}, nil), station(t), nil).
 		ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/regions/ST_A/live", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("код %d, ожидался 200", rec.Code)
@@ -148,7 +148,7 @@ func TestLiveRefusals(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			rec := httptest.NewRecorder()
-			NewLiveHandler(liveFixture(), station(t)).ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+			NewLiveHandler(liveFixture(), station(t), nil).ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
 			if rec.Code != c.want {
 				t.Fatalf("код %d, ожидался %d", rec.Code, c.want)
 			}

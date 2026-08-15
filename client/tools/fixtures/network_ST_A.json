@@ -1122,6 +1122,24 @@
       ]
     }
   ],
+  "turnout_drives": [
+    {
+      "owner": "018bcfe5-680a-7242-8242-00000a424242",
+      "name": "SW1",
+      "drive": "manual",
+      "element": "018bcfe5-680a-7242-8242-00000a424242:straight",
+      "u": 2.0,
+      "offset": 1.875
+    },
+    {
+      "owner": "018bcfe5-680b-7242-8242-00000b424242",
+      "name": "SW2",
+      "drive": "electric",
+      "element": "018bcfe5-680b-7242-8242-00000b424242:straight",
+      "u": 2.0,
+      "offset": 1.875
+    }
+  ],
   "features": [
     {
       "owner": "018bcfe5-680a-7242-8242-00000a424242",

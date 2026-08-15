@@ -237,6 +237,10 @@ var ui_prompt: Label
 ## Пульт машиниста: приборы и рукоятки. Появляется при посадке, гаснет при
 ## высадке — как и строка выше, и отдельно от отладочной панели.
 var ui_panel: CabPanel
+## ПУЛЬТ СТРЕЛКИ. Отдельным узлом от пульта машиниста: стрелки переводят обе
+## роли, а кабина есть только у одной, и вложить одно в другое значило бы
+## отобрать стрелки у пешехода.
+var ui_turnout: TurnoutPanel
 var camera: Camera3D
 ## Мир спрашивает СЛОЙ, а не трубу: манифест, сеть, рельеф, объекты — вопросами,
 ## а не адресами. Ни кода ответа, ни имени заголовка отсюда не видно (WorldApi).
@@ -314,6 +318,17 @@ var _ballast_mask := {}
 var _bounds: WorldBounds = null
 ## Человек, если роль пешая. Он же владеет камерой в видах от лица.
 var _driver: Driver = null
+## Приводы стрелок в кадре: id стрелки -> SwitchStand. Строится вместе с путём.
+var _stands := {}
+## Положение стрелок по последнему снапшоту: id -> словарь провода.
+var _turnouts := {}
+## Ближайшая стрелка ПО ХОДУ машины, которой управляет игрок: {turnout, distance}
+## из снапшота. Считает её сервер — обход сети клиенту запрещён.
+var _ahead := {}
+## Последний отказ перевода: показывается в пульте, пока игрок не переведёт
+## удачно. Молча проглоченный отказ оставил бы игрока щёлкать по стрелке, которая
+## не двигается.
+var _turnout_note := ""
 ## Гладь воды — ЕДИНСТВЕННЫЙ нарисованный меш, который НЕ становится твердью.
 ## Держится узлом, а не именем: по имени опознавать значило бы завязаться на
 ## строку, которую вправе поменять кто угодно, не тронув смысла.
@@ -370,6 +385,7 @@ const VersionSetScript := preload("res://scripts/version_set.gd")
 const VersionRebuildScript := preload("res://scripts/version_rebuild.gd")
 const GrassFieldScript := preload("res://scripts/grass_field.gd")
 const CabPanelScript := preload("res://scripts/cab_panel.gd")
+const TurnoutPanelScript := preload("res://scripts/turnout_panel.gd")
 
 
 ## configure — всё, что мир получает СНАРУЖИ, одним вызовом и до входа в дерево.
@@ -687,6 +703,14 @@ func _build_scene() -> void:
 	ui_panel.changed.connect(_send_controls)
 	ui_panel.visible = false
 	ui.add_child(ui_panel)
+
+	# ПУЛЬТ СТРЕЛКИ. В правом верхнем углу: низ кадра занят пультом машиниста, а
+	# середина — это то, на что игрок смотрит.
+	ui_turnout = TurnoutPanelScript.new()
+	ui_turnout.setup()
+	ui_turnout.thrown.connect(_throw_turnout)
+	ui_turnout.visible = false
+	ui.add_child(ui_turnout)
 
 
 ## _apply_fog_to_reach — плотность дымки из дальности взгляда.
@@ -1011,6 +1035,8 @@ func _open_channel() -> LiveChannel.Snapshot:
 	channel.broke.connect(_on_channel_broke)
 	channel.controls_set.connect(_on_controls_set)
 	channel.controls_refused.connect(_on_controls_refused)
+	channel.turnout_set.connect(_on_turnout_set)
+	channel.turnout_refused.connect(_on_turnout_refused)
 	add_child(channel)
 	channel.start()
 
@@ -1060,6 +1086,16 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 	# должно, второе — дефект. Считается она здесь всё равно, строкой выше.
 	_display.push(snap.time_us, snap.units, signature)
 	_move_stock(snap)
+	# СТРЕЛКИ — ЖИВОЕ СОСТОЯНИЕ, и приезжает оно тем же снапшотом, что положение
+	# машины. Указатель поворачивается здесь и только здесь: другого источника
+	# положения остряка у клиента нет и быть не должно.
+	_turnouts.clear()
+	for raw_sw in snap.turnouts:
+		var sw := raw_sw as Dictionary
+		_turnouts[String(sw.get("id", ""))] = sw
+	_ahead = _ahead_of(snap)
+	_show_turnouts()
+	_refresh_turnout_panel()
 	# Кабина берёт положение рукояток из снапшота: истина о машине приходит
 	# оттуда, а не остаётся тем, что игрок в последний раз выставил.
 	if cab.aboard():
@@ -1272,6 +1308,150 @@ func _watch_jerk(u: RollingStock.Unit, was_pos: Vector3, frame_us: int,
 			+ "; машина %s, элемент %s, u = %.2f м, снапшот #%d возрастом %.0f мс"
 			% [u.id.substr(0, 8), (u.element.id if u.element != null else "?").substr(0, 8), u.u_m,
 				int(stats.get("channel_seq", 0)), _display.age_ms()])
+
+
+## --- стрелки -----------------------------------------------------------------
+
+## _stand_list — приводы списком. Человеку нужен именно список: он меряет
+## расстояние до каждого, а не ищет по идентификатору.
+func _stand_list() -> Array:
+	var out: Array = []
+	for id in _stands:
+		out.append(_stands[id])
+	return out
+
+
+## _ahead_of — ближайшая стрелка по ходу ТОЙ машины, которой управляет игрок.
+##
+## Берётся из снапшота, а не считается здесь: обход сети — факт о мире, и клиент,
+## выводящий «какая стрелка следующая» из присланной геометрии, выдумывал бы
+## связность (граница ClearAhead-sjq). Не в кабине — поля нет вовсе.
+func _ahead_of(snap: LiveChannel.Snapshot) -> Dictionary:
+	if not cab.aboard():
+		return {}
+	for raw in snap.units:
+		var u := raw as Dictionary
+		if String(u.get("id", "")) != cab.unit_id:
+			continue
+		var a: Variant = u.get("ahead")
+		return (a as Dictionary) if typeof(a) == TYPE_DICTIONARY else {}
+	return {}
+
+
+## _show_turnouts — повернуть указатели по последнему снапшоту.
+##
+## Стрелка, которой нет среди приводов, пропускается молча: сеть и живое
+## состояние приезжают РАЗНЫМИ ответами, и порядок их прихода не гарантирован —
+## первый снапшот законно опережает построение пути.
+func _show_turnouts() -> void:
+	var turned := 0
+	for id in _turnouts:
+		if not _stands.has(id):
+			continue
+		var sw := _turnouts[id] as Dictionary
+		if (_stands[id] as SwitchStand).show_position(String(sw.get("position", ""))):
+			turned += 1
+	stats["turnouts_known"] = _turnouts.size()
+	stats["turnouts_turned"] = turned
+
+
+## _turnout_target — КАКУЮ стрелку показывает пульт и переводит клавиша.
+##
+## Правило одно на оба, и это не удобство: разойдись они — подсказка обещала бы
+## одно, а клавиша делала другое, то есть ровно тот дефект, что записан про
+## подсказки управления.
+##
+## Порядок предпочтения, от ближнего к дальнему:
+##   1. ПОД РУКОЙ. Пешеход стоит у привода — переводится он, как в жизни.
+##   2. ПО ХОДУ. Игрок в кабине — следующая стрелка впереди машины (её называет
+##      сервер).
+##   3. БЛИЖАЙШАЯ К ВЗГЛЯДУ. Ни того, ни другого: роль смотрит на станцию
+##      сверху, и переводится та, на которую она смотрит.
+func _turnout_target() -> Dictionary:
+	var id := ""
+	var dist := -1.0
+	if _driver != null and not cab.aboard():
+		var near := _driver.nearest_stand()
+		if not near.is_empty():
+			id = String((near["stand"] as SwitchStand).owner_id)
+	if id == "" and not _ahead.is_empty():
+		id = String(_ahead.get("turnout", ""))
+		dist = float(_ahead.get("distance", -1.0))
+	if id == "" and _driver == null:
+		var best := INF
+		var at := _camera_plan()
+		for sid in _stands:
+			var st_node := _stands[sid] as SwitchStand
+			var p := st_node.plan_point()
+			var d := Vector2(p.x - at.x, p.z - at.y).length()
+			if d < best:
+				best = d
+				id = String(sid)
+		if id != "":
+			dist = best
+	if id == "" or not _turnouts.has(id):
+		return {}
+	var out := (_turnouts[id] as Dictionary).duplicate()
+	out["distance_m"] = dist
+	out["note"] = _turnout_note
+	out["key"] = "T"
+	return out
+
+
+## _refresh_turnout_panel — показать пульту то, что он обязан показывать сейчас.
+func _refresh_turnout_panel() -> void:
+	if ui_turnout == null:
+		return
+	ui_turnout.show_turnout(_turnout_target())
+
+
+## _throw_turnout — перевести показанную стрелку В ПРОТИВОПОЛОЖНОЕ положение.
+##
+## Противоположное считает КЛИЕНТ и называет его в команде явно: «переключить»
+## без называния результата не идемпотентно, и повтор, доехавший после разрыва,
+## вернул бы остряк обратно (разбор — в договоре, turnout.set).
+func _throw_turnout() -> void:
+	var t := _turnout_target()
+	if t.is_empty() or channel == null:
+		return
+	var now := String(t.get("position", ""))
+	if now != LiveChannel.TURNOUT_STRAIGHT and now != LiveChannel.TURNOUT_DIVERGING:
+		# Положение неизвестно — противоположного у него нет. Молчать нельзя:
+		# игрок нажал клавишу, и она обязана либо сработать, либо объясниться.
+		_turnout_note = "положение стрелки неизвестно: %s" % now
+		_refresh_turnout_panel()
+		return
+	var want := LiveChannel.TURNOUT_DIVERGING if now == LiveChannel.TURNOUT_STRAIGHT \
+		else LiveChannel.TURNOUT_STRAIGHT
+	if channel.set_turnout(String(t.get("id", "")), want) < 0:
+		_turnout_note = "канал закрыт — команда не ушла"
+		_refresh_turnout_panel()
+
+
+## _on_turnout_set — сервер перевёл стрелку.
+##
+## Указатель в мире здесь НЕ ПОВОРАЧИВАЕТСЯ: он поворачивается снапшотом, и
+## только им. Ответ команды говорит лишь, что просьба принята; поворот от него
+## означал бы второй источник положения остряка — тот самый, из-за которого
+## указатель и показ разошлись бы при первом же отказе.
+func _on_turnout_set(turnout: String, position: String) -> void:
+	_turnout_note = ""
+	stats["turnout_last_set"] = "%s -> %s" % [turnout.substr(0, 8), position]
+	_refresh_turnout_panel()
+	if _loaded and ui_label != null:
+		_refresh_ui()
+
+
+## _on_turnout_refused — сервер не перевёл стрелку и сказал, почему.
+func _on_turnout_refused(reason: String, text: String) -> void:
+	# ТЕКСТ СЕРВЕРА, А НЕ СВОЙ ПЕРЕСКАЗ: причина машинная (reason) идёт в отчёт,
+	# человеческая — на экран. Переписав её здесь, клиент завёл бы второе
+	# объяснение одного события.
+	_turnout_note = text
+	stats["turnout_refusal_reason"] = reason
+	_refresh_turnout_panel()
+	if _loaded and ui_label != null:
+		_refresh_ui()
 
 
 ## _on_controls_set — сервер принял команду и вернул положение, КОТОРОЕ ВСТАЛО.
@@ -1593,6 +1773,7 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	var plat_mat := TrackView.flat_material(Color(0.74, 0.73, 0.70), TrackView.PRIO_PLATFORM)
 	var plats_drawn := 0
 	var slabs := 0
+	var platform_lines: Array[String] = []
 	for p in platforms:
 		var mi := MeshInstance3D.new()
 		mi.name = p.id
@@ -1607,10 +1788,13 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 			continue
 		plat_node.add_child(mi)
 		plats_drawn += 1
-		var caption := "%s  %s  %.2f…%.2f м от оси" % [p.label, p.side, p.offset_m, p.offset_m + p.width_m]
-		if p.has_slab():
-			caption += "  +%.2f м над УГР" % p.height_m
-		plat_node.add_child(_label(p.far[p.far.size() / 2], caption, Color(0.98, 0.98, 0.92)))
+		# ЗДЕСЬ БЫЛА ПОДПИСЬ ПЛАТФОРМЫ (метка, сторона, вынос от оси, высота над
+		# УГР). Снесена вместе со всеми Label3D мира: числа платформы читаются в
+		# отчёте, а парящая строка поверх плиты — экранная мебель посреди кадра.
+		platform_lines.append("%s  %s  %.2f…%.2f м от оси%s" % [
+			p.label, p.side, p.offset_m, p.offset_m + p.width_m,
+			("  +%.2f м над УГР" % p.height_m) if p.has_slab() else ""])
+	st["platform_lines"] = platform_lines
 	st["platforms_drawn"] = plats_drawn
 	st["platform_slabs_drawn"] = slabs
 	st["platforms_skipped"] = plat_res["skipped"]
@@ -1746,13 +1930,15 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	st["frogs_drawn"] = frogs.size()
 	st["frogs_skipped"] = fr["skipped"]
 
-	# 7. Стрелка — ОДНО устройство, а не две независимые ветви. Подпись несёт то,
-	#    что прислано ролью: марку и рукость. Выводить сторону из геометрии не
-	#    требуется — `hand` для того и есть, — и потому не делается.
+	# 7. Стрелка — ОДНО устройство, а не две независимые ветви.
+	#
+	#    ЗДЕСЬ БЫЛА ПАРЯЩАЯ ПОДПИСЬ Label3D с меткой, маркой и рукостью. Она
+	#    снесена вместе со всеми остальными подписями мира (решение владельца
+	#    2026-08-15): у стрелки теперь ТАБЛИЧКА — предмет, стоящий у привода и
+	#    живущий по законам света и перспективы. Числа, которые подпись
+	#    сообщала, никуда не делись: они в отчёте (device_lines), где их читают
+	#    глазами, а не сквозь рельеф.
 	var devices := TrackBuild.devices(elements)
-	var frog_by_owner := {}
-	for f in frogs:
-		frog_by_owner[f.owner] = f
 	var dev_node := Node3D.new()
 	dev_node.name = "Devices"
 	node.add_child(dev_node)
@@ -1763,34 +1949,36 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		dev_lines.append("%s (%s, %s): ветви %s — %s" % [
 			d.id, mark, hand, "+".join(d.branches),
 			"тип есть" if d.typed else "не покрыты ни одним construction_run, оттого без колеи и решётки"])
-		if frog_by_owner.has(d.id):
-			var f: TrackBuild.Frog = frog_by_owner[d.id]
-			dev_node.add_child(_label(f.point, "%s  %s  %s" % [d.label, mark, hand], Color(1.0, 0.68, 0.68)))
 	st["devices"] = devices.size()
 	st["device_lines"] = dev_lines
 
-
-## _label — подпись в мире.
-##
-## Экранная мебель: сообщает ИДЕНТИЧНОСТЬ присланного объекта (id, марка,
-## рукость) и ничего к ней не добавляет. fixed_size — чтобы подпись читалась
-## одинаково с любого удаления: её читают, а ею не меряют.
-func _label(at: Vector3, text: String, colour: Color) -> Label3D:
-	var l := Label3D.new()
-	l.text = text
-	l.position = TerrainMesh.to_godot(at.x, at.y, at.z)
-	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	l.fixed_size = true
-	l.pixel_size = 0.0007
-	l.font_size = 26
-	l.outline_size = 8
-	l.modulate = colour
-	# Подпись поднята над точкой: иначе она ложится ровно на галочку крестовины,
-	# которую и называет, и обе становятся нечитаемыми.
-	l.offset = Vector2(0.0, -34.0)
-	l.no_depth_test = true
-	l.render_priority = 8
-	return l
+	# 8. ПЕРЕВОДНЫЕ МЕХАНИЗМЫ: станина, указатель положения и табличка с номером.
+	#
+	#    Место, сторону и вид механизма прислал сервер (turnout_drives); тело
+	#    рисует клиент (SwitchStand). Положение остряка сюда не попадает вовсе —
+	#    оно живое и приезжает снапшотом канала (_show_turnouts).
+	var dr := TrackBuild.drives(network, by_id)
+	var drives: Array[TrackBuild.TurnoutDrive] = dr["list"]
+	var stands_node := Node3D.new()
+	stands_node.name = "TurnoutDrives"
+	node.add_child(stands_node)
+	var built := {}
+	for d in drives:
+		# Подошва привода лежит на верхе переводного бруса — на высоту рельса
+		# ниже головки. Число разрешает TrackBuild.drives там же, где адрес, и
+		# второго правила «где у устройства тип» клиент не заводит.
+		var stand := SwitchStand.build(d, d.base_drop_m)
+		stands_node.add_child(stand)
+		built[d.owner] = stand
+	st["turnout_drives_drawn"] = drives.size()
+	st["turnout_drives_skipped"] = dr["skipped"]
+	# Живые приводы подменяются ЦЕЛИКОМ, а не дополняются: перестройка версии
+	# строит новый путь в стороне, и старые узлы вместе со старым Track уезжают.
+	if parent == null:
+		_stands = built
+		_show_turnouts()
+		if _driver != null:
+			_driver.set_stands(_stand_list())
 
 
 func _axis_bbox(axis: PackedVector2Array) -> Rect2:
@@ -2609,6 +2797,10 @@ func _spawn_driver(elements: Array[TrackGeom.Element]) -> void:
 	_driver.boarding_changed.connect(_on_boarding)
 	_driver.prompt_changed.connect(_on_prompt)
 	_driver.set_posts(_stock_posts())
+	# ПРИВОДЫ СТРЕЛОК — оттуда же и по той же причине: где стоит стрелка, факт
+	# мира. Путь строится до человека (порядок в _load_world), поэтому список уже
+	# полон; перестройка версии зовёт set_stands ещё раз (см. _draw_track).
+	_driver.set_stands(_stand_list())
 
 
 ## _on_driver_settled — человек нашёл под собой твердь (или не нашёл).
@@ -2790,6 +2982,11 @@ func _controls_of(unit_id: String) -> Dictionary:
 ## подсказка — ОРГАН УПРАВЛЕНИЯ, она обращена к игроку и стоит там, куда он
 ## смотрит. Слей их — и подсказка исчезала бы вместе с отладочной панелью.
 func _on_prompt(text: String) -> void:
+	# ПУЛЬТ ПОПРАВЛЯЕТСЯ ТЕМ ЖЕ СОБЫТИЕМ, что и подсказка у ног, и это не
+	# удобство: подойдя к стрелке, игрок обязан увидеть ЕЁ в пульте немедленно, а
+	# не на следующем снапшоте. Событие ровно то самое — «подошёл или отошёл», —
+	# и второго сторожа для него заводить незачем.
+	_refresh_turnout_panel()
 	if ui_prompt == null:
 		return
 	ui_prompt.text = text
@@ -2953,6 +3150,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			ui_label.visible = not ui_label.visible
 		get_viewport().set_input_as_handled()
 		return
+	# T — ПЕРЕВЕСТИ СТРЕЛКУ, ту самую, которую показывает пульт. Клавиша у мира,
+	# а не у пульта: клавиатура принадлежит миру целиком (та же причина, по
+	# которой здесь же живёт F1), и вторая точка приёма означала бы, что порядок
+	# разбора зависит от того, кто первым подписался.
+	#
+	# Съедается ТОЛЬКО когда есть что переводить: иначе T перестала бы доходить
+	# до всех прочих ради стрелки, которой нет.
+	if key.keycode == KEY_T:
+		if not _turnout_target().is_empty():
+			get_viewport().set_input_as_handled()
+			_throw_turnout()
+		return
 	if not cab.aboard() or not CAB_KEYS.has(key.keycode):
 		return
 	# Клавиша съедается ТОЛЬКО когда игрок в кабине: иначе цифры перестали бы
@@ -3108,11 +3317,30 @@ func _hud_text() -> String:
 				hi = maxf(hi, float(g["length_max"]))
 			l.append("  переводных брусьев %d на %d решётках устройств, длина %.2f…%.2f м" % [
 				stats.get("timbers_drawn", 0), grids.size(), lo, hi])
+		# ПРИВОДЫ И ПОЛОЖЕНИЯ — своей строкой: приводы приезжают геометрией, а
+		# положения живым состоянием, и слитое число снова скрыло бы стрелку,
+		# у которой есть тело, но нет положения (или наоборот).
+		if int(stats.get("turnout_drives_drawn", 0)) > 0 or _turnouts.size() > 0:
+			var by_pos := {}
+			for tid in _turnouts:
+				var p_now := String((_turnouts[tid] as Dictionary).get("position", "нет"))
+				by_pos[p_now] = int(by_pos.get(p_now, 0)) + 1
+			l.append("  приводов стрелок %d, положений из канала %d %s%s" % [
+				stats.get("turnout_drives_drawn", 0), _turnouts.size(), str(by_pos),
+				(", отказ: " + _turnout_note) if _turnout_note != "" else ""])
+			var lost: Array = stats.get("turnout_drives_skipped", []) as Array
+			if not lost.is_empty():
+				l.append("    приводы без тела: %s" % str(lost))
 		if int(stats.get("elements_width_from_device_type", 0)) > 0:
 			l.append("  из них %d ветви стрелок: размеры по role.type, run'ами они не покрыты" % [
 				stats.get("elements_width_from_device_type", 0)])
 		for d in (stats.get("device_lines", []) as Array):
 			l.append("    %s" % d)
+		# ЧИСЛА ПЛАТФОРМЫ — СЮДА, а не парящей подписью над плитой: подписи мира
+		# снесены вместе с Label3D, а сказанное ими (метка, сторона, вынос,
+		# высота над УГР) осталось ровно там, где числа и читают.
+		for p_line in (stats.get("platform_lines", []) as Array):
+			l.append("    %s" % p_line)
 	if stats.has("chunks_requested"):
 		l.append("[b]рельеф[/b]: запрошено %d, получено %d, чанка нет (спуск к грубому) %d" % [
 			stats["chunks_requested"], stats["chunks_got"], stats["chunks_absent"]])

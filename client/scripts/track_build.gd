@@ -190,6 +190,49 @@ class Device:
 	var typed: bool = false
 
 
+## Переводной механизм стрелки: где он стоит, какой он и что написано на его
+## табличке.
+##
+## КЛИЕНТ ЗДЕСЬ НЕ ВЫВОДИТ НИЧЕГО, кроме позы из присланного адреса — ровно как у
+## бруса. Сторону (знак выноса), место вдоль устройства и вид механизма посчитал
+## и назвал сервер (track/drive.go): два клиента, каждый выводящий сторону из
+## рукости, дали бы два разных ответа на первой же карте, где рукость и геометрия
+## разошлись.
+##
+## РАЗМЕРОВ ТЕЛА В ПРОВОДЕ НЕТ, и это не дыра контракта: пока привод — предмет,
+## который клиент РИСУЕТ, а не ассет, который он показывает, его габариты
+## принадлежат клиенту (контракт отрисовки §1, та же строка, что у длины крыла
+## крестовины). Числа названы списком в switch_stand.gd.
+class TurnoutDrive:
+	var owner: String
+	## Метка стрелки: ровно то, что написано на табличке.
+	var label: String
+	## "manual" — ручной перевод с балансиром, "electric" — электропривод.
+	var drive: String
+	var element_id: String
+	## Поза станины: уже СМЕЩЁННАЯ на присланный вынос по левой нормали оси.
+	var pose: TrackGeom.AxisPoint
+	## Вынос от оси, метры со знаком. Держится отдельно от позы: по знаку
+	## поворачивают привод лицом к пути, а из позы его уже не достать.
+	var offset_m: float
+	## На сколько подошва привода ниже головки рельса, метры.
+	##
+	## ПРИВОД СТОИТ НА ПЕРЕВОДНЫХ БРУСЬЯХ, А НЕ НА ЗЕМЛЕ, и это устройство
+	## настоящего перевода: станина крепится к брусьям, продолженным за габарит
+	## пути, — потому она и оказывается рядом с путём, а не в поле. Значит подошва
+	## лежит на верхе бруса, то есть на высоту рельса ниже головки: та же отметка,
+	## по которой клиент кладёт шпалу (TrackBuild.Sleeper.top_z).
+	##
+	## Землю здесь спрашивать НЕЛЬЗЯ ни в каком виде: у клиента нет ответа «какая
+	## отметка под этой точкой» — рельеф приходит полем высот, — а посадка по
+	## formation_to_rail_top (первая редакция этого поля) закапывала привод, когда
+	## земля рядом с путём оказывалась выше основной площадки. Это было видно на
+	## снимке: над травой торчали указатель и табличка, а станины не было.
+	##
+	## Ноль значит «типа нет» — тогда привод честно встаёт на отметку оси.
+	var base_drop_m: float
+
+
 static func types_by_id(network: Dictionary) -> Dictionary:
 	var out := {}
 	for t_raw in (network.get("track_types", []) as Array):
@@ -680,6 +723,54 @@ static func frogs(network: Dictionary, by_id: Dictionary) -> Dictionary:
 			continue
 		frog.point = Vector3(float(pt["x"]), float(pt["y"]), z)
 		out.append(frog)
+	return {"list": out, "skipped": skipped}
+
+
+## drives — переводные механизмы стрелок из блока turnout_drives.
+##
+## Адресация та же, что у бруса: опорная линия — прямой проход, u вдоль неё,
+## offset по её левой нормали. Отметка z берётся У ЭЛЕМЕНТА АДРЕСА и не
+## присылается отдельно — так же, как у крестовины: адрес указывает, где именно
+## её взять, и второй источник высоты одной точки заводить незачем.
+static func drives(network: Dictionary, by_id: Dictionary) -> Dictionary:
+	var out: Array[TurnoutDrive] = []
+	var skipped: Array[String] = []
+	var types := types_by_id(network)
+	for d_raw in (network.get("turnout_drives", []) as Array):
+		var d: Dictionary = d_raw as Dictionary
+		var owner_id := String(d.get("owner", ""))
+		var element_id := String(d.get("element", ""))
+		if not by_id.has(element_id):
+			skipped.append("привод %s: элемент %s не пришёл" % [owner_id, element_id])
+			continue
+		var kind := String(d.get("drive", ""))
+		if kind == "":
+			# Вид механизма НЕ ПОДСТАВЛЯЕТСЯ: «наверное, ручной» — это выдумка о
+			# том, чем оборудована станция, и она была бы видна в кадре телом,
+			# которого там нет.
+			skipped.append("привод %s: вид механизма не прислан" % owner_id)
+			continue
+		var el: TrackGeom.Element = by_id[element_id]
+		var p := el.pose_at(float(d.get("u", 0.0)))
+		var off := float(d.get("offset", 0.0))
+		var n := p.left()
+		var drive := TurnoutDrive.new()
+		drive.owner = owner_id
+		drive.label = String(d.get("name", ""))
+		drive.drive = kind
+		drive.element_id = element_id
+		drive.offset_m = off
+		drive.pose = TrackGeom.AxisPoint.new(
+			p.x + n.x * off, p.y + n.y * off, p.z, p.heading, p.u)
+		# ТИП УСТРОЙСТВА БЕРЁТСЯ У РОЛИ ПРОХОДА, а не у прогона: проходы стрелок
+		# прогонами не покрываются по правилу, и свой тип они несут в role.type
+		# (контракт редакции 6 §6). Это же место, откуда его берёт балласт ветвей,
+		# и второго правила «где у устройства тип» клиент не заводит.
+		var dev_type := String(el.role.get("type", ""))
+		if types.has(dev_type):
+			var rail: Dictionary = (types[dev_type] as Dictionary).get("rail", {}) as Dictionary
+			drive.base_drop_m = maxf(float(rail.get("height", 0.0)), 0.0)
+		out.append(drive)
 	return {"list": out, "skipped": skipped}
 
 
