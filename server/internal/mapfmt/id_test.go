@@ -94,7 +94,7 @@ func TestEdgeNamedAsPassageIsRejected(t *testing.T) {
 		Topology: Topology{
 			Nodes: []Node{{ID: uIDN1, Name: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
 			Turnouts: []Turnout{
-				{ID: uIDSW, Name: "SW", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+				{ID: uIDSW, Name: "SW", Kind: KindRail, Hand: "right", Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
 			},
 			Edges: []Edge{{ID: uIDSW + PassageStraight, Name: "E_FAKE", Kind: KindRail, From: uIDN1 + ".P1", To: uIDN1 + ".P1"}},
 		},

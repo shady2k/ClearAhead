@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/physics"
+	"github.com/shady2k/ClearAhead/server/internal/protocol"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
 	"github.com/shady2k/ClearAhead/server/internal/units"
@@ -112,13 +114,23 @@ const locoID = "01a3185c-6001-7242-8242-000000424242"
 // world — партия с одной машиной на главном пути и мир движения к ней.
 func world(t *testing.T, u float64, facing netloc.Direction) (*World, *match.Match) {
 	t.Helper()
+	return worldOn(t, seedmap.StationMain, u, facing)
+}
+
+// worldOn — то же, но машина ставится на НАЗВАННЫЙ элемент.
+//
+// Понадобилось стрелке: пройти по боковому пути можно только войдя в неё общим
+// портом, то есть с подхода, а не с главного пути — там боковой проход в другом
+// конце устройства, и остряк, стоящий не по ходу, машину просто не пускает.
+func worldOn(t *testing.T, element string, u float64, facing netloc.Direction) (*World, *match.Match) {
+	t.Helper()
 	net := network(t)
 	s := set(t)
 	m := &match.Match{ID: "M1", Region: net.MapID, Units: []match.Unit{{
 		ID: locoID, Name: "LOCO_1", Type: "VL80",
-		At: netloc.PointU{Element: seedmap.StationMain, U: u, Direction: facing},
+		At: netloc.PointU{Element: element, U: u, Direction: facing},
 	}}}
-	mo, err := match.StartMotion(m.Units[0], net.Elements[seedmap.StationMain])
+	mo, err := match.StartMotion(m.Units[0], net.Elements[element])
 	if err != nil {
 		t.Fatalf("начальное состояние: %v", err)
 	}
@@ -418,6 +430,153 @@ func TestTurnoutDecidesTheBranch(t *testing.T) {
 	}
 }
 
+// TestThrownTurnoutSendsTheTrainToTheBranch — ПЕРЕВЕДЁННАЯ стрелка уводит
+// машину на боковой путь.
+//
+// Пара к TestTurnoutDecidesTheBranch: тот показывает, что при прямом положении
+// машина идёт прямо, этот — что команда перевода и вправду меняет маршрут.
+// Порознь ни один из них не доказывает, что положение РЕШАЕТ: тест на одно
+// значение прошёл бы и на зашитой константе.
+//
+// Стрелка переводится ТОЙ ЖЕ дорогой, которой её переводит игрок
+// (match.SetTurnout), а не записью в карту положений: проверять надо команду
+// вместе с её правилами, иначе правила остаются непроверенными.
+func TestThrownTurnoutSendsTheTrainToTheBranch(t *testing.T) {
+	for _, c := range []struct {
+		name     string
+		position string
+		want     string
+	}{
+		{"прямое положение", match.TurnoutStraight, seedmap.StationSW1 + mapfmt.PassageStraight},
+		{"переведённая", match.TurnoutDiverging, seedmap.StationSW1 + mapfmt.PassageDiverging},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			// С ПОДХОДА, общим портом: с главного пути на боковой проход не
+			// попасть — он в другом конце устройства.
+			w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
+			if err := m.SetTurnout(seedmap.StationSW1, c.position, w.net, w.set); err != nil {
+				t.Fatalf("перевод стрелки: %v", err)
+			}
+			drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
+			got := runUntil(t, w, m, c.want, 600)
+			if got.Element != c.want {
+				t.Fatalf("машина на %s, а остряк стоит %q", got.Element, c.position)
+			}
+		})
+	}
+}
+
+// runUntil — двигать мир, пока машина не окажется на названном элементе.
+//
+// Тиками, а не «проехать сорок секунд»: сколько времени займёт дорога до
+// стрелки, зависит от массы, уклона и темпа контроллера, и зашитое число
+// сломается от первой же правки паспорта. Потолок здесь — против бесконечного
+// цикла, а не мера пути.
+func runUntil(t *testing.T, w *World, m *match.Match, element string, maxTicks int) match.Motion {
+	t.Helper()
+	for range maxTicks {
+		step(t, w, m, 1)
+		if mo := motion(t, m); mo.Element == element {
+			return mo
+		}
+	}
+	mo := motion(t, m)
+	t.Fatalf("за %d тиков машина не дошла до %s: стоит на %s, s = %s, скорость %v",
+		maxTicks, element, mo.Element, mo.S, mo.Speed)
+	return mo
+}
+
+// TestTurnoutUnderTheTrainDoesNotThrow — стрелка под составом не переводится.
+//
+// Машина ДОВОДИТСЯ до устройства ходом, а не ставится на него руками: занятость
+// считается по свесу от точки отсчёта, и подставленное состояние проверяло бы
+// арифметику свеса, а не то, что она видит настоящую машину.
+func TestTurnoutUnderTheTrainDoesNotThrow(t *testing.T) {
+	w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
+	runUntil(t, w, m, seedmap.StationSW1+mapfmt.PassageStraight, 600)
+	err := m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, w.set)
+	if err == nil {
+		t.Fatal("стрелка переведена под составом")
+	}
+	var ref *protocol.Refusal
+	if !errors.As(err, &ref) || ref.Reason != protocol.ReasonTurnoutOccupied {
+		t.Fatalf("отказ пришёл не тот: %v", err)
+	}
+	if ref.HeldBy != locoID {
+		t.Fatalf("держатель %q, а стрелку занимает %q", ref.HeldBy, locoID)
+	}
+	// И положение НЕ ИЗМЕНИЛОСЬ: отказ, оставивший правку применённой, хуже
+	// молчаливого применения — он врёт обеим сторонам сразу.
+	if pos := m.TurnoutAt(seedmap.StationSW1); pos != match.TurnoutStraight {
+		t.Fatalf("после отказа остряк стоит %q", pos)
+	}
+}
+
+// TestTurnoutIsHeldByTheOverhangingTail — стрелку держит и машина, которая
+// СЪЕХАЛА с неё, но не убрала с неё хвост.
+//
+// Это половина, ради которой занятость считается отрезком, а не точкой: точка
+// отсчёта уже на соседнем элементе, а полмашины ещё на устройстве. Пропусти её —
+// и остряк переводился бы под задней тележкой.
+func TestTurnoutIsHeldByTheOverhangingTail(t *testing.T) {
+	w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
+	// Первый же тик, на котором точка отсчёта оказалась ЗА стрелкой: хвост при
+	// этом заведомо ещё на ней — машина 32.84 м, а уехать за тик она успевает на
+	// метры.
+	mo := runUntil(t, w, m, seedmap.StationMain, 900)
+	half, err := units.MetersToDistance(32.84 / 2)
+	if err != nil {
+		t.Fatalf("половина длины: %v", err)
+	}
+	if mo.S >= half {
+		t.Fatalf("точка отсчёта уже в %s от начала — хвост сошёл со стрелки, проверять нечего", mo.S)
+	}
+	err = m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, w.set)
+	var ref *protocol.Refusal
+	if !errors.As(err, &ref) || ref.Reason != protocol.ReasonTurnoutOccupied {
+		t.Fatalf("стрелка переведена под хвостом машины: %v", err)
+	}
+}
+
+// TestNextTurnoutIsTheOneAhead — ближайшая стрелка по ходу считается сервером и
+// доезжает до провода.
+//
+// Машина стоит на главном пути носом к упору: впереди стрелки нет, и поля быть
+// не должно. Развёрнутая — видит SW1, и расстояние до неё меряется ОТ КОНЦА
+// машины, а не от её середины.
+func TestNextTurnoutIsTheOneAhead(t *testing.T) {
+	w, m := world(t, 150, netloc.DirForward)
+	states, err := m.States(w.net, w.set)
+	if err != nil {
+		t.Fatalf("проекция на провод: %v", err)
+	}
+	if states[0].Ahead != nil {
+		t.Fatalf("носом к упору впереди нашлась стрелка %+v", states[0].Ahead)
+	}
+
+	w, m = world(t, 150, netloc.DirReverse)
+	states, err = m.States(w.net, w.set)
+	if err != nil {
+		t.Fatalf("проекция на провод: %v", err)
+	}
+	ahead := states[0].Ahead
+	if ahead == nil {
+		t.Fatal("носом к стрелке впереди её не нашлось")
+	}
+	if ahead.Turnout != seedmap.StationSW1 {
+		t.Fatalf("впереди назвалась стрелка %s, а ближайшая — SW1", ahead.Turnout)
+	}
+	// Машина стоит на u = 150 главного пути и смотрит к его началу, где стрелка.
+	// От точки отсчёта до неё 150 м, от конца машины — на полдлины меньше
+	// (ВЛ80 32.84 м): около 133.6 м. Допуск метровый: длина оси элемента чуть
+	// больше длины его проекции на уклоне.
+	if ahead.DistanceM < 132 || ahead.DistanceM > 135 {
+		t.Fatalf("до стрелки %.2f м, ожидалось около 133.6 м (150 м минус полдлины машины)", ahead.DistanceM)
+	}
+}
+
 // TestMotionShowsUpOnTheWire — состояние физики доезжает до провода: u вместо
 // s, скорость со знаком, направление.
 func TestMotionShowsUpOnTheWire(t *testing.T) {
@@ -425,7 +584,7 @@ func TestMotionShowsUpOnTheWire(t *testing.T) {
 	drive(t, m, match.Controls{Traction: 15, Reverser: match.ReverserForward})
 	step(t, w, m, 30)
 
-	states, err := m.States(w.net)
+	states, err := m.States(w.net, w.set)
 	if err != nil {
 		t.Fatalf("проекция на провод: %v", err)
 	}

@@ -63,7 +63,7 @@ func newRegionsTestHandler(t *testing.T) (http.Handler, *mapstore.State, *worlds
 		// Живое состояние: партия ПУСТА, и это не заглушка ради компиляции.
 		// Роутер проверяется на развод адресов, а не на содержимое партии, и
 		// пустая партия — законный мир (станция без единой машины).
-		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID}, nil), station(t)),
+		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID}, nil), station(t), nil),
 		// Канал командой заглушкой: настоящий требует апгрейда сокета, а
 		// роутер обязан лишь довести адрес до него. Что делает сам канал,
 		// проверяет его собственный пакет.
@@ -368,7 +368,7 @@ func TestNatureOnlyRegionServesManifest(t *testing.T) {
 		NewNetworkHandler(maps),
 		NewChunksHandler(world, nil),
 		NewObjectsHandler(maps),
-		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID}, nil), station(t)),
+		NewLiveHandler(engine.New(&match.Match{ID: "M1", Region: st.Manifest.MapID}, nil), station(t), nil),
 		routeMark("channel"),
 	)
 	w := httptest.NewRecorder()

@@ -434,6 +434,7 @@ func TestSequenceOfEditsValidates(t *testing.T) {
 		Edge:      eIDE1,
 		AtU:       50,
 		Hand:      "right",
+		Drive:     mapfmt.DriveManual,
 		Straight:  s,
 		Diverging: d,
 		Branch:    mustChain(t, 40),
@@ -501,7 +502,7 @@ func TestFailedApplyLeavesMockupAndWorldUntouched(t *testing.T) {
 		// Платформа за концом элемента.
 		{Op: OpPlace, Place: PlaceIntent{Element: eIDE2, From: 90, To: 150, Side: "right", Offset: 1.745, Width: 3, Height: 0.2, SlabThickness: 0.35}},
 		// Ветвление ровно на конце ребра.
-		{Op: OpBranch, Branch: BranchIntent{Edge: eIDE1, AtU: 100, Hand: "right"}},
+		{Op: OpBranch, Branch: BranchIntent{Edge: eIDE1, AtU: 100, Hand: "right", Drive: mapfmt.DriveManual}},
 		// Продление от стыка (не лист).
 		{Op: OpExtend, Extend: ExtendIntent{Port: eIDN1 + ".P1", Chain: mustChain(t, 10)}},
 		// Продление от порта стрелки.
@@ -614,7 +615,7 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	)
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
-		ID: eIDSWX, Name: "SWX", Kind: mapfmt.KindRail, Hand: "right",
+		ID: eIDSWX, Name: "SWX", Kind: mapfmt.KindRail, Hand: "right", Drive: mapfmt.DriveManual,
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{eIDSWX: {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
@@ -684,7 +685,7 @@ func TestEraseTurnoutCapsHangingEnd(t *testing.T) {
 	)
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
-		ID: eIDSWZ, Name: "SWZ", Kind: mapfmt.KindRail, Hand: "right",
+		ID: eIDSWZ, Name: "SWZ", Kind: mapfmt.KindRail, Hand: "right", Drive: mapfmt.DriveElectric,
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{eIDSWZ: {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
@@ -948,7 +949,7 @@ func TestCommitRequiresClosure(t *testing.T) {
 
 	s, d := rightTurnout(t)
 	if _, err := sess.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-		Edge: eIDE1, AtU: 50, Hand: "right", Straight: s, Diverging: d, Branch: mustChain(t, 40),
+		Edge: eIDE1, AtU: 50, Hand: "right", Drive: mapfmt.DriveManual, Straight: s, Diverging: d, Branch: mustChain(t, 40),
 	}}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -1001,7 +1002,7 @@ func TestConflictRejectedAtCommit(t *testing.T) {
 	// только на коммите, занятия участка вперёд нет.
 	s, d := rightTurnout(t)
 	if _, err := sB.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-		Edge: extID, AtU: 25, Hand: "right", Straight: s, Diverging: d, Branch: mustChain(t, 20),
+		Edge: extID, AtU: 25, Hand: "right", Drive: mapfmt.DriveManual, Straight: s, Diverging: d, Branch: mustChain(t, 20),
 	}}); err != nil {
 		t.Fatalf("apply B: %v", err)
 	}
@@ -1306,6 +1307,7 @@ func TestEditReproducibleWithInjectedSource(t *testing.T) {
 			Edge:      eIDE1,
 			AtU:       50,
 			Hand:      "right",
+			Drive:     mapfmt.DriveManual,
 			Straight:  s,
 			Diverging: d,
 			Branch:    mustChain(t, 40),

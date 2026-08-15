@@ -170,8 +170,13 @@ func renderBody(rg *RenderGeometry) ([]byte, error) {
 // writeDevice сериализует устройство для хеша: заголовок, порты, переходы.
 // Вынесено отдельно, потому что число портов и переходов не фиксировано и
 // правило записи должно быть в одном месте.
+// Drive входит в выжимку по тому же доводу, что Kind у элемента: переводной
+// механизм — факт О МОДЕЛИ, а не о её отрисовке. Стрелка, у которой ручной
+// перевод заменили электроприводом, ведёт себя иначе (её переводят иначе), и
+// клиент с горячим кэшем обязан узнать об этом сменой network_model_hash, а не
+// от того, что у неё изменилась картинка.
 func writeDevice(w io.Writer, d CompiledDevice) {
-	fmt.Fprintf(w, "dev|%s|%s|%s\n", d.ID, d.Hand, d.Resource)
+	fmt.Fprintf(w, "dev|%s|%s|%s|%s\n", d.ID, d.Hand, d.Drive, d.Resource)
 	for _, p := range d.Ports {
 		fmt.Fprintf(w, "dev.port|%s|%s\n", d.ID, p)
 	}

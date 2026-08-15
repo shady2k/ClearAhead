@@ -2,6 +2,7 @@ package track
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/units"
@@ -41,15 +42,27 @@ func HProfileFrom(prims []mapfmt.HPrim) (HProfile, error) {
 			}
 			p = append(p, HSegment{LengthU: l, Radius: 0})
 		case "arc":
-			// У дуги длина НЕ ЗАПИСАНА, а выводится: L = R·φ при φ в радианах.
+			// У дуги длина НЕ ЗАПИСАНА, а выводится: L = R·|φ| при φ в радианах.
 			// Так же её выводит клиент при тесселяции, и сходимость этих двух
 			// выводов он же и сторожит (world.gd, length_mismatch_m) — расхождение
 			// значило бы, что примитив понимается двумя сторонами по-разному.
+			//
+			// МОДУЛЬ УГЛА, И ЗДЕСЬ ОН БЫЛ ЗАБЫТ (найдено 2026-08-15 тестом
+			// проезда по боковому пути). Знак угла — это СТОРОНА поворота, а не
+			// направление отсчёта: geom.Arc берёт |φ| с самого начала. Без модуля
+			// у правой кривой длина звена выходила ОТРИЦАТЕЛЬНОЙ, а с ней и вся
+			// длина профиля, и первый же запрос радиуса на такой элемент падал
+			// отказом «смещение выходит за длину −33.210 м».
+			//
+			// Дефект дожил до этого дня потому, что физика ни разу не заезжала на
+			// правую кривую: единственная дуга на пути машины (E_MAIN) поворачивает
+			// влево, а боковой проход стрелки, куда её уводит переведённый остряк,
+			// до появления команды перевода был недостижим.
 			r, err := units.MetersToDistance(prim.Radius)
 			if err != nil {
 				return nil, fmt.Errorf("track: горизонтальный примитив[%d] arc radius: %w", i, err)
 			}
-			l, err := units.MetersToDistance(prim.Radius * prim.Angle)
+			l, err := units.MetersToDistance(prim.Radius * math.Abs(prim.Angle))
 			if err != nil {
 				return nil, fmt.Errorf("track: горизонтальный примитив[%d] arc length: %w", i, err)
 			}

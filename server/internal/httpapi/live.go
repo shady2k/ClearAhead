@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/engine"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/track"
@@ -56,6 +57,9 @@ type liveAPI struct {
 	// u вдоль карты. Перевод делает партия (match.States) — одна проекция на оба
 	// транспорта, канал и эту ручку.
 	net *track.CompiledNetwork
+	// set — набор контента. Нужен ПРОЕКЦИИ: длина машины живёт в паспорте, а по
+	// ней считается, откуда мерить расстояние до ближайшей стрелки.
+	set *content.Set
 }
 
 // NewLiveHandler собирает ручку живого состояния.
@@ -63,8 +67,8 @@ type liveAPI struct {
 // Принимает движок, а не партию, и это не удобство вызова: партию у движка
 // нельзя взять иначе как снимком, и обработчик, которому дали бы её напрямую,
 // имел бы способ прочитать состояние мимо замка.
-func NewLiveHandler(e *engine.Engine, net *track.CompiledNetwork) http.Handler {
-	return &liveAPI{e: e, net: net}
+func NewLiveHandler(e *engine.Engine, net *track.CompiledNetwork, set *content.Set) http.Handler {
+	return &liveAPI{e: e, net: net, set: set}
 }
 
 // wireLive — тело ответа.
@@ -107,7 +111,7 @@ func (a *liveAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Переменная названа placed, а не units: имя units занято ПАКЕТОМ единиц
 	// измерения, и локальная переменная затенила бы его ровно в том месте, где
 	// рядом стоит units.SimTime.
-	placed, err := snap.Match.States(a.net)
+	placed, err := snap.Match.States(a.net, a.set)
 	if err != nil {
 		http.Error(w, "состояние партии не проецируется на провод", http.StatusInternalServerError)
 		return

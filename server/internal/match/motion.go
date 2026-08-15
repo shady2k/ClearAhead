@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/shady2k/ClearAhead/server/internal/brake"
+	"github.com/shady2k/ClearAhead/server/internal/content"
 
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/track"
@@ -133,6 +134,11 @@ type UnitState struct {
 	// идёт к заданию своим темпом, и показывать одно вместо другого значило бы
 	// врать про то, чем машина тянет прямо сейчас.
 	Notch int `json:"notch"`
+	// Ahead — ближайшая стрелка ПО ХОДУ этой машины. Отсутствует, если впереди
+	// её нет: за упором, за краем карты и на пути без единого устройства
+	// показывать нечего, а пустая запись под видом стрелки была бы стрелкой,
+	// которой нет.
+	Ahead *AheadTurnout `json:"ahead,omitempty"`
 	// Air — ДАВЛЕНИЯ пневматики. Отсутствует у машины без тормозной магистрали:
 	// у неё их не существует, и нули под их видом были бы приборами, которые
 	// врут. Отдельно от Controls, потому что это СЛЕДСТВИЕ, а не орган:
@@ -145,7 +151,7 @@ type UnitState struct {
 // Порядок — порядок расстановки: он же порядок Units, и он устойчив между
 // снимками. Клиент опирается на идентификаторы, но человек, читающий два снимка
 // подряд, читает их глазами — и переставленные строки читались бы как движение.
-func (m Match) States(net *track.CompiledNetwork) ([]UnitState, error) {
+func (m Match) States(net *track.CompiledNetwork, set *content.Set) ([]UnitState, error) {
 	out := make([]UnitState, 0, len(m.Units))
 	for _, u := range m.Units {
 		st := UnitState{ID: u.ID, Name: u.Name, Type: u.Type, At: u.At}
@@ -161,6 +167,10 @@ func (m Match) States(net *track.CompiledNetwork) ([]UnitState, error) {
 			st.At = at
 			st.Speed = mo.Speed
 			st.Slipping = mo.Slipping
+			// Ближайшая стрелка по ходу — рядом с положением, а не отдельным
+			// ответом: пульту она нужна в тот же миг, что и место машины, и
+			// второй запрос за ней означал бы два разных мгновения на экране.
+			st.Ahead = m.NextTurnout(net, set, u)
 		}
 		if c, ok := m.ControlsOf(u.ID); ok {
 			cc := c

@@ -36,7 +36,7 @@ func frogConstruction() *mapfmt.Construction {
 }
 
 func sw1Right() mapfmt.Turnout {
-	return mapfmt.Turnout{ID: seedmap.StationSW1, Kind: mapfmt.KindRail, Hand: "right"}
+	return mapfmt.Turnout{ID: seedmap.StationSW1, Kind: mapfmt.KindRail, Hand: "right", Drive: mapfmt.DriveManual}
 }
 
 // frogNarrowTypeID — ручной тип колеи 1.0 (метка NARROW). UUID взят из таблицы

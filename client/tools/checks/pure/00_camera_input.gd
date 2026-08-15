@@ -131,6 +131,41 @@ func run() -> void:
 	_ok("машинист: у машины появляется подсказка", driver.prompt() != "",
 		"подсказка «%s»" % driver.prompt())
 
+	# ПРИВОД СТРЕЛКИ — второе, до чего человек дотягивается руками, и правило у
+	# него своё: досягаемость короче (STAND_REACH_M против BOARD_REACH_M), потому
+	# что стрелку берут за сам механизм, а не тянутся к посту на высоте кабины.
+	#
+	# Стрелка здесь собирается ФИКСТУРОЙ, а не берётся из сети: проверяется
+	# досягаемость и подсказка, а не разбор провода (его проверяет 48_turnout_drive).
+	var probe_drive := TrackBuild.TurnoutDrive.new()
+	probe_drive.owner = "SW_T"
+	probe_drive.label = "12"
+	probe_drive.drive = "manual"
+	probe_drive.pose = TrackGeom.AxisPoint.new(0.0, 0.0, 0.0, 0.0, 0.0)
+	var probe_stand := SwitchStand.build(probe_drive, 0.0)
+	ctx.tree.root.add_child(probe_stand)
+	probe_stand.global_position = Vector3(0.0, 0.0, -60.0)
+	driver.set_stands([probe_stand])
+	await ctx.tree.physics_frame
+	_ok("машинист: вдали от стрелки её не предлагают",
+		not driver.prompt().contains("перевести"), "подсказка «%s»" % driver.prompt())
+	_ok("машинист: вдали привод не выбран целью", driver.nearest_stand().is_empty())
+	probe_stand.global_position = driver.global_position + Vector3(0.0, 0.0, 2.0)
+	await ctx.tree.physics_frame
+	await ctx.tree.process_frame
+	_ok("машинист: у стрелки предлагают её перевести",
+		driver.prompt().contains("перевести"), "подсказка «%s»" % driver.prompt())
+	_ok("машинист: в подсказке названа именно эта стрелка",
+		driver.prompt().contains("12"), "подсказка «%s»" % driver.prompt())
+	_ok("машинист: цель клавиши — тот же привод",
+		not driver.nearest_stand().is_empty()
+		and (driver.nearest_stand()["stand"] as SwitchStand).owner_id == "SW_T")
+	# Убираем привод, иначе его подсказка мешается посадке ниже: две строки в
+	# одной подсказке законны, но проверка посадки ищет свою.
+	driver.set_stands([])
+	probe_stand.queue_free()
+	await ctx.tree.physics_frame
+
 	await _feed(_key(KEY_E))
 	_ok("машинист: у машины E сажает в кабину", driver.is_boarded())
 	# Пол кабины — не земля: сев, человек обязан оказаться ТАМ, где объявлен пост.

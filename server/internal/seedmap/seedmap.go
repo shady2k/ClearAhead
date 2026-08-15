@@ -283,7 +283,8 @@ func Station(opts ...Option) *mapfmt.Map {
 				{ID: StationStopStubNode, Name: "N_STOP_STUB", Ports: []mapfmt.Port{{ID: "P1", Purpose: "buffer_stop"}}},
 			},
 			Turnouts: []mapfmt.Turnout{
-				turnout(StationSW1, "SW1"), turnout(StationSW2, "SW2"),
+				turnout(StationSW1, "SW1", mapfmt.DriveManual),
+				turnout(StationSW2, "SW2", mapfmt.DriveElectric),
 			},
 			Edges: []mapfmt.Edge{
 				edge(StationApproach, "E_APPROACH", StationBoundaryNode+".P1", StationSW1+".C"),
@@ -512,13 +513,17 @@ func bufferStop(id, name, element string, atU float64) mapfmt.Structure {
 	}
 }
 
-func turnout(id, name string) mapfmt.Turnout {
+// turnout — стрелка затравки. Механизм ПАРАМЕТРОМ, а не константой: затравка
+// повторяет карту ST_A, а там первая стрелка ручная, вторая с электроприводом,
+// и ровно на этой паре проверяется, что перевод различает их.
+func turnout(id, name, drive string) mapfmt.Turnout {
 	return mapfmt.Turnout{
 		ID:    id,
 		Name:  name,
 		Kind:  mapfmt.KindRail,
 		Hand:  "right",
 		Frog:  "1/9",
+		Drive: drive,
 		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	}
 }

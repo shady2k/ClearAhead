@@ -94,8 +94,17 @@ type Traversal struct {
 // форма оказалась бы неверной (map-format-design §8).
 type CompiledDevice struct {
 	ID string
+	// Name — читаемая метка устройства. Тождеством не является: её показывают
+	// человеку — в отказе, в пульте и на табличке у самой стрелки.
+	Name string
 	// Hand — рукость. Свойство стрелки; у устройства без ветвления пусто.
-	Hand       string
+	Hand string
+	// Drive — переводной механизм: mapfmt.DriveManual или DriveElectric.
+	//
+	// Живёт в СКОМПИЛИРОВАННОЙ сети, а не только в геометрии показа, потому что
+	// его спрашивает не рисование, а игра: команда перевода отвечает по нему,
+	// чем именно стрелку переводят, и партия отдаёт его клиенту в снапшоте.
+	Drive      string
 	Ports      []string
 	Traversals []Traversal
 	Resource   string
@@ -269,9 +278,45 @@ type RenderGeometry struct {
 	// не прогонами, потому что проходы стрелок прогонами НЕ покрываются по самой
 	// спеке, и потому что брус лежит поперёк ПРЯМОГО пути — ориентации, которой у
 	// прогона нет (разбор — в шапке timbers.go).
-	TurnoutGrids       []RenderTurnoutGrid `json:"turnout_grids"`
-	Features           []RenderFeature     `json:"features"`
-	PlacementAlgorithm string              `json:"placement_algorithm"`
+	TurnoutGrids []RenderTurnoutGrid `json:"turnout_grids"`
+	// TurnoutDrives — переводные механизмы: где у стрелки станина привода с
+	// указателем и табличкой и какого она вида. Отдельным списком по той же
+	// причине, что решётка: это принадлежность УСТРОЙСТВА, а не элемента, и у
+	// одного устройства он один на оба прохода.
+	TurnoutDrives      []RenderTurnoutDrive `json:"turnout_drives"`
+	Features           []RenderFeature      `json:"features"`
+	PlacementAlgorithm string               `json:"placement_algorithm"`
+}
+
+// RenderTurnoutDrive — переводной механизм одной стрелки.
+//
+// Адресуется ТАК ЖЕ, КАК БРУС: опорная линия — прямой проход, U вдоль неё,
+// Offset по её левой нормали. Одна система адресации на всё устройство —
+// клиенту не приходится держать вторую.
+//
+// Отметки z здесь нет намеренно: её берут у элемента адреса — так же, как у
+// крестовины. Присланная отдельно, она стала бы вторым источником истины о
+// высоте одной и той же точки.
+//
+// РАЗМЕРОВ ТЕЛА ЗДЕСЬ ТОЖЕ НЕТ, и это граница владения, а не забывчивость:
+// станина, противовес, щиток указателя и щиток таблички — рисунок клиента, пока
+// у привода нет ассета (разбор — в шапке drive.go).
+type RenderTurnoutDrive struct {
+	Owner string `json:"owner"`
+	// Name — метка стрелки: ровно то, что написано у неё на табличке. Едет
+	// здесь, а не собирается клиентом из имени элемента: табличка принадлежит
+	// приводу, и склейка из двух мест разошлась бы у первого же устройства, у
+	// которого проходы названы иначе, чем оно само.
+	Name string `json:"name,omitempty"`
+	// Drive — вид механизма: "manual" | "electric" (mapfmt.DriveManual и
+	// DriveElectric). Клиент рисует по нему разные тела, а игра — разный способ
+	// перевода.
+	Drive   string  `json:"drive"`
+	Element string  `json:"element"`
+	U       float64 `json:"u"`
+	// Offset — вынос станины от оси прямого прохода по его левой нормали. Знак
+	// значим: он и есть сторона, с которой стоит привод.
+	Offset float64 `json:"offset"`
 }
 
 // RenderTurnoutGrid — брусья одной стрелки. Все они лежат на осевой линии
@@ -505,6 +550,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		TrackTypes:         []RenderTrackType{},
 		ConstructionRuns:   []RenderRun{},
 		TurnoutGrids:       []RenderTurnoutGrid{},
+		TurnoutDrives:      []RenderTurnoutDrive{},
 		Features:           []RenderFeature{},
 		PlacementAlgorithm: PlacementAlgorithm,
 	}
@@ -570,7 +616,9 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		}
 		cn.Devices[t.ID] = CompiledDevice{
 			ID:         t.ID,
+			Name:       t.Name,
 			Hand:       t.Hand,
+			Drive:      t.Drive,
 			Ports:      t.PortIDs(),
 			Traversals: tr,
 			Resource:   "RES_" + t.ID,
@@ -590,6 +638,11 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 	// вместо: крестовина отвечает на вопрос «где точка», брусья — «на чём лежит
 	// путь», и одно другого не заменяет.
 	if err := buildTurnoutGrids(m, els, rg); err != nil {
+		return nil, nil, err
+	}
+	// Привод — там же, где решётка, и по тем же правилам адресации. После неё, а
+	// не вместо: решётка говорит, на чём лежит путь, привод — чем его переводят.
+	if err := buildTurnoutDrives(m, els, rg); err != nil {
 		return nil, nil, err
 	}
 

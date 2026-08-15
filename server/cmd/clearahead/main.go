@@ -321,7 +321,7 @@ func main() {
 		// принимает тот, кто собирает сервер, а не тот, кто отдаёт байты.
 		httpapi.NewChunksHandler(world, lazy),
 		httpapi.NewObjectsHandler(store),
-		httpapi.NewLiveHandler(sim, st.Network),
+		httpapi.NewLiveHandler(sim, st.Network, set),
 		// КАНАЛ КОМАНД: один сокет, JSON-RPC 2.0 в обе стороны (ClearAhead-wa51).
 		// Источник идентификаторов — системный: предсказуемая
 		// последовательность нужна тестам, а боевой сессии нужна

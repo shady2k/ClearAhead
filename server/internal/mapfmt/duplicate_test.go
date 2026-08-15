@@ -58,8 +58,8 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 	// Порты второй стрелки названы иначе даже при одинаковом ID: одинаковые
 	// имена дали бы повтор квалифицированного порта, и карта умерла бы раньше.
 	turnouts := []Turnout{
-		{ID: id1, Name: "SW1", Kind: KindRail, Hand: "right", Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-		{ID: id2, Name: "SW2", Kind: KindRail, Hand: "left", Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
+		{ID: id1, Name: "SW1", Kind: KindRail, Hand: "right", Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+		{ID: id2, Name: "SW2", Kind: KindRail, Hand: "left", Drive: DriveElectric, Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
 	}
 
 	// Идентификаторы шести рёбер — по одному на порт узла PA..PF, метки EA..EF.

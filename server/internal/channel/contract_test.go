@@ -97,13 +97,18 @@ func station(t *testing.T) *track.CompiledNetwork {
 	return cn
 }
 
-func dial(t *testing.T) *talk {
+func dial(t *testing.T) *talk { return dialMatch(t, testMatch()) }
+
+// dialMatch — то же соединение, но с ЗАДАННОЙ партией: занятость стрелки
+// проверяется на машине, стоящей на устройстве, а фикстура по умолчанию ставит
+// её на главный путь.
+func dialMatch(t *testing.T, m *match.Match) *talk {
 	t.Helper()
 	doc, err := contract.Load(contractPath())
 	if err != nil {
 		t.Fatalf("договор не читается: %v", err)
 	}
-	e := engine.New(testMatch(), nil)
+	e := engine.New(m, nil)
 	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t), station(t)))
 	t.Cleanup(srv.Close)
 
@@ -368,7 +373,12 @@ func TestServerConstantsMatchContract(t *testing.T) {
 		protocol.ReasonNoControls,
 		protocol.ReasonNotchOutOfRange,
 		protocol.ReasonUnknownReverser,
+		protocol.ReasonUnknownHandle,
 		protocol.ReasonTractionWithoutReverser,
+		// Причины команды перевода стрелки (ClearAhead-duf).
+		protocol.ReasonUnknownTurnout,
+		protocol.ReasonUnknownTurnoutPosition,
+		protocol.ReasonTurnoutOccupied,
 	}
 	for _, r := range reasons {
 		if !slicesContains(doc.RefusalReasons, r) {
@@ -386,6 +396,9 @@ func TestServerConstantsMatchContract(t *testing.T) {
 	// зарегистрирована: разойдись они, и клиент звал бы метод, которого нет.
 	if _, ok := doc.Methods[channel.MethodSetControls]; !ok {
 		t.Fatalf("договор не объявляет команду %s: %v", channel.MethodSetControls, doc.Methods)
+	}
+	if _, ok := doc.Methods[channel.MethodSetTurnout]; !ok {
+		t.Fatalf("договор не объявляет команду %s: %v", channel.MethodSetTurnout, doc.Methods)
 	}
 }
 
@@ -580,5 +593,147 @@ func TestControlsRefusalMatchesContract(t *testing.T) {
 	// Проверяется тем, что число ступени в партии осталось нулевым.
 	if got, _ := c.e.Snapshot().Match.ControlsOf(loco1ID); got != match.Stopped() {
 		t.Fatalf("после отказа в партии %+v", got)
+	}
+}
+
+// TestTurnoutCommandOverSocketMatchesContract — ВТОРАЯ ДОМЕННАЯ КОМАНДА через
+// настоящий сокет: перевод стрелки от кадра до снапшота.
+//
+// Проверяется то же, что у кабины, и ровно потому же: порознь дорога проверена,
+// вместе — нет. Плюс одно своё: положение стрелки обязано попасть в снапшот
+// НЕМЕДЛЕННО, а не секундным биением. Это четвёртый по счёту случай, когда
+// состояние забывали положить в канонический хеш (engine.StateHash), и здесь он
+// закрыт замком, а не памятью.
+func TestTurnoutCommandOverSocketMatchesContract(t *testing.T) {
+	c := dial(t)
+	if r := c.hello(`{"protocol_version":1}`); r.Error != nil {
+		t.Fatalf("рукопожатие отказало: %+v", r.Error)
+	}
+	stop := make(chan struct{})
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.e.Step()
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+	defer func() { close(stop); <-ticked }()
+
+	c.send(`{"jsonrpc":"2.0","id":2,"method":"` + channel.MethodSetTurnout +
+		`","params":{"command_id":"t1","turnout":"` + seedmap.StationSW1 +
+		`","position":"diverging"}}`)
+
+	r, n := readReplyAndSnapshot(c)
+	if r.Error != nil {
+		t.Fatalf("команда отказала: %+v", r.Error)
+	}
+	c.validate(c.doc.Methods[channel.MethodSetTurnout].Result, r.Result)
+	if n.Method != channel.SnapshotMethod {
+		t.Fatalf("после команды пришло %q", n.Method)
+	}
+	c.validate(c.doc.Notifications[channel.SnapshotMethod].Params, n.Params)
+	var env struct {
+		Time     units.SimTime `json:"time"`
+		Turnouts []struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			Position string `json:"position"`
+			Drive    string `json:"drive"`
+		} `json:"turnouts"`
+	}
+	if err := json.Unmarshal(n.Params, &env); err != nil {
+		t.Fatalf("конверт не разбирается: %v", err)
+	}
+	if env.Time >= channel.MaxSnapshotAge {
+		t.Fatalf("снапшот пришёл в %s — не раньше срока биения %s", env.Time, channel.MaxSnapshotAge)
+	}
+	// Стрелок в конверте столько же, сколько на станции: список полный, а не
+	// «те, кого трогали».
+	if len(env.Turnouts) != 2 {
+		t.Fatalf("в снапшоте %d стрелок, на станции 2: %s", len(env.Turnouts), n.Params)
+	}
+	var moved, other string
+	drives := map[string]string{}
+	for _, sw := range env.Turnouts {
+		drives[sw.ID] = sw.Drive
+		if sw.ID == seedmap.StationSW1 {
+			moved = sw.Position
+		} else {
+			other = sw.Position
+		}
+	}
+	if moved != "diverging" {
+		t.Fatalf("переведённая стрелка стоит %q, а команда просила diverging", moved)
+	}
+	if other != "straight" {
+		t.Fatalf("нетронутая стрелка стоит %q — команда задела чужой остряк", other)
+	}
+	// Механизм едет вместе с положением: пульт узнаёт вид стрелки из снапшота, а
+	// не вторым запросом за геометрией.
+	if drives[seedmap.StationSW1] != mapfmt.DriveManual || drives[seedmap.StationSW2] != mapfmt.DriveElectric {
+		t.Fatalf("механизмы приехали как %v, а на станции ручная SW1 и электрическая SW2", drives)
+	}
+}
+
+// TestTurnoutUnderTrainIsRefused — под составом стрелка не переводится, и отказ
+// называет ДЕРЖАТЕЛЯ.
+//
+// Локомотив ставится точкой отсчёта на прямой проход SW1 — то есть на само
+// устройство. Отказ обязан прийти доменной причиной, а не внутренней ошибкой:
+// клиент показывает игроку, кто держит стрелку, и держатель для этого едет в
+// held_by.
+func TestTurnoutUnderTrainIsRefused(t *testing.T) {
+	m := testMatch()
+	// Единица переставляется НА ПРОХОД устройства. Расстановка при этом остаётся
+	// документом: состояние физики (Motions) — то, что читает занятость.
+	passage := seedmap.StationSW1 + mapfmt.PassageStraight
+	m.Units[0].At = netloc.PointU{Element: passage, U: 10, Direction: netloc.DirForward}
+	m.Motions = map[string]match.Motion{loco1ID: {Element: passage, S: 10 * units.Meter, Facing: netloc.DirForward}}
+	c := dialMatch(t, m)
+	if r := c.hello(`{"protocol_version":1}`); r.Error != nil {
+		t.Fatalf("рукопожатие отказало: %+v", r.Error)
+	}
+	stop := make(chan struct{})
+	ticked := make(chan struct{})
+	go func() {
+		defer close(ticked)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				c.e.Step()
+				time.Sleep(2 * time.Millisecond)
+			}
+		}
+	}()
+	defer func() { close(stop); <-ticked }()
+
+	c.send(`{"jsonrpc":"2.0","id":2,"method":"` + channel.MethodSetTurnout +
+		`","params":{"command_id":"t2","turnout":"` + seedmap.StationSW1 +
+		`","position":"diverging"}}`)
+	var r wireReply
+	decodeStrict(t, c.read(), &r)
+	if r.Error == nil {
+		t.Fatalf("стрелка под составом переведена: %s", r.Result)
+	}
+	var ref struct {
+		Reason string `json:"reason"`
+		HeldBy string `json:"held_by"`
+	}
+	if err := json.Unmarshal(r.Error.Data, &ref); err != nil {
+		t.Fatalf("причина отказа не разбирается: %v (%s)", err, r.Error.Data)
+	}
+	if ref.Reason != protocol.ReasonTurnoutOccupied {
+		t.Fatalf("причина отказа %q, ожидалась %q", ref.Reason, protocol.ReasonTurnoutOccupied)
+	}
+	if ref.HeldBy != loco1ID {
+		t.Fatalf("держатель %q, а стрелку занимает %q", ref.HeldBy, loco1ID)
 	}
 }

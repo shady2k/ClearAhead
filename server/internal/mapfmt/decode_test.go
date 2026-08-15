@@ -12,7 +12,7 @@ import (
 // её не смотрит: разбор проверяет ФОРМУ, а не смысл, и тест про форму не
 // должен падать от правил связности.
 const minimalMap = `{
-  "format_version": 6,
+  "format_version": 7,
   "map_id": "T",
   "map_revision": 1,
   "anchors": { "01a3185c-5001-7242-8242-000000424242.P1": { "x": 0, "y": 0, "z": 0, "heading": 0 } },
@@ -47,8 +47,8 @@ func TestDecodeRejects(t *testing.T) {
 		// pending родителя обязан сброситься, иначе ключ принимается за значение.
 		{"дубликат ключа после вложенного объекта", `{"a":{"b":1},"a":2}`, "дублирующийся ключ"},
 		{"не объект", `"x"`, "объект"},
-		{"неизвестное поле", `{"format_version": 6,"nope":1}`, "неизвестн"},
-		{"не число", `{"format_version": 6,"map_revision":1,"map_id":"T",
+		{"неизвестное поле", `{"format_version": 7,"nope":1}`, "неизвестн"},
+		{"не число", `{"format_version": 7,"map_revision":1,"map_id":"T",
 			"anchors":{"N1.P1":{"x":1e400,"y":0,"z":0,"heading":0}},
 			"topology":{"nodes":[],"turnouts":[],"edges":[],"structures":[]},
 			"geometry":{"turnouts":{},"edges":{}}}`, ""},
