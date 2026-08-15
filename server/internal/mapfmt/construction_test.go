@@ -322,3 +322,46 @@ func TestBufferStopNeedsDimensionsAndDeclaredDeadEnd(t *testing.T) {
 	}
 	rejectsConstruction(t, seedmap.Station(seedmap.WithStructure(noSize)), "height")
 }
+
+// ПЕРЕВОДНЫЕ БРУСЬЯ (§4, уровень 3). Блок необязателен у типа обычного пути и
+// обязателен у типа, на который ссылается стрелка: run'ами проходы устройства
+// не покрываются, и эпюру решётки под ним взять больше неоткуда.
+//
+// Отказы заведены вместе с ClearAhead-7kv, где цена молчаливого умолчания
+// измерена: 133.42 м из 593.42 (22.5 %) пути стояли без единой шпалы при карте,
+// проходившей вход целиком.
+func TestTurnoutTypeWithoutTimberIsRejected(t *testing.T) {
+	rejectsConstruction(t,
+		seedmap.Station(withType(func(tt *mapfmt.TrackType) { tt.Timber = nil })),
+		"нет блока timber")
+}
+
+func TestTimberOutOfRangeIsRejected(t *testing.T) {
+	cases := []struct {
+		name   string
+		edit   func(*mapfmt.TrackTimber)
+		reason string
+	}{
+		{"шаг ноль", func(tb *mapfmt.TrackTimber) { tb.Pitch = 0 }, "timber.pitch"},
+		{"шаг миллиметровый", func(tb *mapfmt.TrackTimber) { tb.Pitch = 0.001 }, "timber.pitch"},
+		{"комплект ноль", func(tb *mapfmt.TrackTimber) { tb.LengthMax = 0 }, "timber.length_max"},
+		{"брус без ширины", func(tb *mapfmt.TrackTimber) { tb.Width = 0 }, "timber.width"},
+		{"брус без высоты", func(tb *mapfmt.TrackTimber) { tb.Height = 0 }, "timber.height"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t,
+				seedmap.Station(withType(func(tt *mapfmt.TrackType) { c.edit(tt.Timber) })),
+				c.reason)
+		})
+	}
+}
+
+// Брус несёт ОБА пути и короче шпалы одного из них быть не может. Отдельным
+// отказом, а не диапазоном: 2.0 м законны и для бруса, и для шпалы порознь, и
+// общий диапазон на этой описке промолчал бы.
+func TestTimberShorterThanSleeperIsRejected(t *testing.T) {
+	rejectsConstruction(t,
+		seedmap.Station(withType(func(tt *mapfmt.TrackType) { tt.Timber.LengthMax = 2.5 })),
+		"короче sleeper.length")
+}

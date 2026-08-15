@@ -1431,6 +1431,26 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	st["sleeper_runs"] = sl["runs"]
 	st["sleepers_skipped"] = sl["skipped"]
 
+	# 3а. Переводные брусья — решётка УСТРОЙСТВ (render-contract §4, уровень 3).
+	#     Отдельным узлом, а не в общий меш шпал, и это не порядок ради порядка:
+	#     решётки у них разные по происхождению (прогон против устройства), и
+	#     панель обязана называть их порознь — иначе «шпал 768» снова скроет, что
+	#     под стрелками нет ни одной (ClearAhead-7kv: 22.5 % пути без решётки при
+	#     зелёном прогоне и честном на вид числе).
+	#     Материал ТОТ ЖЕ: брус деревянный, как и шпала, и разный вид у них
+	#     означал бы разный материал, которого контракт не присылал.
+	var tb := TrackBuild.timbers(network, by_id)
+	var timbers: Array[TrackBuild.Sleeper] = tb["list"]
+	var timber_mi := MeshInstance3D.new()
+	timber_mi.name = "Timbers"
+	timber_mi.mesh = TrackView.sleeper_mesh(timbers)
+	if timber_mi.mesh != null:
+		timber_mi.material_override = TrackView.sleeper_material()
+		node.add_child(timber_mi)
+	st["timbers_drawn"] = timbers.size()
+	st["timber_grids"] = tb["grids"]
+	st["timbers_skipped"] = tb["skipped"]
+
 	# 4. Рельсы. Телом — объявленным упрощением (прямоугольник head_width ×
 	#    rail.height, внутренней гранью на ±gauge/2), если ширина головки
 	#    прислана. Символической ниткой в один пиксель, если нет: ширина нитки
@@ -2759,6 +2779,19 @@ func _hud_text() -> String:
 		l.append("  платформ %d (плитой %d), упоров %d, крестовин %d, стрелок %d" % [
 			stats.get("platforms_drawn", 0), stats.get("platform_slabs_drawn", 0),
 			stats.get("buffer_stops_drawn", 0), stats.get("frogs_drawn", 0), stats.get("devices", 0)])
+		# Брусья ОТДЕЛЬНОЙ СТРОКОЙ от шпал, и это не оформление: они разного
+		# происхождения (устройство против прогона), и слитое число снова скрыло бы
+		# стрелку без единого бруса — ровно так дефект и жил (ClearAhead-7kv).
+		var grids: Array = stats.get("timber_grids", []) as Array
+		if not grids.is_empty():
+			var lo := INF
+			var hi := -INF
+			for g_raw in grids:
+				var g: Dictionary = g_raw
+				lo = minf(lo, float(g["length_min"]))
+				hi = maxf(hi, float(g["length_max"]))
+			l.append("  переводных брусьев %d на %d решётках устройств, длина %.2f…%.2f м" % [
+				stats.get("timbers_drawn", 0), grids.size(), lo, hi])
 		if int(stats.get("elements_width_from_device_type", 0)) > 0:
 			l.append("  из них %d ветви стрелок: размеры по role.type, run'ами они не покрыты" % [
 				stats.get("elements_width_from_device_type", 0)])
@@ -2833,7 +2866,9 @@ func _hud_text() -> String:
 		l.append("  оно идёт тиком сервера и приходит каналом (строка ниже).[/i]")
 	else:
 		l.append("[i]подвижного состава в партии нет — это законный мир, а не отказ[/i]")
-	l.append("[i]не рисуется: решётка стрелки (переводные брусья) — не отдаётся вовсе.[/i]")
+	# СТРОКА «решётка стрелки не отдаётся вовсе» СНЯТА 2026-08-15 вместе с
+	# ClearAhead-7kv: она была правдой ровно до того дня, а комментарий или
+	# подпись, пережившие свой код, — та же ложь, что неверное число.
 	l.append("[i]русло врезано в ВЫСОТЫ: берег и долина приехали отсчётами чанка и")
 	l.append("не стоили ни одного лишнего байта. Лентой рисуется только гладь.[/i]")
 	l.append("[i]круги уровней вложены, и в точке ПОКАЗАН ровно один: узлы связаны")
@@ -2899,6 +2934,7 @@ func _print_report() -> void:
 			"structures_received", "features_received", "runs_received", "track_types_received",
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",
+			"timbers_drawn", "timber_grids", "timbers_skipped",
 			"sleepers_skipped", "rail_bodies_drawn", "railheads_drawn",
 			"rail_threads_drawn", "rail_spans_drawn",
 			"trees_drawn", "trees_conifer", "trees_broadleaf", "bushes_drawn",

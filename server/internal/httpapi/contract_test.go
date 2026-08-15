@@ -35,14 +35,36 @@ import (
 // ответ, и различитель заводится ЗАРАНЕЕ — поле в персистентных данных дешевле
 // всего добавить вслепую и дороже всего мигрировать (разбор в mapfmt.KindRail).
 type wireNetwork struct {
-	Region             string          `json:"region"`
-	Revision           int             `json:"revision"`
-	Elements           []wireElement   `json:"elements"`
-	Structures         []wireStructure `json:"structures"`
-	TrackTypes         []wireTrackType `json:"track_types"`
-	ConstructionRuns   []wireRun       `json:"construction_runs"`
-	Features           []wireFeature   `json:"features"`
-	PlacementAlgorithm string          `json:"placement_algorithm"`
+	Region             string            `json:"region"`
+	Revision           int               `json:"revision"`
+	Elements           []wireElement     `json:"elements"`
+	Structures         []wireStructure   `json:"structures"`
+	TrackTypes         []wireTrackType   `json:"track_types"`
+	ConstructionRuns   []wireRun         `json:"construction_runs"`
+	TurnoutGrids       []wireTurnoutGrid `json:"turnout_grids"`
+	Features           []wireFeature     `json:"features"`
+	PlacementAlgorithm string            `json:"placement_algorithm"`
+}
+
+// wireTurnoutGrid — решётка устройства: уровень 3 спеки §4, приехавший вместе с
+// ClearAhead-7kv. Отдельным списком, а не run'ами: проходы стрелок run'ами не
+// покрываются по самой спеке, а брус лежит поперёк ПРЯМОГО пути — ориентации,
+// которой у run нет.
+type wireTurnoutGrid struct {
+	Owner   string       `json:"owner"`
+	Element string       `json:"element"`
+	Type    string       `json:"type"`
+	Width   float64      `json:"width"`
+	Height  float64      `json:"height"`
+	Timbers []wireTimber `json:"timbers"`
+}
+
+// wireTimber — один брус. Длина СВОЯ у каждого, offset — смещение центра от оси
+// прямого прохода по левой нормали.
+type wireTimber struct {
+	U      float64 `json:"u"`
+	Length float64 `json:"length"`
+	Offset float64 `json:"offset"`
 }
 
 type wireTrackType struct {

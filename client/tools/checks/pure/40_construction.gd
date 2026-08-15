@@ -78,6 +78,87 @@ func run() -> void:
 			uncovered.append(el.id)
 	_ok("непокрытые элементы названы и остались нитью", true, str(uncovered))
 
+	# ПЕРЕВОДНЫЕ БРУСЬЯ — решётка УСТРОЙСТВ (render-contract §4, уровень 3).
+	#
+	# Проверка заведена вместе с ClearAhead-7kv и меряет ровно то, чем бида была
+	# найдена: СКОЛЬКО МЕТРОВ ПУТИ СТОИТ БЕЗ РЕШЁТКИ. Замер того дня — 133.42 м из
+	# 593.42 (22.5 %), и все они приходились на проходы стрелок: прогонами они не
+	# покрываются по самой спеке, а решётки устройства тогда не существовало.
+	#
+	# Считается по ЭЛЕМЕНТАМ, а не по числу брусьев: «брусьев 134» не отличает
+	# решётку под обеими стрелками от двух решёток под одной. Метры отличают.
+	var tb := TrackBuild.timbers(network, by_id)
+	var timbers: Array[TrackBuild.Sleeper] = tb["list"]
+	_ok("решётка устройств ничего не пропустила", (tb["skipped"] as Array).is_empty(), str(tb["skipped"]))
+
+	# Решётка устройства накрывает ОБА его прохода разом — она одна на перевод, и
+	# брусья лежат под боковым путём тоже. Поэтому покрытым считается владелец, а
+	# не элемент, названный полем element.
+	var gridded := {}
+	for g_raw in (tb["grids"] as Array):
+		var g: Dictionary = g_raw
+		gridded[String(g["owner"])] = true
+	# СЧИТАЕТСЯ ПОКРЫТИЕ ПРОГОНАМИ, А НЕ `covered` ВЫШЕ, и разница здесь решающая.
+	# `covered` — это участки, у которых есть РАЗМЕРЫ, а ветви стрелок получают их
+	# через role.type (правка 2026-08-12): балласт и рельсы у них были и до этой
+	# биды, шпал не было. Проверка по `covered` показала бы 0.00 м без решётки в
+	# тот самый день, когда её не было на 133.42 м, — то есть подтвердила бы
+	# ровно тот дефект, который ловит.
+	var run_cover := {}
+	for r_raw in (network.get("construction_runs", []) as Array):
+		for sp_raw in TrackBuild.spans_of_run(r_raw as Dictionary):
+			var sp: Dictionary = sp_raw
+			var eid := String(sp["element"])
+			run_cover[eid] = float(run_cover.get(eid, 0.0)) + float(sp["length"])
+	var bare_m := 0.0
+	var total_m := 0.0
+	var bare_ids: Array[String] = []
+	for el in elements:
+		total_m += el.length_m
+		# Проход устройства зовётся «<владелец>:straight» либо «:diverging».
+		if gridded.has(el.id.get_slice(":", 0)):
+			continue
+		var bare := el.length_m - minf(float(run_cover.get(el.id, 0.0)), el.length_m)
+		if bare > 1e-6:
+			bare_m += bare
+			bare_ids.append("%s %.2f м" % [el.id.substr(0, 8), bare])
+	_ok("пути без решётки не осталось", bare_m < 1e-6,
+		"%.2f м из %.2f м (%.1f %%): %s" % [bare_m, total_m,
+			100.0 * bare_m / maxf(total_m, 1e-9), str(bare_ids)])
+
+	# ДЛИНА БРУСА РАСТЁТ К ХВОСТУ И НЕ ПРЕВОСХОДИТ КОМПЛЕКТА. Это и есть то
+	# единственное, чем брус отличается от шпалы, и проверять его надо не тем
+	# кодом, который его считает: здесь сверяется ПОРЯДОК длин, а не сами длины.
+	for g_raw in (tb["grids"] as Array):
+		var g: Dictionary = g_raw
+		var own: Array[TrackBuild.Sleeper] = []
+		for t in timbers:
+			if t.run_id == String(g["owner"]):
+				own.append(t)
+		var falls := 0
+		for n in range(1, own.size()):
+			# Не строгое возрастание: у длиннейших брусьев комплект упирается в
+			# предел, и дальше длина стоит. Падать она не вправе никогда.
+			if own[n].length_m < own[n - 1].length_m - 1e-9:
+				falls += 1
+		var tt: Dictionary = types.get(String(g["type"]), {}) as Dictionary
+		_ok("решётка %s: длина бруса не убывает к хвосту" % String(g["owner"]).substr(0, 8),
+			falls == 0, "брусьев %d, длина %.2f…%.2f м, падений %d" % [
+				own.size(), float(g["length_min"]), float(g["length_max"]), falls])
+		# УПОР В КОМПЛЕКТ (length_max) ЗДЕСЬ НЕ ПРОВЕРЯЕТСЯ, и это решение, а не
+		# пропуск: числа комплекта в проводе нет — предел применяет сервер, а
+		# клиенту для рисования он не нужен. Проверка «не длиннее комплекта» на
+		# клиенте сверялась бы с бесконечностью и не могла бы покраснеть, то есть
+		# была бы украшением. Она стоит там, где число известно:
+		# track.TestTimberLengthStopsAtSetLimit.
+		#
+		# Первый брус — там, где пути ещё совпадают, значит он ровно шпальной
+		# длины. Число независимое: приходит из sleeper.length того же типа.
+		var slp: Dictionary = tt.get("sleeper", {}) as Dictionary
+		_ok("решётка %s: у носка брус длиной со шпалу" % String(g["owner"]).substr(0, 8),
+			absf(float(g["length_min"]) - float(slp.get("length", -1.0))) < 1e-9,
+			"%.3f м против sleeper.length %.3f м" % [float(g["length_min"]), float(slp.get("length", -1.0))])
+
 	# ШПАЛА ЛЕЖИТ НА ПРИЗМЕ, А НЕ НА ОТМЕТКЕ ОСИ. Датум z — поверхность катания
 	# (контракт редакции 6 §2), значит верх шпалы ровно на высоту рельса ниже.
 	if not sleepers.is_empty():

@@ -322,6 +322,91 @@ static func sleepers(network: Dictionary, by_id: Dictionary) -> Dictionary:
 	return {"list": list, "runs": runs, "skipped": skipped}
 
 
+## timbers — РЕШЁТКА УСТРОЙСТВ: переводные брусья стрелок.
+##
+## Возвращает то же, что sleepers: {"list": Array[Sleeper], "grids": Array,
+## "skipped": …}. Один тип на выходе не для экономии — брус И ЕСТЬ шпала для
+## всего, что ниже: он так же лежит поперёк, так же на высоту рельса ниже оси и
+## так же рисуется коробкой. Различаются они ровно двумя вещами, и обе приезжают
+## числом: длина СВОЯ у каждого бруса и центр смещён с оси.
+##
+## КЛИЕНТ НЕ ВЫВОДИТ ЗДЕСЬ НИЧЕГО. Ни длины, ни числа брусьев, ни того, где
+## кончается комплект, — всё это посчитал сервер (track/timbers.go), потому что
+## два клиента, независимо выводящие решётку из топологии, дадут два разных
+## ответа. Снесённый спайк выводил её сам, и это записано дырой Д8 его разбора.
+##
+## ОПОРНАЯ ЛИНИЯ ОДНА НА УСТРОЙСТВО — осевая ПРЯМОГО прохода, её называет поле
+## element. Отсюда и берётся то, ради чего решётка отдана устройству: брусья
+## лежат поперёк прямого пути, а не поперёк своей ветви, и под боковым путём
+## тоже. Ставь их прогоном по ветви — и они развернулись бы вслед за ней.
+static func timbers(network: Dictionary, by_id: Dictionary) -> Dictionary:
+	var types := types_by_id(network)
+	var list: Array[Sleeper] = []
+	var grids: Array = []
+	var skipped: Array[String] = []
+
+	for g_raw in (network.get("turnout_grids", []) as Array):
+		var grid: Dictionary = g_raw as Dictionary
+		var owner_id := String(grid.get("owner", ""))
+		var element_id := String(grid.get("element", ""))
+		if not by_id.has(element_id):
+			skipped.append("решётка %s: элемент %s не пришёл" % [owner_id, element_id])
+			continue
+		var type_id := String(grid.get("type", ""))
+		if not types.has(type_id):
+			skipped.append("решётка %s: тип «%s» в track_types не пришёл" % [owner_id, type_id])
+			continue
+		# Высота рельса — из ТИПА УСТРОЙСТВА, а не из типа примыкающего пути:
+		# брус лежит в вертикальном стеке своего перевода, и стрелка законно
+		# соединяет пути разных типов (render-contract §4).
+		var rail: Dictionary = (types[type_id] as Dictionary).get("rail", {}) as Dictionary
+		var r_hgt := float(rail.get("height", -1.0))
+		var t_wid := float(grid.get("width", -1.0))
+		var t_hgt := float(grid.get("height", -1.0))
+		if t_wid <= 0.0:
+			skipped.append("решётка %s: не прислана ширина бруса" % owner_id)
+			continue
+
+		var el: TrackGeom.Element = by_id[element_id]
+		var placed := 0
+		var lost := 0
+		var l_min := INF
+		var l_max := -INF
+		for t_raw in (grid.get("timbers", []) as Array):
+			var timber: Dictionary = t_raw as Dictionary
+			var t_len := float(timber.get("length", -1.0))
+			if t_len <= 0.0:
+				lost += 1
+				continue
+			var p := el.pose_at(float(timber.get("u", 0.0)))
+			# СМЕЩЕНИЕ ЦЕНТРА — по ЛЕВОЙ нормали, той же, которой сервер его считал
+			# и которой ориентирована шпала (§4). Сдвигается поза, а не меш: коробка
+			# строится вокруг точки позы, и другого места для сдвига нет.
+			var off := float(timber.get("offset", 0.0))
+			var n := p.left()
+			var s := Sleeper.new()
+			s.pose = TrackGeom.AxisPoint.new(
+				p.x + n.x * off, p.y + n.y * off, p.z, p.heading, p.u)
+			s.length_m = t_len
+			s.width_m = t_wid
+			s.height_m = t_hgt
+			s.rail_height_m = r_hgt
+			s.run_id = owner_id
+			s.element_id = element_id
+			list.append(s)
+			placed += 1
+			l_min = minf(l_min, t_len)
+			l_max = maxf(l_max, t_len)
+		if lost > 0:
+			skipped.append("решётка %s: %d брусьев без длины" % [owner_id, lost])
+		grids.append({
+			"owner": owner_id, "element": element_id, "type": type_id,
+			"placed": placed, "length_min": l_min, "length_max": l_max,
+		})
+
+	return {"list": list, "grids": grids, "skipped": skipped}
+
+
 ## address_at — накопленная координата прогона в (элемент, u).
 ##
 ## Правило отображения записано в render-contract §4 дословно:

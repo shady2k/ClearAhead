@@ -67,6 +67,23 @@ func (m *Map) validateConstruction() error {
 				return fmt.Errorf("%sстрелка %q: неизвестный тип %q", prefix, t.ID, t.Type)
 			}
 		}
+		// БРУСЬЯ ОБЯЗАТЕЛЬНЫ У ТИПА УСТРОЙСТВА, и отказ здесь — исполнение той же
+		// границы, что и у крестовины: run'ами проходы стрелки не покрываются
+		// (§4), значит решётку под ней взять больше неоткуда. Молчаливое
+		// умолчание дало бы стрелку без единого бруса — ровно то, чем была
+		// найдена ClearAhead-7kv: 22.5 % пути без решётки при зелёной карте.
+		//
+		// Проверяется РАЗРЕШЁННЫЙ тип, а не записанный: стрелка вправе тип
+		// опустить, и тогда обязанность ложится на default_type.
+		resolved := t.Type
+		if resolved == "" {
+			resolved = c.DefaultType
+		}
+		if tt, ok := types[resolved]; ok && tt.Timber == nil {
+			return fmt.Errorf(
+				"%sстрелка %s: у типа %s нет блока timber — под переводом лежат не шпалы, и эпюру брусьев взять неоткуда",
+				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
+		}
 	}
 
 	domains, err := m.elementDomains()
@@ -252,6 +269,33 @@ func checkTrackType(prefix string, t *TrackType) error {
 		return fmt.Errorf(
 			"%sтип %q: ballast.crib_depth %g вне [0, sleeper.height = %g]: шпальный ящик нельзя засыпать выше верха шпалы",
 			prefix, t.ID, t.Ballast.CribDepth, t.Sleeper.Height)
+	}
+
+	// Брусья: блок необязателен, но заданный проверяется целиком. «Есть блок с
+	// нулями» отвергается диапазоном, как и весь вертикальный стек выше.
+	if t.Timber != nil {
+		tb := t.Timber
+		if !(tb.Pitch >= MinTimberPitch && tb.Pitch <= MaxTimberPitch) {
+			return bad("timber.pitch", tb.Pitch, MinTimberPitch, MaxTimberPitch)
+		}
+		if !(tb.LengthMax >= MinTimberLength && tb.LengthMax <= MaxTimberLength) {
+			return bad("timber.length_max", tb.LengthMax, MinTimberLength, MaxTimberLength)
+		}
+		if !(tb.Width >= MinTimberWidth && tb.Width <= MaxTimberWidth) {
+			return bad("timber.width", tb.Width, MinTimberWidth, MaxTimberWidth)
+		}
+		if !(tb.Height >= MinTimberHeight && tb.Height <= MaxTimberHeight) {
+			return bad("timber.height", tb.Height, MinTimberHeight, MaxTimberHeight)
+		}
+		// Самый длинный брус короче шпалы — это не перевод, а описка: брус несёт
+		// ОБА пути и по построению не может быть короче шпалы одного из них.
+		// Отдельным отказом, а не общим диапазоном, потому что общий диапазон тут
+		// молчал бы: 2.0 м законны и для бруса, и для шпалы порознь.
+		if tb.LengthMax < t.Sleeper.Length {
+			return fmt.Errorf(
+				"%sтип %q: timber.length_max %g короче sleeper.length %g — брус перекрывает оба пути и короче шпалы быть не может",
+				prefix, Labeled(t.Name, t.ID), tb.LengthMax, t.Sleeper.Length)
+		}
 	}
 	return nil
 }

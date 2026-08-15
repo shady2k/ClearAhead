@@ -259,14 +259,44 @@ type RenderGeometry struct {
 	// 400×400 км — это не одна карта на многих регионах, а МНОГО РЕГИОНОВ,
 	// сшитых явно: стык — отдельная сущность (пара frame'ов плюс преобразование),
 	// а пересекающий его путь — два элемента со связью, а не один длинный.
-	Region             string            `json:"region"`
-	Revision           int               `json:"revision"`
-	Elements           []RenderElement   `json:"elements"`
-	Structures         []RenderStructure `json:"structures,omitempty"`
-	TrackTypes         []RenderTrackType `json:"track_types"`
-	ConstructionRuns   []RenderRun       `json:"construction_runs"`
-	Features           []RenderFeature   `json:"features"`
-	PlacementAlgorithm string            `json:"placement_algorithm"`
+	Region           string            `json:"region"`
+	Revision         int               `json:"revision"`
+	Elements         []RenderElement   `json:"elements"`
+	Structures       []RenderStructure `json:"structures,omitempty"`
+	TrackTypes       []RenderTrackType `json:"track_types"`
+	ConstructionRuns []RenderRun       `json:"construction_runs"`
+	// TurnoutGrids — решётка устройств: уровень 3 спеки §4. Отдельным списком, а
+	// не прогонами, потому что проходы стрелок прогонами НЕ покрываются по самой
+	// спеке, и потому что брус лежит поперёк ПРЯМОГО пути — ориентации, которой у
+	// прогона нет (разбор — в шапке timbers.go).
+	TurnoutGrids       []RenderTurnoutGrid `json:"turnout_grids"`
+	Features           []RenderFeature     `json:"features"`
+	PlacementAlgorithm string              `json:"placement_algorithm"`
+}
+
+// RenderTurnoutGrid — брусья одной стрелки. Все они лежат на осевой линии
+// ПРЯМОГО прохода: Element называет её, U отсчитывается по ней, Offset — по её
+// левой нормали. Одна опорная линия на всё устройство, а не своя у каждой ветви,
+// и это и есть то, ради чего решётка отдана устройству.
+type RenderTurnoutGrid struct {
+	Owner   string  `json:"owner"`
+	Element string  `json:"element"`
+	Type    string  `json:"type"`
+	Width   float64 `json:"width"`
+	Height  float64 `json:"height"`
+	// Timbers — в порядке возрастания U.
+	Timbers []RenderTimber `json:"timbers"`
+}
+
+// RenderTimber — один брус. Длина СВОЯ у каждого: тем перевод и отличается от
+// решётки, где длина взята из типа один раз на весь run.
+type RenderTimber struct {
+	U      float64 `json:"u"`
+	Length float64 `json:"length"`
+	// Offset — смещение ЦЕНТРА бруса от оси прямого прохода по левой нормали.
+	// Нужно потому, что брус несимметричен относительно неё: он растёт в сторону
+	// схода бокового пути.
+	Offset float64 `json:"offset"`
 }
 
 // RenderTrackType — тип путевой конструкции в проводе (редакция 6 §3).
@@ -474,6 +504,7 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		Revision:           m.MapRevision,
 		TrackTypes:         []RenderTrackType{},
 		ConstructionRuns:   []RenderRun{},
+		TurnoutGrids:       []RenderTurnoutGrid{},
 		Features:           []RenderFeature{},
 		PlacementAlgorithm: PlacementAlgorithm,
 	}
@@ -553,6 +584,12 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		return nil, nil, err
 	}
 	if err := buildFrogFeatures(m, els, rg); err != nil {
+		return nil, nil, err
+	}
+	// Решётка устройств — уровень 3 той же спеки (§4). После крестовин, а не
+	// вместо: крестовина отвечает на вопрос «где точка», брусья — «на чём лежит
+	// путь», и одно другого не заменяет.
+	if err := buildTurnoutGrids(m, els, rg); err != nil {
 		return nil, nil, err
 	}
 
