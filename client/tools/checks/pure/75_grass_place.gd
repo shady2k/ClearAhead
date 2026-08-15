@@ -108,3 +108,49 @@ func run() -> void:
 				golden_bad += 1
 	_ok("жребий совпадает с эталоном", golden_bad == 0,
 		"%d полей из %d разошлись" % [golden_bad, GOLDEN.size() * 4])
+
+	# 5. СЧЁТЧИК НЕ ВРЁТ ПРО ОТСОЕДИНЁННЫЙ КРУГ, и эта проверка куплена дефектом,
+	#    прожившим двое суток. При выносе поля травы из world.gd (acccf3b) корень
+	#    круга уехал в GrassField, а строка, ставившая его в дерево сцены, не
+	#    уехала никуда: трава строилась, чанки помечались видимыми, панель называла
+	#    118 762 пучка — и в кадре не было НИ ОДНОГО пикселя травы (замер: два
+	#    снимка одной сцены, с травой и без неё, 0 различных пикселей из 1 440 000).
+	#
+	#    Проверяется поэтому не посадка, а ЧЕСТНОСТЬ ЧИСЛА: пока панель готова
+	#    называть нарисованным то, чего нет в дереве, следующая такая потеря снова
+	#    будет невидимой. Флаг visible у чанка тут ничего не решает — он говорит
+	#    лишь «этот уровень выбран среди своих».
+	var tree := Engine.get_main_loop() as SceneTree
+	var host := Node3D.new()
+	tree.root.add_child(host)
+	var gf := GrassField.new()
+	var st := {}
+	gf.stats = st
+	gf.ensure_root()
+	var chunk_node := Node3D.new()
+	var mmi := MultiMeshInstance3D.new()
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = BoxMesh.new()
+	mm.instance_count = 7
+	mmi.multimesh = mm
+	chunk_node.add_child(mmi)
+	gf.root.add_child(chunk_node)
+	gf.chunks[Vector3i(0, 0, 0)] = chunk_node
+
+	gf.count()
+	var detached_says: int = int(st.get("grass_drawn", -1))
+	var detached_kept: int = int(st.get("grass_chunks_kept", -1))
+	gf.attach(host)
+	gf.count()
+	var attached_says: int = int(st.get("grass_drawn", -1))
+
+	_ok("круг вне дерева сцены считается нулём пучков",
+		detached_says == 0 and detached_kept == 1,
+		"панель назвала %d пучков при %d построенном чанке" % [detached_says, detached_kept])
+	_ok("поставленный в мир круг считает построенное", attached_says == 7,
+		"панель назвала %d пучков, построено 7" % attached_says)
+
+	gf.free_all()
+	tree.root.remove_child(host)
+	host.queue_free()

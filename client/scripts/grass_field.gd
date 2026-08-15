@@ -127,6 +127,37 @@ func pending() -> int:
 	return queue.size() + (0 if job.is_empty() else 1)
 
 
+## ensure_root — корень поколения. Заводится ОТДЕЛЬНО от постановки в дерево:
+## чанки кладутся в него с первого же задания, а видимым он становится тогда,
+## когда мир этого захочет (attach).
+func ensure_root() -> void:
+	if root != null:
+		return
+	root = Node3D.new()
+	root.name = "Grass"
+
+
+## attach — поставить корень поколения в мир. НЕ делается само собой, и это не
+## церемония: строящееся поколение перестройки версии живёт корнем ВНЕ дерева
+## (полукруга на экране не бывает), и в мир его ставит commit мира — тем же
+## вызовом, что и здесь.
+##
+## Куплено дефектом. При выносе поля из world.gd (acccf3b) корень уехал сюда, а
+## строка `world.add_child(_grass_root)` не уехала никуда: трава строилась,
+## считалась панелью и не давала на экране НИ ОДНОГО пикселя. Замер, которым это
+## доказано, — два снимка одной сцены, с травой и без неё: 0 различных пикселей
+## из 1 440 000. Панель при этом честно показывала 118 762 пучка, потому что
+## count() считает экземпляры, а не нарисованное (см. его шапку).
+func attach(parent: Node3D) -> void:
+	ensure_root()
+	var had: Node = root.get_parent()
+	if had == parent:
+		return
+	if had != null:
+		had.remove_child(root)
+	parent.add_child(root)
+
+
 ## free_all — освободить корень поля. Мир зовёт это, снимая поколение: корень
 ## уходит из дерева и освобождается вместе со всеми чанками.
 func free_all() -> void:
@@ -146,9 +177,7 @@ func free_all() -> void:
 func plan() -> void:
 	var p: Vector2 = camera_plan.call()
 	focus = p
-	if root == null:
-		root = Node3D.new()
-		root.name = "Grass"
+	ensure_root()
 	if meshes.is_empty():
 		for k in Vegetation.GRASS_KINDS.size():
 			meshes.append(Vegetation.grass_mesh(Vegetation.GRASS_KINDS[k]))
@@ -534,9 +563,20 @@ func commit(job_at: Dictionary) -> void:
 ## count — сколько пучков СЕЙЧАС НА ЭКРАНЕ. Считается по видимым чанкам, а не по
 ## всем построенным: панель обязана называть то, что нарисовано, иначе число
 ## врёт ровно про то, ради чего его смотрят.
+##
+## КОРЕНЬ ВНЕ ДЕРЕВА — ЭТО НОЛЬ, и проверка здесь куплена дефектом. Флаг visible
+## у чанка говорит лишь «этот уровень выбран среди своих»; узел, чей предок не
+## подключён к сцене, не рисуется независимо от него. Пока условия не было,
+## панель называла 118 762 пучка при пустом кадре — то самое враньё, против
+## которого и написана строка выше.
 func count() -> void:
 	var tufts := 0
 	var shown := 0
+	if root == null or not root.is_inside_tree():
+		stats["grass_drawn"] = 0
+		stats["grass_chunks"] = 0
+		stats["grass_chunks_kept"] = chunks.size()
+		return
 	for key in chunks.keys():
 		var node: Node3D = chunks[key]
 		if not node.visible:

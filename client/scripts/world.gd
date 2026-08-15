@@ -2071,6 +2071,11 @@ func _commit_pending() -> void:
 	_ballast_mask = hand["ballast"]
 	var old_grass = _grass
 	_grass = hand["grass"]
+	# Новый круг В МИР, старый — вон, и порядок здесь ровно этот: между двумя
+	# кадрами трава сменяется целиком, а не исчезает на кадр. Корень нового
+	# поколения до сих пор был отсоединён нарочно (_rebuild_grass_new), и
+	# постановка в дерево — это и есть обещанное там «commit() поставит его в мир».
+	_grass.attach(world)
 	if old_grass != null:
 		old_grass.free_all()
 	# Путь: числа панели из черновых stats строителя (живые stats не трогались,
@@ -3316,12 +3321,18 @@ func _plant_grass() -> void:
 
 ## _ensure_grass — живое поколение травы, если его ещё нет. Земля и маска
 ## передаются ССЫЛКОЙ: поколение живёт с теми данными, с которыми родилось.
+##
+## attach — не украшение: поле заводит СВОЙ корень, но в мир его ставит мир.
+## Разделение куплено дефектом (разбор — в шапке GrassField.attach): при выносе
+## поля в отдельный файл корень уехал туда, а постановка в дерево не уехала
+## никуда, и трава два дня строилась в узел, которого в сцене нет.
 func _ensure_grass() -> void:
 	if _grass != null:
 		return
 	_grass = GrassFieldScript.new()
 	_grass.setup(_rule, _ground, _ballast_mask, Callable(self, "_camera_plan"),
 		Callable(self, "_multimesh"), stats)
+	_grass.attach(world)
 
 
 ## _camera_plan — где стоит камера В ПЛАНЕ МИРА. Обратное преобразование
