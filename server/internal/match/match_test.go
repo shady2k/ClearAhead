@@ -66,7 +66,13 @@ func set(t *testing.T) *content.Set {
 			},
 			// Органы обязательны у машины с тягой: локомотив, которым нечем
 			// управлять, поедет только по команде автопилота, которого нет.
-			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
+			"controls": map[string]any{"traction_notches": 33, "brake_notches": 5,
+				"keys": map[string]any{
+					"traction": map[string]any{"name": "тяга", "up": []any{"W"}, "down": []any{"S"}},
+					"reverser": map[string]any{"name": "реверсор", "up": []any{"R"}, "down": []any{"shift+R"}},
+					"brake":    map[string]any{"name": "тормоз", "up": []any{"4"}, "down": []any{"3"}},
+					"release":  map[string]any{"name": "экстренная остановка", "up": []any{"0"}},
+				}},
 			"appearance": "vid",
 		}},
 	}

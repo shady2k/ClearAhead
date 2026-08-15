@@ -1,0 +1,329 @@
+{
+  "format_version": 1,
+  "model": "switch_stand_manual",
+  "device": "manual",
+  "title": "ручной перевод",
+  "axes": "x_right_y_up_z_back",
+  "units": "m",
+  "angles": "deg",
+  "materials": {
+    "iron": {
+      "colour": "#1a1a1c",
+      "roughness": 0.78,
+      "metallic": 0.0
+    },
+    "steel": {
+      "colour": "#292a2c",
+      "roughness": 0.7,
+      "metallic": 0.0
+    },
+    "paint_white": {
+      "colour": "#e0e0d9",
+      "roughness": 0.8,
+      "metallic": 0.0
+    },
+    "paint_black": {
+      "colour": "#1c1c1e",
+      "roughness": 0.8,
+      "metallic": 0.0
+    },
+    "plate_field": {
+      "colour": "#eeeee6",
+      "roughness": 0.85,
+      "metallic": 0.0
+    }
+  },
+  "parts": [
+    {
+      "name": "base",
+      "shape": "box",
+      "material": "iron",
+      "at": [
+        0,
+        -0.025,
+        0
+      ],
+      "size": [
+        0.5,
+        0.05,
+        0.66
+      ]
+    },
+    {
+      "name": "body",
+      "shape": "frustum",
+      "material": "iron",
+      "at": [
+        0,
+        0.23,
+        0
+      ],
+      "rotate": [
+        0,
+        45,
+        0
+      ],
+      "bottom": 0.34,
+      "top": 0.16,
+      "height": 0.46,
+      "axis": "y",
+      "sides": 4
+    },
+    {
+      "name": "hub",
+      "shape": "cylinder",
+      "material": "steel",
+      "at": [
+        0,
+        0.46,
+        0
+      ],
+      "radius": 0.07,
+      "height": 0.26,
+      "axis": "z",
+      "sides": 12
+    },
+    {
+      "name": "lever",
+      "at": [
+        0,
+        0.46,
+        0
+      ],
+      "pivot": {
+        "axis": "z",
+        "by": "position",
+        "states": {
+          "straight": 34,
+          "diverging": -34
+        }
+      },
+      "parts": [
+        {
+          "name": "arm_a",
+          "rotate": [
+            0,
+            0,
+            48
+          ],
+          "at": [
+            0,
+            0,
+            0
+          ],
+          "parts": [
+            {
+              "name": "shaft",
+              "shape": "cylinder",
+              "material": "paint_white",
+              "at": [
+                0,
+                0.305,
+                0
+              ],
+              "radius": 0.028,
+              "height": 0.61,
+              "axis": "y",
+              "sides": 10
+            },
+            {
+              "name": "tip",
+              "shape": "cylinder",
+              "material": "paint_black",
+              "at": [
+                0,
+                0.695,
+                0
+              ],
+              "radius": 0.03,
+              "height": 0.17,
+              "axis": "y",
+              "sides": 10
+            }
+          ]
+        },
+        {
+          "name": "arm_b",
+          "rotate": [
+            0,
+            0,
+            -48
+          ],
+          "at": [
+            0,
+            0,
+            0
+          ],
+          "parts": [
+            {
+              "name": "shaft",
+              "shape": "cylinder",
+              "material": "paint_white",
+              "at": [
+                0,
+                0.305,
+                0
+              ],
+              "radius": 0.028,
+              "height": 0.61,
+              "axis": "y",
+              "sides": 10
+            },
+            {
+              "name": "tip",
+              "shape": "cylinder",
+              "material": "paint_black",
+              "at": [
+                0,
+                0.695,
+                0
+              ],
+              "radius": 0.03,
+              "height": 0.17,
+              "axis": "y",
+              "sides": 10
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "post",
+      "shape": "cylinder",
+      "material": "steel",
+      "at": [
+        0,
+        0.76,
+        0
+      ],
+      "radius": 0.03,
+      "height": 0.6,
+      "axis": "y",
+      "sides": 10
+    },
+    {
+      "name": "indicator",
+      "at": [
+        0,
+        1.21,
+        0
+      ],
+      "pivot": {
+        "axis": "y",
+        "by": "position",
+        "states": {
+          "straight": 90,
+          "diverging": 0
+        }
+      },
+      "parts": [
+        {
+          "name": "arrow",
+          "at": [
+            0,
+            0,
+            0
+          ],
+          "pivot": {
+            "axis": "y",
+            "by": "hand",
+            "states": {
+              "right": 0,
+              "left": 180
+            }
+          },
+          "parts": [
+            {
+              "name": "vane",
+              "shape": "plate",
+              "material": "plate_field",
+              "at": [
+                0,
+                0,
+                0
+              ],
+              "size": [
+                0.38,
+                0.3
+              ],
+              "thickness": 0.03,
+              "mark": {
+                "polygon": [
+                  [
+                    0.1,
+                    0.38
+                  ],
+                  [
+                    0.58,
+                    0.38
+                  ],
+                  [
+                    0.58,
+                    0.14
+                  ],
+                  [
+                    0.94,
+                    0.5
+                  ],
+                  [
+                    0.58,
+                    0.86
+                  ],
+                  [
+                    0.58,
+                    0.62
+                  ],
+                  [
+                    0.1,
+                    0.62
+                  ]
+                ],
+                "material": "paint_black",
+                "both_sides": true
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "number",
+      "at": [
+        0,
+        0.16,
+        0
+      ],
+      "pivot": {
+        "axis": "y",
+        "by": "side",
+        "states": {
+          "left": 90,
+          "right": -90
+        }
+      },
+      "parts": [
+        {
+          "name": "board",
+          "shape": "plate",
+          "material": "plate_field",
+          "at": [
+            0,
+            0,
+            0.18
+          ],
+          "size": [
+            0.22,
+            0.16
+          ],
+          "thickness": 0.015,
+          "label": {
+            "by": "name",
+            "material": "paint_black",
+            "height": 0.62,
+            "both_sides": true
+          }
+        }
+      ]
+    }
+  ]
+}

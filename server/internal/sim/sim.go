@@ -280,10 +280,16 @@ func (w *World) forces(loco physics.Locomotive, st content.StockType, c match.Co
 		if c.Reverser == match.ReverserReverse {
 			dir = -dir
 		}
-		// Доля от предела ДВИГАТЕЛЕЙ, а не от огибающей: сравнение со сцеплением
-		// делает physics.Traction, и оно же говорит, буксует ли машина.
+		// Доля НАПРЯЖЕНИЯ, а не доля силы: во что она превращается на этой
+		// скорости, считает physics.NotchEffort, и оно же сравнивается со
+		// сцеплением внутри physics.Traction.
 		permille := divRound(int64(notchMilli), int64(st.Controls.TractionNotches))
-		part, slip := loco.Traction(abs(mo.Speed), permille)
+		// СКОРОСТЬ ВДОЛЬ ТЯГИ, А НЕ ЕЁ МОДУЛЬ. Противо-ЭДС растёт с тем, как
+		// быстро машина уходит ОТ тяги, и на встречном ходу (скатывается под
+		// уклон, а машинист уже набрал позицию) она вычитается со знаком минус,
+		// то есть силу прибавляет. Модуль дал бы падение силы там, где её рост, —
+		// и трогание под уклон вышло бы слабее трогания на площадке.
+		part, slip := loco.Traction(units.Speed(dir)*mo.Speed, permille)
 		slipping = slip
 		total += units.Force(dir) * part
 	}

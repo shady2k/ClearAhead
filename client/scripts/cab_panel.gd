@@ -162,12 +162,15 @@ func _draw() -> void:
 
 	var right: float = x - gr + _controls_width()
 	# Рукоятки справа налево: сначала то, чем пользуются реже.
-	if cab.independent_max > 0:
+	# КАКИЕ РУКОЯТКИ РИСОВАТЬ — по перечню органов ПАСПОРТА, а не по тому,
+	# заполнился ли предел: наличие органа объявляет сервер (Cab.organs), и
+	# второго правила вывода клиент не заводит.
+	if cab.has_organ("independent"):
 		_rect_independent = Rect2(right - px(88), pad + px(20), px(88), _h - pad * 2 - px(30))
 		_draw_slider(_rect_independent, "вспом.", float(cab.independent),
 			float(cab.independent_max), _kgf(cab.independent), C_WARN)
 		right -= px(88) + pad
-	if cab.handle != "":
+	if cab.has_organ("handle"):
 		_rect_handle = Rect2(right - px(300), pad + px(20), px(300), _h - pad * 2 - px(30))
 		_draw_handle(_rect_handle)
 		right -= px(300) + pad
@@ -229,17 +232,18 @@ var keys_shown := false
 
 ## KEYS — что и чем делается. Список ЗДЕСЬ, рядом с органами, которые он
 ## называет: разъехавшись, подсказка и раскладка врут по очереди.
-const KEYS := [
-	["W / S", "контроллер тяги: ступень вверх и вниз (или 2 / 1)"],
-	["A / D", "кран машиниста по сектору: к отпуску и к торможению"],
-	["Z / X", "кран вспомогательного тормоза локомотива"],
-	["R", "реверсор вперёд, Shift+R назад (только при нулевой тяге)"],
-	["0", "экстренная остановка: тяга в ноль, кран в экстренное"],
-	["мышь", "тянуть рукоятки и щёлкать по положениям крана"],
+## Клавиши, которые принадлежат КЛИЕНТУ, а не машине: взгляд, отладка и выход.
+##
+## Раскладка кабины сюда не входит — она приезжает паспортом машины
+## (content.Organ) и подставляется в список рядом (_key_rows). До 2026-08-15 обе
+## половины лежали здесь одной таблицей, и половина про кабину уже разошлась с
+## тем, что разбирает мир: пары 3/4 в списке не было, хотя клавиши работали.
+const OWN_KEYS := [
 	["E", "выйти из кабины"],
 	["V", "сменить вид: обзор, от первого лица, от третьего"],
 	["H", "панель отладки"],
 	["F1", "убрать этот список"],
+	["мышь", "тянуть рукоятки и щёлкать по положениям крана"],
 ]
 
 
@@ -250,12 +254,13 @@ func _draw_keys() -> void:
 	var pad := px(PAD)
 	var lh := px(30)
 	var box := Rect2(pad, pad, minf(size.x - pad * 2, px(720)),
-		lh * (KEYS.size() + 1) + pad)
+		lh * (_key_rows().size() + 1) + pad)
 	draw_rect(box, Color(0.04, 0.05, 0.07, 0.96))
 	draw_rect(box, C_RIM, false, px(1.8))
 	_text(box.position + Vector2(px(16), lh * 0.8), "КЛАВИШИ", C_TEXT, int(px(20)))
-	for i in KEYS.size():
-		var row: Array = KEYS[i]
+	var rows := _key_rows()
+	for i in rows.size():
+		var row: Array = rows[i]
 		var y := box.position.y + lh * (i + 1.9)
 		_text(Vector2(box.position.x + px(16), y), String(row[0]), C_ACTIVE, int(px(18)))
 		_text(Vector2(box.position.x + px(120), y), String(row[1]), C_DIM, int(px(18)))
@@ -263,9 +268,9 @@ func _draw_keys() -> void:
 
 func _controls_width() -> float:
 	var wd := px(88.0) + px(PAD) + px(116.0) # тяга и реверсор есть всегда
-	if cab.handle != "":
+	if cab.has_organ("handle"):
 		wd += px(300.0) + px(PAD)
-	if cab.independent_max > 0:
+	if cab.has_organ("independent"):
 		wd += px(88.0) + px(PAD)
 	return wd
 
@@ -451,7 +456,7 @@ func _press(at: Vector2) -> void:
 	if _rect_traction.has_point(at):
 		_drag = "traction"
 		_move(at)
-	elif cab.independent_max > 0 and _rect_independent.has_point(at):
+	elif cab.has_organ("independent") and _rect_independent.has_point(at):
 		_drag = "independent"
 		_move(at)
 	elif _rect_reverser.has_point(at):
@@ -459,7 +464,7 @@ func _press(at: Vector2) -> void:
 			/ maxf((_rect_reverser.size.y - px(32)) / 3.0, 1.0), 0, 2))
 		if cab.set_reverser_at(["forward", "neutral", "reverse"][i]):
 			changed.emit()
-	elif cab.handle != "" and _rect_handle.has_point(at):
+	elif cab.has_organ("handle") and _rect_handle.has_point(at):
 		var n: int = Cab.HANDLES.size()
 		var wcell := (_rect_handle.size.x - px(14)) / float(n)
 		var i := int(clampf((at.x - _rect_handle.position.x - px(7)) / maxf(wcell, 1.0), 0, n - 1))
@@ -481,3 +486,35 @@ func _move(at: Vector2) -> void:
 	elif _drag == "independent":
 		if cab.set_independent_at(int(round(t * float(cab.independent_max)))):
 			changed.emit()
+
+
+## _key_rows — СТРОКИ СПИСКА КЛАВИШ: сперва рукоятки этой машины (как их прислал
+## паспорт), потом клавиши клиента.
+##
+## Своей таблицы кабины у пульта больше нет. Имя органа, его название и клавиши
+## приходят с сервера, и список на экране обязан показывать ровно то, что
+## разбирает мир, — иначе он снова разойдётся с ним, как уже расходился.
+func _key_rows() -> Array:
+	var out: Array = []
+	for o in cab.organs:
+		var up := (o.get("up", []) as Array)
+		var down := (o.get("down", []) as Array)
+		var keys := ""
+		if not up.is_empty() and not down.is_empty():
+			keys = "%s / %s" % [_key_word(String(up[0])), _key_word(String(down[0]))]
+		elif not up.is_empty():
+			keys = _key_word(String(up[0]))
+		# Вторая пара, если машина её объявила: у контроллера тяги это цифры рядом
+		# с буквами, и показать надо обе — рука ищет разные.
+		if up.size() > 1 and down.size() > 1:
+			keys += " (или %s / %s)" % [_key_word(String(up[1])), _key_word(String(down[1]))]
+		out.append([keys, String(o.get("name", String(o.get("id", ""))))])
+	for row in OWN_KEYS:
+		out.append(row)
+	return out
+
+
+## _key_word — имя клавиши человеку. Приставка «shift+» разворачивается в
+## привычное «Shift+»: это оформление, а не знание о машине.
+func _key_word(spec: String) -> String:
+	return "Shift+%s" % spec.trim_prefix("shift+") if spec.begins_with("shift+") else spec

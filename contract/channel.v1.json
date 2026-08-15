@@ -49,6 +49,7 @@
    "name": "string?",
    "position": "string",
    "drive": "string",
+   "hand": "string?",
    "occupied_by": "string?"
   },
   "ahead_turnout": {

@@ -157,6 +157,11 @@ const NETWORK_FIELDS := ["region", "revision", "elements", "structures", "track_
 	"construction_runs", "features", "placement_algorithm"]
 const ELEMENT_FIELDS := ["id", "name", "kind", "start", "primitives", "profile", "role"]
 
+## Тип содержимого ассета-ОПИСАНИЯ ТЕЛА. Строка договорная (content.ModelMediaType):
+## по ней клиент отличает описание тела от glb и разбирает доехавшие байты тем,
+## чем надо.
+const MODEL_MEDIA_TYPE := "application/vnd.clearahead.model+json"
+
 var server_url := "http://127.0.0.1:8080"
 var region := "ST_A"
 var shot_path := ""
@@ -345,6 +350,10 @@ var _stock_root: Node3D = null
 var _stock_units: Array = []
 var _stock_types := {}      # id паспорта -> Dictionary
 var _stock_assets := {}     # имя вида   -> Dictionary записи каталога
+## Тела путевых устройств: род механизма -> разобранное описание модели. Приходят
+## каталогом, разбираются ModelBuild. Пусто значит, что каталог их не прислал, и
+## привод останется без тела — с отказом на экране, а не молча.
+var _device_models := {}
 var _terrain_node: Node3D = null
 var _terrain_solid: Array[MeshInstance3D] = []
 
@@ -941,6 +950,10 @@ func _load_world() -> void:
 		_refresh_ui()
 		return
 
+	# КАТАЛОГ — ДО ПУТИ: вместе с путём ставятся переводные механизмы, а их тела
+	# лежат в каталоге. Разбор — у _load_catalogue.
+	await _load_catalogue()
+
 	_apply_track_types(network, elements)
 	_draw_track(elements, network)
 
@@ -1349,7 +1362,11 @@ func _show_turnouts() -> void:
 		if not _stands.has(id):
 			continue
 		var sw := _turnouts[id] as Dictionary
-		if (_stands[id] as SwitchStand).show_position(String(sw.get("position", ""))):
+		# СТОРОНА СХОДА ИДЁТ ВМЕСТЕ С ПОЛОЖЕНИЕМ: указателю нужны оба факта, и оба
+		# приезжают снапшотом. Вывести сторону клиент не может ниоткуда — это
+		# геометрия станции, и считает её сервер.
+		if (_stands[id] as SwitchStand).show_position(
+				String(sw.get("position", "")), String(sw.get("hand", ""))):
 			turned += 1
 	stats["turnouts_known"] = _turnouts.size()
 	stats["turnouts_turned"] = turned
@@ -1395,6 +1412,11 @@ func _turnout_target() -> Dictionary:
 	out["distance_m"] = dist
 	out["note"] = _turnout_note
 	out["key"] = "T"
+	# КАК НАЗЫВАЕТСЯ МЕХАНИЗМ — из его же тела: имя лежит в файле модели
+	# (content.Model.Title) рядом с размерами. Своей таблицы «manual — ручной
+	# перевод» клиент больше не держит.
+	var model := _device_models.get(String(out.get("drive", "")), {}) as Dictionary
+	out["drive_title"] = String(model.get("title", ""))
 	return out
 
 
@@ -1505,7 +1527,13 @@ func _on_channel_broke(reason: String) -> void:
 		_refresh_ui()
 
 
-func _load_rolling_stock(elements: Array[TrackGeom.Element], snap: LiveChannel.Snapshot) -> void:
+## _load_catalogue — КАТАЛОГ КОНТЕНТА: паспорта, записи ассетов и ТЕЛА УСТРОЙСТВ.
+##
+## Читается РАНЬШЕ ПУТИ, а не вместе с подвижным составом, и это не перестановка
+## ради порядка: телом переводного механизма распоряжается каталог, а механизмы
+## ставятся вместе с путём. Пока каталог читался позже, привод строить было не из
+## чего — и клиент рисовал его сам, своими константами.
+func _load_catalogue() -> void:
 	var set_res: WorldApi.Content = await api.content()
 	if set_res.failed():
 		_fail("набор контента: %s" % set_res.reason)
@@ -1518,7 +1546,41 @@ func _load_rolling_stock(elements: Array[TrackGeom.Element], snap: LiveChannel.S
 		_stock_assets[String(a.get("name", ""))] = a
 	stats["stock_types"] = _stock_types.size()
 	stats["stock_assets"] = _stock_assets.size()
+	await _load_device_models()
 
+
+## _load_device_models — ТЕЛА ПУТЕВЫХ УСТРОЙСТВ: скачать, разобрать, разложить по
+## роду механизма.
+##
+## Род ОБЪЯВЛЯЕТ САМА МОДЕЛЬ (поле device), а не соглашение об именах файлов и не
+## перечень рядом: связь «ручной механизм — вот это тело» есть факт о теле, и
+## живёт она в файле тела. Клиент только читает.
+func _load_device_models() -> void:
+	var cache := AssetCache.new()
+	for name in _stock_assets:
+		var a := _stock_assets[name] as Dictionary
+		if String(a.get("media_type", "")) != MODEL_MEDIA_TYPE:
+			continue
+		var blob: WorldApi.AssetBlob = await cache.load_or_download(String(a.get("hash", "")), api)
+		if blob.failed():
+			errors.append("тело устройства %s: %s" % [name, blob.reason])
+			continue
+		var parsed: Variant = JSON.parse_string(blob.bytes.get_string_from_utf8())
+		if not (parsed is Dictionary):
+			errors.append("тело устройства %s: описание не разобралось как объект" % name)
+			continue
+		var doc := parsed as Dictionary
+		var kind := String(doc.get("device", ""))
+		if kind == "":
+			errors.append("тело устройства %s не назвало род механизма" % name)
+			continue
+		_device_models[kind] = doc
+	stats["device_models"] = _device_models.size()
+	for note in cache.notes:
+		errors.append("кэш ассетов: %s" % note)
+
+
+func _load_rolling_stock(elements: Array[TrackGeom.Element], snap: LiveChannel.Snapshot) -> void:
 	# Живое состояние УЖЕ приехало: матч нужен раньше сети (версионные адреса
 	# мира идут через /matches/{m}/), и спрашивать его второй раз — запрос за
 	# тем, что в руках. Здесь живому состоянию остаётся постановка коробок.
@@ -1967,8 +2029,13 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		# Подошва привода лежит на верхе переводного бруса — на высоту рельса
 		# ниже головки. Число разрешает TrackBuild.drives там же, где адрес, и
 		# второго правила «где у устройства тип» клиент не заводит.
-		var stand := SwitchStand.build(d, d.base_drop_m)
+		var stand := SwitchStand.build(d, d.base_drop_m,
+			_device_models.get(d.drive, {}) as Dictionary)
 		stands_node.add_child(stand)
+		if stand.reason != "":
+			# Привод без тела — ОТКАЗ НА ЭКРАНЕ, а не пустое место: то же правило,
+			# что у машины без вида.
+			errors.append("привод стрелки %s: %s" % [d.label, stand.reason])
 		built[d.owner] = stand
 	st["turnout_drives_drawn"] = drives.size()
 	st["turnout_drives_skipped"] = dr["skipped"]
@@ -2850,6 +2917,9 @@ func _stock_posts() -> Array[Driver.Post]:
 			p.node = u.node
 			p.local = u.cabs[i]
 			p.index = i
+			# ГАБАРИТ ИЗ ПАСПОРТА: по нему человек находит борт, у которого выйдет.
+			# Клиент его не выдумывает — ширина приезжает набором контента.
+			p.half_width = u.width_m * 0.5
 			out.append(p)
 	return out
 
@@ -2872,6 +2942,12 @@ func _on_boarding(note: String) -> void:
 func _bind_cab() -> void:
 	if _driver == null or not _driver.is_boarded():
 		cab.leave()
+		# КАДР ВОЗВРАЩАЕТСЯ ЧЕЛОВЕКУ. Наводил его на машину мир (_look_at_machine),
+		# значит и снимать наводку обязан он: камера, оставшаяся на машине после
+		# выхода, показывала кадр, в котором ничего не изменилось, — и клавиша E
+		# выглядела неработающей.
+		if _driver != null:
+			_driver.frame_self()
 		return
 	var unit_id := _driver.boarded_unit()
 	var type_id := ""
@@ -3087,47 +3163,31 @@ func _role_bbox(elements: Array[TrackGeom.Element]) -> Rect2:
 ## Слушается ВСЕГДА, в том числе когда ввод у мира отобран паузой: числа
 ## отладки — не действие в мире, и посмотреть их из-под меню законно. Тем эта
 ## клавиша и отличается от E, V и F, которые гаснут вместе с вводом.
-## РУКОЯТКИ НА ЦИФРАХ — И НА W/S ТОЖЕ.
+## РАСКЛАДКА КАБИНЫ ПРИХОДИТ С СЕРВЕРА, а не живёт таблицей здесь.
 ##
-## Цифры выбраны были вынужденно: буквы и стрелки считались занятыми ходьбой
-## (WASD), камерой (стрелки), посадкой (E), видом (V, F), паузой показа (P) и
-## панелью (H). Довод оказался неверен ровно для кабины, и поправил его владелец
-## 2026-08-15: «когда мы в кабине, мы управляем камерой мышью, как это уже
-## реализовано во многих играх». В кабине ноги выключены целиком
-## (driver.gd::_physics_process), клавиатурную панораму у обзора отбирает посадка
-## (OrbitCamera.set_keys) — значит буквы там не заняты НИЧЕМ, и держать тягу
-## только на цифрах не за что.
+## Слово владельца 2026-08-15: «горячие клавиши, кстати, тоже должны приходить с
+## сервера». Здесь стояла таблица CAB_KEYS — клавиша к действию, — и вторая такая
+## же таблица стояла в пульте (список по F1). Две таблицы одного и того же уже
+## разошлись: пары 3/4 в списке не было, хотя клавиши работали.
 ##
-## ЦИФРЫ ПРИ ЭТОМ ОСТАЮТСЯ, а не заменяются: пары 1/2 и 3/4 показывают, что тяга
-## и тормоз — однородные ступенчатые органы, и это видно по клавишам. W/S — второе
-## имя для тяги, то, что рука ищет первым.
+## Теперь имя органа, его человеческое название и клавиши приезжают паспортом
+## машины (content.Organ), а здесь остаётся ПЕРЕВОД ИМЕНИ КЛАВИШИ В КОД — работа
+## устройства ввода, и она клиентская целиком.
 ##
-##   W / S, 2 / 1 — контроллер тяги на ступень вверх / вниз
-##   4 / 3        — тормоз на ступень вверх / вниз
-##   R            — реверсор вперёд, Shift+R — назад (только при нулевой тяге)
-##   0            — ЭКСТРЕННАЯ ОСТАНОВКА, а не «всё в ноль»: тяга сброшена,
-##                  кран в экстренное, вспомогательный на полное, реверсор в
-##                  ноль. Прежнее название врало и до пневматики — тормоз оно
-##                  ставило ПОЛНЫЙ, а не нулевой.
-const CAB_KEYS := {
-	KEY_1: "traction-",
-	KEY_2: "traction+",
-	KEY_S: "traction-",
-	KEY_W: "traction+",
-	KEY_3: "brake-",
-	KEY_4: "brake+",
-	# КРАН МАШИНИСТА ВЕДЁТСЯ СОСЕДНИМ ПОЛОЖЕНИЕМ, а не ставится сразу: у ручки
-	# нет способа попасть из отпуска в экстренное, минуя сектор. A — к отпуску,
-	# D — к торможению, то есть влево и вправо по нарисованному сектору.
-	KEY_A: "handle-",
-	KEY_D: "handle+",
-	# ВСПОМОГАТЕЛЬНЫЙ НА Z/X, а не на Q/E: E занята выходом из кабины, и вторая
-	# роль у той же клавиши означала бы, что подсказка врёт одному из двух.
-	KEY_Z: "independent-",
-	KEY_X: "independent+",
-	KEY_R: "reverser",
-	KEY_0: "release",
-}
+## ЧТО ОСТАЛОСЬ КЛИЕНТСКИМ И ПОЧЕМУ: V (вид), H (панель отладки), F1 (список
+## клавиш), F (телепорт), E (сесть и выйти), T (перевести стрелку). Первые четыре
+## не о машине вовсе — это взгляд и отладка. Последние две о мире, но не о
+## паспорте: ими человек действует РУКАМИ, а не рукоятками кабины, и приезжать им
+## неоткуда — у мира паспорта нет. Записано, чтобы не сочли недосмотром
+## (ClearAhead-yfu3).
+##
+## Форма имени клавиши — договор с сервером (content.OrganKeys): одна ЗАГЛАВНАЯ
+## латинская буква или цифра, с необязательной приставкой «shift+».
+static func _keycode_of(name: String) -> int:
+	var body := name.trim_prefix("shift+")
+	if body.length() != 1:
+		return 0
+	return OS.find_keycode_from_string(body)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -3162,13 +3222,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 			_throw_turnout()
 		return
-	if not cab.aboard() or not CAB_KEYS.has(key.keycode):
+	if not cab.aboard():
+		return
+	# ДЕЙСТВИЕ ИЩЕТСЯ В ПРИСЛАННОЙ РАСКЛАДКЕ. Клавиши, которой в ней нет, у кабины
+	# не существует — и она уходит дальше, к тем, кто её ждёт. Органа, которого у
+	# машины нет, в раскладке нет тоже: сервер его не присылает.
+	var action := _cab_action(key)
+	if action == "":
 		return
 	# Клавиша съедается ТОЛЬКО когда игрок в кабине: иначе цифры перестали бы
 	# доходить до всех прочих, кто их ждёт, ради рукояток, которых нет.
 	get_viewport().set_input_as_handled()
 	var moved := false
-	match String(CAB_KEYS[key.keycode]):
+	match action:
 		"traction-":
 			moved = cab.notch_traction(-1)
 		"traction+":
@@ -3177,8 +3243,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			moved = cab.notch_brake(-1)
 		"brake+":
 			moved = cab.notch_brake(1)
-		"reverser":
-			moved = cab.shift_reverser(-1 if key.shift_pressed else 1)
+		"reverser+":
+			moved = cab.shift_reverser(1)
+		"reverser-":
+			moved = cab.shift_reverser(-1)
 		"handle-":
 			moved = cab.shift_handle(-1)
 		"handle+":
@@ -3191,6 +3259,33 @@ func _unhandled_input(event: InputEvent) -> void:
 			moved = cab.release_all()
 	if moved:
 		_send_controls()
+
+
+## _cab_action — какое действие кабины назначено этой клавише ПРИСЛАННОЙ
+## раскладкой. Пусто — никакое.
+##
+## Имя действия собирается из имени органа и стороны хода: «traction+» — прибавить
+## контроллер. Хвост «+»/«−» — целиком клиентское: сервер присылает две клавиши
+## («прибавить» и «убавить»), а как назвать это внутри разбора, дело разбора.
+func _cab_action(key: InputEventKey) -> String:
+	for o in cab.organs:
+		var id := String(o.get("id", ""))
+		for spec in (o.get("up", []) as Array):
+			if _matches(key, String(spec)):
+				return id if String(o.get("kind", "")) == "action" else id + "+"
+		for spec in (o.get("down", []) as Array):
+			if _matches(key, String(spec)):
+				return id + "-"
+	return ""
+
+
+## _matches — та ли это клавиша. Приставка shift+ значима: реверсор идёт назад
+## только с ней, и без проверки Shift обе клавиши были бы одной.
+func _matches(key: InputEventKey, spec: String) -> bool:
+	var code := _keycode_of(spec)
+	if code == 0 or key.keycode != code:
+		return false
+	return key.shift_pressed == spec.begins_with("shift+")
 
 
 func _refresh_ui() -> void:

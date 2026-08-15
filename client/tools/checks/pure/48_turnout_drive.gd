@@ -62,33 +62,62 @@ func run() -> void:
 	# ближе, стоял бы в колее.
 	_ok("привод вынесен за габарит пути", worst_off > 1.0, "ближайший %.3f м от оси" % worst_off)
 
-	# ТЕЛО. Посадку разрешил тот же разбор, что и адрес: проверка не повторяет
-	# правило, она проверяет его результат.
+	# ТЕЛО ПРИХОДИТ С СЕРВЕРА. Описание берётся из фикстуры набора — того же
+	# файла, что отгружает сервер: смысл проверки в том, что ОТГРУЖАЕМОЕ
+	# описание собирается сегодняшним сборщиком.
 	var d0: TrackBuild.TurnoutDrive = drives[0]
 	var drop := d0.base_drop_m
-	var stand := SwitchStand.build(d0, drop)
+	var model := _model(String(d0.drive))
+	_ok("описание тела механизма %s прочитано" % d0.drive, not model.is_empty())
+	if model.is_empty():
+		return
+	var stand := SwitchStand.build(d0, drop, model)
+	_ok("тело собралось без отказа", stand.reason == "", stand.reason)
 	_ok("привод сел на брус, а не на головку рельса", drop > 0.0 and stand.position.y < d0.pose.z,
 		"подошва %.3f при отметке головки %.3f, рельс %.3f" % [stand.position.y, d0.pose.z, drop])
+	_ok("тело встало под приводом", stand.get_child_count() > 0)
+
+	# ПРИВОД БЕЗ ОПИСАНИЯ — ОТКАЗ, А НЕ ПУСТОЕ МЕСТО. Молча пропущенное тело
+	# выглядит исправным кадром, в котором стрелку нечем перевести.
+	var bodyless := SwitchStand.build(d0, drop, {})
+	_ok("без описания привод объясняет, почему он пуст", bodyless.reason != "", bodyless.reason)
+	bodyless.queue_free()
 
 	# УКАЗАТЕЛЬ. До снапшота — ничего; присланное — показывает; неизвестное —
-	# не показывает.
+	# не показывает. НА СКОЛЬКО поворачивать, клиент не знает: углы в описании.
 	_ok("до снапшота положение не показано", stand.shown == "", stand.shown)
-	_ok("присланное положение показано", stand.show_position(SwitchStand.POS_DIVERGING)
+	_ok("до снапшота сторона схода не показана", stand.shown_hand == "", stand.shown_hand)
+	_ok("присланное положение показано",
+		stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT)
 		and stand.shown == SwitchStand.POS_DIVERGING, stand.shown)
 	_ok("повтор того же положения ничего не крутит",
-		not stand.show_position(SwitchStand.POS_DIVERGING), stand.shown)
+		not stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT), stand.shown)
 	_ok("неизвестное положение не показывается",
-		not stand.show_position("боком") and stand.shown == SwitchStand.POS_DIVERGING, stand.shown)
-	var head := stand.get_node_or_null("Head") as Node3D
-	_ok("голова указателя повёрнута на боковой путь", head != null
-		and absf(head.rotation.y - PI / 2) < 1e-6,
-		"%.4f рад" % (head.rotation.y if head != null else NAN))
-	stand.show_position(SwitchStand.POS_STRAIGHT)
-	_ok("и обратно на прямой", head != null and absf(head.rotation.y) < 1e-6,
-		"%.4f рад" % (head.rotation.y if head != null else NAN))
+		not stand.show_position("боком", SwitchStand.HAND_RIGHT)
+		and stand.shown == SwitchStand.POS_DIVERGING, stand.shown)
+
+	# ПОКАЗАНИЯ РАЗЛИЧАЮТСЯ, и это единственное, что клиент вправе утверждать об
+	# указателе: сами углы — дело описания, а вот «оба положения выглядят
+	# одинаково» было бы указателем, который ничего не показывает.
+	var head := _find_node(stand, "indicator")
+	_ok("у тела есть указатель", head != null)
+	if head != null:
+		var at_diverging: float = head.rotation.y
+		stand.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_RIGHT)
+		_ok("по прямому пути указатель повёрнут иначе, чем на боковой",
+			absf(head.rotation.y - at_diverging) > 0.01,
+			"%.4f против %.4f рад" % [head.rotation.y, at_diverging])
+	var arrow := _find_node(stand, "arrow")
+	_ok("у указателя есть стрела", arrow != null)
+	if arrow != null:
+		var at_right: float = arrow.rotation.y
+		stand.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_LEFT)
+		_ok("на левой стрелке стрела смотрит в другую сторону",
+			absf(arrow.rotation.y - at_right) > 0.01,
+			"%.4f против %.4f рад" % [arrow.rotation.y, at_right])
 
 	# ТАБЛИЧКА: щиток на месте, номер на нём — присланный.
-	var plate := stand.get_node_or_null("Plate") as Node3D
+	var plate := _find_node(stand, "board")
 	_ok("у стрелки есть табличка", plate != null)
 	if plate != null:
 		var faces := 0
@@ -114,3 +143,33 @@ func run() -> void:
 		"world.gd снова заводит Label3D")
 
 	stand.queue_free()
+
+
+## _model — описание тела механизма из ОТГРУЖАЕМОГО файла набора. Читается с
+## диска репозитория: сервера у чистой проверки нет, а проверять надо то, что
+## сервер и отдаёт.
+func _model(kind: String) -> Dictionary:
+	for name in ["switch_stand_manual", "switch_stand_electric"]:
+		var path := "res://../server/assets/%s.model.json" % name
+		var text := FileAccess.get_file_as_string(path)
+		if text == "":
+			continue
+		var parsed: Variant = JSON.parse_string(text)
+		if not (parsed is Dictionary):
+			continue
+		var doc := parsed as Dictionary
+		if String(doc.get("device", "")) == kind:
+			return doc
+	return {}
+
+
+## _find_node — узел по имени где угодно в поддереве. Имя части — часть
+## ОПИСАНИЯ, а не клиента: проверка ищет то, что назвал сервер.
+func _find_node(root: Node, name_v: String) -> Node3D:
+	if root.name == name_v and root is Node3D:
+		return root as Node3D
+	for c in root.get_children():
+		var f := _find_node(c, name_v)
+		if f != null:
+			return f
+	return null

@@ -22,6 +22,38 @@
         "modified": true,
         "modifications": "из сцены убраны два кузова (vl80tk1.002, vl80tk1.003), отставленные на 8.15 м вбок и не стоящие ни на чём; постановка задана масштабом 1.0286 и сдвигом каталога — байты геометрии не тронуты"
       }
+    },
+    {
+      "name": "switch_stand_manual",
+      "file": "switch_stand_manual.model.json",
+      "media_type": "application/vnd.clearahead.model+json",
+      "source_hash": "sha256-ce9bbeb32aecdf352a1d9580f94140f1a2990f11bc48c57e7745a7ebe212c93d",
+      "anchor": "tie_top",
+      "scale": 1.0,
+      "translation": [0, 0, 0],
+      "attribution": {
+        "title": "Ручной переводной механизм со стрелочным указателем",
+        "author": "ClearAhead",
+        "source": "собственная работа: обмер по фотографии владельца, показания указателя по ИСИ",
+        "license": "CC0-1.0",
+        "modified": false
+      }
+    },
+    {
+      "name": "switch_stand_electric",
+      "file": "switch_stand_electric.model.json",
+      "media_type": "application/vnd.clearahead.model+json",
+      "source_hash": "sha256-131189d32931a260d7ea02acf3ce0d3a2038ad0743b98c91c71c44f2295fb25e",
+      "anchor": "tie_top",
+      "scale": 1.0,
+      "translation": [0, 0, 0],
+      "attribution": {
+        "title": "Электропривод стрелки со стрелочным указателем",
+        "author": "ClearAhead",
+        "source": "собственная работа: габарит по СП-6М (оценка), показания указателя по ИСИ",
+        "license": "CC0-1.0",
+        "modified": false
+      }
     }
   ],
   "stock": [
@@ -61,8 +93,33 @@
       },
       "controls": {
         "traction_notches": 33,
-        "brake_notches": 5,
-        "notch_rate": 1.0
+        "notch_rate": 1.0,
+        "keys": {
+          "traction": {
+            "name": "контроллер тяги",
+            "up": ["W", "2"],
+            "down": ["S", "1"]
+          },
+          "reverser": {
+            "name": "реверсор (при нулевой тяге)",
+            "up": ["R"],
+            "down": ["shift+R"]
+          },
+          "handle": {
+            "name": "кран машиниста № 395 по сектору",
+            "up": ["D"],
+            "down": ["A"]
+          },
+          "independent": {
+            "name": "кран вспомогательного тормоза",
+            "up": ["X"],
+            "down": ["Z"]
+          },
+          "release": {
+            "name": "экстренная остановка",
+            "up": ["0"]
+          }
+        }
       },
       "appearance": "loco_vl80"
     }

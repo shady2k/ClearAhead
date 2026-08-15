@@ -20,6 +20,17 @@ const (
 	PassageDiverging = ":diverging"
 )
 
+// Рукость стрелки (Turnout.Hand): в какую сторону уходит БОКОВОЙ проход, если
+// смотреть от острия.
+//
+// Перечень закрыт, и пометка автора СВЕРЯЕТСЯ С ГЕОМЕТРИЕЙ при компиляции
+// (track.turnoutDrive): по пометке строится крестовина, по геометрии — брусья и
+// привод, и разойтись им нельзя.
+const (
+	HandLeft  = "left"
+	HandRight = "right"
+)
+
 // Переводные механизмы стрелки (Turnout.Drive).
 //
 // Перечень ЗАКРЫТ, и третьего значения не заводится до тех пор, пока за ним не
@@ -33,6 +44,23 @@ const (
 	// двигателя, и переводится он с пульта.
 	DriveElectric = "electric"
 )
+
+// Drives — перечень механизмов списком.
+//
+// Заведён вместе с видами устройств (content.Device): набор контента обязан
+// иметь тело для КАЖДОГО рода, и проверить это можно только по перечню. Список и
+// константы выше — одно и то же знание, и второго места для него нет.
+var Drives = []string{DriveManual, DriveElectric}
+
+// KnownDrive — объявлен ли такой механизм.
+func KnownDrive(kind string) bool {
+	for _, k := range Drives {
+		if k == kind {
+			return true
+		}
+	}
+	return false
+}
 
 // Validate проверяет форму карты. Отказывает, не чинит.
 func Validate(m *Map) error {
@@ -319,7 +347,7 @@ func (m *Map) collectPorts() (map[string]Port, error) {
 		}
 	}
 	for _, t := range m.Topology.Turnouts {
-		if t.Hand != "left" && t.Hand != "right" {
+		if t.Hand != HandLeft && t.Hand != HandRight {
 			return nil, fmt.Errorf("mapfmt: стрелка %s: рукость должна быть left или right, получено %q", Labeled(t.Name, t.ID), t.Hand)
 		}
 		// Механизм проверяется наравне с рукостью и по той же причине: без него

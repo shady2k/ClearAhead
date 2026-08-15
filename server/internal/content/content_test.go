@@ -50,7 +50,13 @@ func goodDoc(t *testing.T, body []byte) map[string]any {
 			"traction": map[string]any{
 				"adhesive_mass": 100.0, "continuous_force": 200.0, "continuous_speed": 40.0,
 			},
-			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
+			"controls": map[string]any{"traction_notches": 33, "brake_notches": 5,
+				"keys": map[string]any{
+					"traction": map[string]any{"name": "тяга", "up": []any{"W"}, "down": []any{"S"}},
+					"reverser": map[string]any{"name": "реверсор", "up": []any{"R"}, "down": []any{"shift+R"}},
+					"brake":    map[string]any{"name": "тормоз", "up": []any{"4"}, "down": []any{"3"}},
+					"release":  map[string]any{"name": "экстренная остановка", "up": []any{"0"}},
+				}},
 			"appearance": "loco_x",
 		}},
 	}
@@ -80,6 +86,34 @@ func TestLoadGoodSet(t *testing.T) {
 	}
 	if set.Hash == "" {
 		t.Fatal("перечень без хеша: клиенту нечем проверять кэш")
+	}
+}
+
+// TestOrgansReachTheLoadedSet — ПЕРЕЧЕНЬ ОРГАНОВ ДОЕЗЖАЕТ ДО НАБОРА, а не
+// теряется по дороге.
+//
+// Проверка выглядит пустой и не является ею. Перечень выводится в цикле по
+// паспортам, и `t.Organs = …` в этом цикле пишет В КОПИЮ: набор уезжает клиенту
+// без органов, клиент не находит ни одной рукоятки, и ни одна клавиша кабины не
+// работает. Ровно это и случилось 2026-08-15; поймал зонд кабины, а не проверки
+// — у проверок свои фикстуры, и они собирают перечень сами, минуя загрузку.
+func TestOrgansReachTheLoadedSet(t *testing.T) {
+	body := fakeGLB(t)
+	set, err := Load(writeSet(t, goodDoc(t, body), map[string][]byte{"x.glb": body}))
+	if err != nil {
+		t.Fatalf("набор: %v", err)
+	}
+	st, ok := set.StockType("X1")
+	if !ok {
+		t.Fatal("паспорта X1 в наборе нет")
+	}
+	if len(st.Organs) == 0 {
+		t.Fatal("у загруженного паспорта нет ни одного органа — перечень потерялся при укладке")
+	}
+	for _, o := range st.Organs {
+		if o.Name == "" || len(o.Up) == 0 {
+			t.Fatalf("орган %s доехал без имени или без клавиш: %+v", o.ID, o)
+		}
 	}
 }
 
@@ -150,6 +184,38 @@ func TestLoadRefusals(t *testing.T) {
 		}},
 		{"ноль ступеней торможения", "brake_notches", func(d map[string]any) {
 			d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["brake_notches"] = 0
+		}},
+		// ДВЕ ТОРМОЗНЫЕ СИСТЕМЫ РАЗОМ. Ступени у машины с магистралью физика не
+		// читает вовсе (sim.forces берёт долю из давления цилиндра), а до пульта
+		// они доезжали — и клавиши двигали рукоятку, которой ничего не
+		// соответствует.
+		{"ступени торможения при магистрали", "глубину торможения задаёт что-то одно", func(d map[string]any) {
+			b := d["stock"].([]any)[0].(map[string]any)["brake"].(map[string]any)
+			b["air"] = map[string]any{
+				"charge": 5.4, "full_service_drop": 1.5, "cylinder_full": 3.8,
+				"service_rate": 0.22, "emergency_rate": 0.9, "charge_rate": 0.6,
+				"leak_rate": 0.02, "main_min": 7.5, "main_max": 9.0,
+				"compressor_rate": 0.2, "cylinder_rate": 0.9, "independent_max": 4.0,
+			}
+		}},
+		// РАСКЛАДКА КАБИНЫ (слово владельца: «горячие клавиши тоже должны
+		// приходить с сервера»). Орган без клавиш — рукоятка, которую нечем
+		// тронуть; клавиши без органа — клавиша, которая молча пропадает.
+		{"орган без клавиш", "не объявлены клавиши и имя", func(d map[string]any) {
+			k := d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["keys"].(map[string]any)
+			delete(k, "traction")
+		}},
+		{"клавиши у органа, которого нет", "которого у машины нет", func(d map[string]any) {
+			k := d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["keys"].(map[string]any)
+			k["handle"] = map[string]any{"name": "кран", "up": []any{"D"}, "down": []any{"A"}}
+		}},
+		{"клавиша не той формы", "ожидалась одна буква или цифра", func(d map[string]any) {
+			k := d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["keys"].(map[string]any)
+			k["traction"].(map[string]any)["up"] = []any{"Space"}
+		}},
+		{"рукоятка идёт только вверх", "не рукоятка", func(d map[string]any) {
+			k := d["stock"].([]any)[0].(map[string]any)["controls"].(map[string]any)["keys"].(map[string]any)
+			k["traction"].(map[string]any)["down"] = []any{}
 		}},
 		{"неизвестное поле записи", "unknown field", func(d map[string]any) {
 			d["assets"].([]any)[0].(map[string]any)["colour"] = "красный"

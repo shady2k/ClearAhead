@@ -59,6 +59,10 @@ const MaxDocumentBytes = 1 << 20
 type Set struct {
 	Stock  []StockType
 	Assets []Asset
+	// models — разобранные описания тел, по РОДУ МЕХАНИЗМА (mapfmt.Drive*).
+	// Ключ берётся из самого файла модели (Model.Device): перечня устройств
+	// рядом с ассетами не заводится — разбор у Model.
+	models map[string]*Model
 	// blobs — байты по адресу, то есть по хешу СОДЕРЖИМОГО того, что отдаётся.
 	blobs map[string][]byte
 	// Hash — хеш перечня (не байтов ассетов). Меняется при правке любого числа
@@ -100,6 +104,9 @@ func Load(dir string) (*Set, error) {
 		return nil, err
 	}
 	if err := set.loadStock(doc.Stock); err != nil {
+		return nil, err
+	}
+	if err := set.loadModels(); err != nil {
 		return nil, err
 	}
 	set.Hash = set.digest()

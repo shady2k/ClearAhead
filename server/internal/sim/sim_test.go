@@ -91,7 +91,17 @@ func setWith(t *testing.T, edit func(map[string]any)) *content.Set {
 			"traction": map[string]any{
 				"adhesive_mass": 192.0, "continuous_force": 401.1, "continuous_speed": 53.6,
 			},
-			"controls":   map[string]any{"traction_notches": 33, "brake_notches": 5},
+			// СТУПЕНЕЙ ТОРМОЖЕНИЯ У ЭТОЙ МАШИНЫ НЕТ: у неё магистраль, и глубину
+			// торможения задаёт разрядка. Объявить их значило бы описать машину с
+			// двумя тормозными системами — набор такую не принимает.
+			"controls": map[string]any{"traction_notches": 33,
+				"keys": map[string]any{
+					"traction":    map[string]any{"name": "тяга", "up": []any{"W"}, "down": []any{"S"}},
+					"reverser":    map[string]any{"name": "реверсор", "up": []any{"R"}, "down": []any{"shift+R"}},
+					"handle":      map[string]any{"name": "кран машиниста", "up": []any{"D"}, "down": []any{"A"}},
+					"independent": map[string]any{"name": "вспомогательный", "up": []any{"X"}, "down": []any{"Z"}},
+					"release":     map[string]any{"name": "экстренная остановка", "up": []any{"0"}},
+				}},
 			"appearance": "vid",
 		}},
 	}
@@ -788,7 +798,14 @@ func slowWorld(t *testing.T, u float64) (*World, *match.Match) {
 	t.Helper()
 	s := setWith(t, func(st map[string]any) {
 		st["controls"] = map[string]any{
-			"traction_notches": 33, "brake_notches": 5, "notch_rate": 1.0,
+			"traction_notches": 33, "notch_rate": 1.0,
+			"keys": map[string]any{
+				"traction":    map[string]any{"name": "тяга", "up": []any{"W"}, "down": []any{"S"}},
+				"reverser":    map[string]any{"name": "реверсор", "up": []any{"R"}, "down": []any{"shift+R"}},
+				"handle":      map[string]any{"name": "кран машиниста", "up": []any{"D"}, "down": []any{"A"}},
+				"independent": map[string]any{"name": "вспомогательный", "up": []any{"X"}, "down": []any{"Z"}},
+				"release":     map[string]any{"name": "экстренная остановка", "up": []any{"0"}},
+			},
 		}
 		tr := st["traction"].(map[string]any)
 		tr["max_force"] = 900.0

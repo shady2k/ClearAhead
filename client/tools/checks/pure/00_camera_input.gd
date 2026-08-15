@@ -142,7 +142,11 @@ func run() -> void:
 	probe_drive.label = "12"
 	probe_drive.drive = "manual"
 	probe_drive.pose = TrackGeom.AxisPoint.new(0.0, 0.0, 0.0, 0.0, 0.0)
-	var probe_stand := SwitchStand.build(probe_drive, 0.0)
+	# ТЕЛА У НЕГО НЕТ НАРОЧНО: проверяется досягаемость и подсказка, а тело
+	# приезжает каталогом и к этим двум вопросам отношения не имеет. Привод без
+	# описания остаётся законным узлом с местом — и с объяснённой причиной,
+	# почему он пуст.
+	var probe_stand := SwitchStand.build(probe_drive, 0.0, {})
 	ctx.tree.root.add_child(probe_stand)
 	probe_stand.global_position = Vector3(0.0, 0.0, -60.0)
 	driver.set_stands([probe_stand])

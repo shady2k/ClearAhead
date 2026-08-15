@@ -38,6 +38,7 @@ extends RefCounted
 ## посередине, и «вперёд → назад» без остановки в нуле не проскочить.
 const REVERSERS := ["reverse", "neutral", "forward"]
 
+
 ## Человеческие имена положений. Машинные строки — договор, эти — для глаз.
 const REVERSER_NAMES := {
 	"reverse": "назад",
@@ -52,6 +53,13 @@ var unit_id := ""
 ## двигаются вовсе: лучше неподвижная рукоятка, чем ступень, выдуманная клиентом.
 var traction_notches := 0
 var brake_notches := 0
+## Органы и действия, объявленные паспортом: записи с сервера (content.Organ).
+## Пусто — машина без органов управления. Клиент их не выводит и не дополняет: он
+## спрашивает, есть ли орган, как он называется и какой клавишей его ведут.
+##
+## Ключи записи: id, kind ("organ" | "action"), name, up, down (списки имён
+## клавиш вида «W», «2», «shift+R»).
+var organs: Array[Dictionary] = []
 
 ## Желаемое — то, что видно игроку немедленно.
 var traction := 0
@@ -112,6 +120,15 @@ func bind(unit: String, passport: Dictionary, controls: Dictionary) -> void:
 	var limits: Dictionary = (passport.get("controls", {})) as Dictionary
 	traction_notches = int(limits.get("traction_notches", 0))
 	brake_notches = int(limits.get("brake_notches", 0))
+	# КАКИЕ ОРГАНЫ У МАШИНЫ ЕСТЬ — СПИСКОМ ИЗ ПАСПОРТА, а не выводом по пределам.
+	# Слово владельца 2026-08-15: «мы передаём серверу локомотив, его паспорт,
+	# возможности; клиент лишь использует их — на стороне клиента не должно быть
+	# никакой информации». Правило вывода («кран есть тогда, когда есть
+	# магистраль») жило и здесь, и на сервере, и разошлось: клиент держал клавиши
+	# ступенчатого тормоза у машины, у которой его нет вовсе.
+	organs.clear()
+	for o in (passport.get("organs", []) as Array):
+		organs.append(o as Dictionary)
 	pending = 0
 	refusal = ""
 	max_speed_kmh = float(passport.get("max_speed", 0.0))
@@ -383,6 +400,30 @@ func notch_traction(delta: int) -> bool:
 
 
 ## notch_brake — сдвинуть тормоз на ступень.
+## has_organ — ЕСТЬ ЛИ У ЭТОЙ МАШИНЫ такой орган. Отвечает ПАСПОРТ, а не клиент.
+##
+## Спрашивают пульт (рисовать ли рукоятку) и разбор клавиш. Тормозная система —
+## свойство машины (слово владельца: «у разных локомотивов своя тормозная
+## система»), и набор органов у неё свой.
+##
+## Имя органа — то, что прислал сервер (content.Organ*); имя ДЕЙСТВИЯ клавиши
+## отличается от него хвостом «+»/«−», и снять этот хвост — работа клавиатуры,
+## которая клиенту и принадлежит.
+func has_organ(action: String) -> bool:
+	return not organ_of(action).is_empty()
+
+
+## organ_of — запись органа по имени действия. Пустой словарь — органа нет.
+func organ_of(action: String) -> Dictionary:
+	var name := action
+	if name.ends_with("+") or name.ends_with("-"):
+		name = name.substr(0, name.length() - 1)
+	for o in organs:
+		if String(o.get("id", "")) == name:
+			return o
+	return {}
+
+
 func notch_brake(delta: int) -> bool:
 	if not aboard():
 		return false
@@ -423,8 +464,8 @@ func release_all() -> bool:
 	# ступенью». Ступеней у неё нет, и оставить их здесь значило бы, что клавиша
 	# аварийной остановки не останавливает: она ставила бы число, которое на этой
 	# машине ни на что не влияет.
-	var want_handle := "emergency" if handle != "" else handle
-	var want_indep := independent_max if independent_max > 0 else 0
+	var want_handle := "emergency" if has_organ("handle") else handle
+	var want_indep := independent_max if has_organ("independent") else 0
 	if traction == 0 and brake == brake_notches and reverser == "neutral" 			and handle == want_handle and independent == want_indep:
 		return false
 	traction = 0
@@ -445,9 +486,12 @@ func text() -> String:
 	if not aboard():
 		return ""
 	var wait := "" if pending <= 0 else "  [color=#ffc060](ждём сервер)[/color]"
-	var line := "[b]кабина[/b]: тяга %d/%d, тормоз %d/%d, реверсор %s%s" % [
-		traction, traction_notches, brake, brake_notches,
-		String(REVERSER_NAMES.get(reverser, reverser)), wait]
+	var line := "[b]кабина[/b]: тяга %d/%d, реверсор %s%s" % [
+		traction, traction_notches, String(REVERSER_NAMES.get(reverser, reverser)), wait]
+	# СТУПЕНЧАТЫЙ ТОРМОЗ ПОКАЗЫВАЕТСЯ, ТОЛЬКО ЕСЛИ ОН У МАШИНЫ ЕСТЬ. «тормоз 0/0»
+	# у машины с магистралью — это прибор, показывающий орган, которого нет.
+	if has_organ("brake"):
+		line += ", тормоз %d/%d" % [brake, brake_notches]
 	if pending > 0 and (traction != set_traction or brake != set_brake or reverser != set_reverser):
 		# ДВА ЧИСЛА, КОГДА ОНИ РАЗОШЛИСЬ. Показывать только желаемое значило бы
 		# скрыть, что машина ещё не приняла команду.

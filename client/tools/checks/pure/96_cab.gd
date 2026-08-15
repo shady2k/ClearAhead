@@ -17,16 +17,33 @@ extends "res://tools/check_suite.gd"
 
 const ContractDoc := preload("res://tools/contract_doc.gd")
 
-## Пределы фикстурой: те же числа, что у боевого ВЛ80 (33 ступени ЭКГ-8Ж и пять
-## наших ступеней торможения). Связаны они с паспортом не файлом, а этой
-## строкой: проверяется арифметика рукояток, а не то, что сервер сегодня прислал.
-const LIMITS := {"traction_notches": 33, "brake_notches": 5}
+## Пределы фикстурой: 33 ступени ЭКГ-8Ж, как у боевого ВЛ80. Связаны они с
+## паспортом не файлом, а этой строкой: проверяется арифметика рукояток, а не то,
+## что сервер сегодня прислал.
+const LIMITS := {"traction_notches": 33}
 ## ПАСПОРТ ТОЙ ЖЕ ФОРМЫ, ЧТО ПРИХОДИТ С СЕРВЕРА, а не один блок органов: кабина
 ## берёт из него ещё и шкалы приборов, и урезанная фикстура проверяла бы машину,
 ## которой в наборе не бывает. Числа — те же, что у ВЛ80 в content.json.
+##
+## ПЕРЕЧЕНЬ ОРГАНОВ ЗДЕСЬ ТОЖЕ ИЗ ПАСПОРТА, и это предмет проверки, а не
+## оформление: до 2026-08-15 клиент выводил наличие органа сам («кран есть, если
+## есть магистраль») и держал клавиши ступенчатого тормоза у машины, у которой
+## его нет. Теперь список присылает сервер (content.StockType.Organs), и клиент
+## обязан спрашивать его, а не выводить заново.
 const PASSPORT := {
 	"controls": LIMITS,
 	"max_speed": 110.0,
+	"organs": [
+		{"id": "traction", "kind": "organ", "name": "контроллер тяги",
+			"up": ["W", "2"], "down": ["S", "1"]},
+		{"id": "reverser", "kind": "organ", "name": "реверсор",
+			"up": ["R"], "down": ["shift+R"]},
+		{"id": "handle", "kind": "organ", "name": "кран машиниста",
+			"up": ["D"], "down": ["A"]},
+		{"id": "independent", "kind": "organ", "name": "вспомогательный тормоз",
+			"up": ["X"], "down": ["Z"]},
+		{"id": "release", "kind": "action", "name": "экстренная остановка", "up": ["0"]},
+	],
 	"brake": {
 		"air": {
 			"charge": 5.4,
@@ -35,6 +52,19 @@ const PASSPORT := {
 			"independent_max": 4.0,
 		},
 	},
+}
+## ВТОРАЯ МАШИНА — БЕЗ МАГИСТРАЛИ: у неё ступенчатый тормоз и нет ни крана
+## машиниста, ни вспомогательного. Заведена не для полноты: без неё «ступеней у
+## этой машины нет» доказывало бы лишь то, что ступеней нет ни у кого.
+const NOTCH_BRAKE_PASSPORT := {
+	"controls": {"traction_notches": 8, "brake_notches": 5},
+	"max_speed": 90.0,
+	"organs": [
+		{"id": "traction", "kind": "organ", "name": "контроллер тяги", "up": ["W"], "down": ["S"]},
+		{"id": "reverser", "kind": "organ", "name": "реверсор", "up": ["R"], "down": ["shift+R"]},
+		{"id": "brake", "kind": "organ", "name": "тормоз", "up": ["4"], "down": ["3"]},
+		{"id": "release", "kind": "action", "name": "экстренная остановка", "up": ["0"]},
+	],
 }
 const STOPPED := {"traction": 0, "brake": 0, "reverser": "neutral"}
 
@@ -70,17 +100,40 @@ func _check_notches() -> void:
 
 	cab.release_all()
 	_ok("«всё в ноль» сбрасывает тягу", cab.traction == 0)
-	# Тормоз ставится ПОЛНЫЙ: «всё в ноль» у машиниста означает остановиться, а
-	# не покатиться.
-	_ok("«всё в ноль» ставит полный тормоз", cab.brake == LIMITS["brake_notches"], str(cab.brake))
+	# У МАШИНЫ С МАГИСТРАЛЬЮ «всё в ноль» — это ЭКСТРЕННОЕ, а не ступень: ступеней
+	# у неё нет вовсе, и число, которое ни на что не влияет, аварийной остановкой
+	# не является.
+	_ok("«всё в ноль» ставит кран в экстренное", cab.handle == "emergency", cab.handle)
 	_ok("«всё в ноль» ставит реверсор в ноль", cab.reverser == "neutral", cab.reverser)
 	_ok("повторное «всё в ноль» ничего не меняет", not cab.release_all())
 
-	var brakes := _bound()
-	for i in range(LIMITS["brake_notches"] + 3):
-		brakes.notch_brake(1)
+	# ОРГАН, КОТОРОГО НЕТ, НЕ ДВИГАЕТСЯ И НЕ ПОКАЗЫВАЕТСЯ. Список органов прислал
+	# сервер; клиент по нему решает, отдавать ли клавишу и рисовать ли рукоятку.
+	# КЛАВИШИ ПРИШЛИ С СЕРВЕРА, а не выведены клиентом. Проверяется не раскладка
+	# (её назначает автор набора), а то, что клиент читает присланное: у органа
+	# есть имя и обе клавиши, и именно они попадут в список на экране.
+	var traction := cab.organ_of("traction+")
+	_ok("у органа есть присланное имя", String(traction.get("name", "")) != "", str(traction))
+	_ok("у органа есть присланные клавиши",
+		not (traction.get("up", []) as Array).is_empty()
+		and not (traction.get("down", []) as Array).is_empty(), str(traction))
+	_ok("у машины с магистралью нет ступенчатого тормоза", not cab.has_organ("brake"))
+	_ok("кран машиниста у неё есть", cab.has_organ("handle"))
+	_ok("ступень тормоза у неё не набирается", not cab.notch_brake(1) and cab.brake == 0)
+	_ok("в строке кабины ступенчатого тормоза нет", not cab.text().contains("тормоз"), cab.text())
+
+	# ВТОРАЯ МАШИНА: ступени есть, крана нет.
+	var notched := Cab.new()
+	notched.bind("U2", NOTCH_BRAKE_PASSPORT, STOPPED)
+	_ok("у машины без магистрали ступенчатый тормоз есть", notched.has_organ("brake"))
+	_ok("крана машиниста у неё нет", not notched.has_organ("handle"))
+	for i in range(int(NOTCH_BRAKE_PASSPORT["controls"]["brake_notches"]) + 3):
+		notched.notch_brake(1)
 	_ok("выше паспортного предела тормоз не идёт",
-		brakes.brake == LIMITS["brake_notches"], str(brakes.brake))
+		notched.brake == NOTCH_BRAKE_PASSPORT["controls"]["brake_notches"], str(notched.brake))
+	notched.release_all()
+	_ok("«всё в ноль» у неё ставит полный тормоз",
+		notched.brake == NOTCH_BRAKE_PASSPORT["controls"]["brake_notches"], str(notched.brake))
 
 
 func _check_reverser() -> void:
