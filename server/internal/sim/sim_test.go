@@ -118,7 +118,11 @@ func world(t *testing.T, u float64, facing netloc.Direction) (*World, *match.Mat
 		ID: locoID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: u, Direction: facing},
 	}}}
-	mo, err := match.StartMotion(m.Units[0], net.Elements[seedmap.StationMain])
+	stock, ok := s.StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе нет паспорта VL80")
+	}
+	mo, err := match.StartMotion(m.Units[0], stock, net.Elements[seedmap.StationMain])
 	if err != nil {
 		t.Fatalf("начальное состояние: %v", err)
 	}
@@ -356,45 +360,71 @@ func TestBrakeStopsAndDoesNotReverse(t *testing.T) {
 
 // TestBufferStopHoldsTheMachine — упор: дальше пути нет, и встаёт КОНЕЦ машины.
 //
-// # Что здесь изменилось и почему прежнее утверждение умерло
+// # Что здесь изменилось дважды и почему
 //
-// Тест требовал S == LengthS — «машина встала в границе элемента». Это было
-// верно про ТОЧКУ ОТСЧЁТА и неверно про машину: точка отсчёта — середина между
-// плоскостями автосцепок, значит половина машины (у ВЛ80 17.09 м) оказывалась ЗА
-// упором. Владелец увидел это в кадре: «уже закончились рельсы, а он едет».
+// Сперва тест требовал S == LengthS — «машина встала в границе элемента». Это
+// было верно про ТОЧКУ ОТСЧЁТА и неверно про машину: точка отсчёта — середина
+// между плоскостями автосцепок, значит половина машины (у ВЛ80 17.09 м)
+// оказывалась ЗА упором. Владелец увидел это в кадре: «уже закончились рельсы, а
+// он едет».
 //
-// Проверяются три разных утверждения, и третье появилось из ошибки первой
-// починки: она ловила конец машины только при пересечении границы, и середина
+// Затем он требовал S == LengthS − полдлины. Это верно про ОДИНОЧНЫЙ ЛОКОМОТИВ и
+// приблизительно про всё остальное: полдлины от середины — это конец машины
+// только пока машина целиком на одном элементе. Приближение было объявлено
+// вслух в sim.move и умерло вместе с ним.
+//
+// Проверяется теперь то, что и есть правда: КОНЕЦ ОТРЕЗКА стоит РОВНО В ПОРТУ.
+// Утверждение не знает ни про полдлины, ни про число элементов под машиной, и
+// потому переживёт состав.
+//
+// Третье утверждение («и стоит она дальше») появилось из ошибки одной из
+// починок: та ловила конец машины только при пересечении границы, и середина
 // свободно уходила за предел внутрь элемента, а потом отбрасывалась назад. То
 // есть машина не стояла у буфера, а колотилась об него с размахом в полмашины.
-// Отсюда «и стоит она дальше»: покой обязан быть покоем, а не размахом.
+// Покой обязан быть покоем, а не размахом.
 func TestBufferStopHoldsTheMachine(t *testing.T) {
 	w, m := world(t, 150, netloc.DirForward)
 	el := w.net.Elements[seedmap.StationMain]
-	st, ok := set(t).StockType("VL80")
-	if !ok {
-		t.Fatal("в наборе нет паспорта VL80")
-	}
-	want := el.LengthS - halfLength(st)
 	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
 	step(t, w, m, 600)
 	got := motion(t, m)
 	if got.Element != seedmap.StationMain {
 		t.Fatalf("машина уехала с главного пути на %s — за ним ничего нет", got.Element)
 	}
-	if got.S != want {
-		t.Fatalf("встала серединой на %s, а конец машины должен быть у порта: %s (элемент %s, полдлины %s)",
-			got.S, want, el.LengthS, halfLength(st))
+	endEl, endS := spanEndA(t, got.Span)
+	if endEl != seedmap.StationMain || endS != el.LengthS {
+		t.Fatalf("конец машины встал на %s элемента %s, а порт — на %s",
+			endS, endEl, el.LengthS)
 	}
 	if got.Speed != 0 {
 		t.Fatalf("упёрлась, но скорость %v", got.Speed)
 	}
 	// И СТОИТ: ещё сто тиков под полной тягой ничего не меняют. Без этого
 	// утверждения «упёрлась» проходило бы и у машины, которая бьётся об упор.
+	was := got.S
 	step(t, w, m, 100)
-	if again := motion(t, m); again.S != want || again.Speed != 0 {
-		t.Fatalf("упёршаяся машина под тягой сдвинулась: %s -> %s, скорость %v", want, again.S, again.Speed)
+	if again := motion(t, m); again.S != was || again.Speed != 0 {
+		t.Fatalf("упёршаяся машина под тягой сдвинулась: %s -> %s, скорость %v", was, again.S, again.Speed)
 	}
+}
+
+// spanEndA — где лежит конец A отрезка: последний визит, тем концом, которым он
+// смотрит от конца B.
+//
+// Своя копия арифметики концов, а не вызов неэкспортированного sideA пакета
+// track: тест, спрашивающий проверяемый код, как понимать его же ответ,
+// подтверждает согласие кода с самим собой. Здесь — независимое прочтение
+// правила «направление визита говорит, совпадает ли ход B → A с ростом u».
+func spanEndA(t *testing.T, sp track.Span) (string, units.Distance) {
+	t.Helper()
+	if len(sp) == 0 {
+		t.Fatal("у машины пустой отрезок пути")
+	}
+	last := sp[len(sp)-1]
+	if last.Direction == netloc.DirForward {
+		return last.Element, last.To
+	}
+	return last.Element, last.From
 }
 
 // TestTurnoutDecidesTheBranch — положение остряка решает, куда уедет машина.
@@ -467,7 +497,7 @@ func TestMotionShowsUpOnTheWire(t *testing.T) {
 // запасом.
 func TestStepSizeIsHonest(t *testing.T) {
 	run := func(dt units.SimTime) units.Distance {
-		w, m := world(t, 10, netloc.DirForward)
+		w, m := world(t, 18, netloc.DirForward)
 		drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
 		// Одинаковое МОДЕЛЬНОЕ время: пять секунд разгона. Больше нельзя —
 		// машина упрётся в упор, оба прогона встанут в одну точку, и сравнение
@@ -517,7 +547,7 @@ func formatKN(f units.Force) string {
 // элемента: остановка об упор — не торможение, и путать их нельзя.
 func stopDistance(t *testing.T, handle brake.Handle) (units.Distance, bool) {
 	t.Helper()
-	w, m := world(t, 5, netloc.DirForward)
+	w, m := world(t, 18, netloc.DirForward)
 	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	step(t, w, m, 30)
@@ -531,8 +561,13 @@ func stopDistance(t *testing.T, handle brake.Handle) (units.Distance, bool) {
 	if to.Speed != 0 {
 		t.Fatalf("за 60 с машина не остановилась: %v", to.Speed)
 	}
+	// «УПЁРЛАСЬ» СПРАШИВАЕТСЯ У КОНЦА ОТРЕЗКА, а не у точки отсчёта. Сравнение
+	// to.S == el.LengthS стало ложным ВСЕГДА в тот день, когда упор начал ловить
+	// настоящий конец машины: середина встаёт на полдлины раньше порта. Сторож,
+	// который не срабатывает никогда, хуже отсутствующего — он выглядит живым.
 	el := w.net.Elements[seedmap.StationMain]
-	return to.S - from.S, to.S == el.LengthS
+	endEl, endS := spanEndA(t, to.Span)
+	return to.S - from.S, endEl == el.ID && endS == el.LengthS
 }
 
 // TestBrakeHandleStopsTheMachine — ТОРМОЗ РАБОТАЕТ КРАНОМ, а не ступенью.
@@ -554,7 +589,7 @@ func TestBrakeHandleStopsTheMachine(t *testing.T) {
 	// ПОЕЗДНОЕ ПОЛОЖЕНИЕ НЕ ТОРМОЗИТ: тот же разгон при ручке в поездном обязан
 	// дать ЗАМЕТНО больший выбег. Без этой половины «тормоз работает» доказывало
 	// бы лишь то, что машина когда-нибудь останавливается.
-	w, m := world(t, 5, netloc.DirForward)
+	w, m := world(t, 18, netloc.DirForward)
 	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	step(t, w, m, 30)
@@ -602,7 +637,11 @@ func slowWorld(t *testing.T, u float64) (*World, *match.Match) {
 		ID: locoID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: u, Direction: netloc.DirForward},
 	}}}
-	mo, err := match.StartMotion(m.Units[0], net.Elements[seedmap.StationMain])
+	stock, ok := s.StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе нет паспорта VL80")
+	}
+	mo, err := match.StartMotion(m.Units[0], stock, net.Elements[seedmap.StationMain])
 	if err != nil {
 		t.Fatalf("начальное состояние: %v", err)
 	}
@@ -625,7 +664,7 @@ func slowWorld(t *testing.T, u float64) (*World, *match.Match) {
 // поставили рукоятку на последнюю позицию — контроллер пошёл к ней, а не
 // прыгнул.
 func TestControllerRampsToTheHandle(t *testing.T) {
-	w, m := world(t, 5, netloc.DirForward)
+	w, m := world(t, 18, netloc.DirForward)
 	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	step(t, w, m, 1) // один тик, 100 мс
@@ -641,13 +680,13 @@ func TestControllerRampsToTheHandle(t *testing.T) {
 // позиции по одной, и это ВИДНО В ПУТИ: за первые секунды она проходит заметно
 // меньше, чем с мгновенным контроллером.
 func TestSlowControllerTakesTimeToFullPower(t *testing.T) {
-	fast, mf := world(t, 5, netloc.DirForward)
+	fast, mf := world(t, 18, netloc.DirForward)
 	drive(t, mf, match.Controls{Traction: 33, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	step(t, fast, mf, 50)
 	quick := motion(t, mf)
 
-	slow, ms := slowWorld(t, 5)
+	slow, ms := slowWorld(t, 18)
 	drive(t, ms, match.Controls{Traction: 33, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	step(t, slow, ms, 50)
@@ -674,7 +713,7 @@ func TestSlowControllerTakesTimeToFullPower(t *testing.T) {
 // машина трогается спокойно, набирает позиции и срывается тогда, когда двигатели
 // запросят больше, чем удержит рельс.
 func TestFullHandleSlipsOnTheWay(t *testing.T) {
-	w, m := slowWorld(t, 5)
+	w, m := slowWorld(t, 18)
 	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward,
 		Handle: brake.HandleRun})
 	// Сразу после команды машина ещё не буксует: позиция нулевая.
@@ -701,4 +740,116 @@ func TestFullHandleSlipsOnTheWay(t *testing.T) {
 		t.Fatalf("сорвалась на позиции %d тысячных — это первая же, набора не было", notchAtSlip)
 	}
 	t.Logf("сорвалась на позиции %.1f из 33", float64(notchAtSlip)/1000.0)
+}
+
+// TestSpanCrossesTheBoundary — машина лежит на двух элементах сразу, и отрезок
+// остаётся связным всю дорогу через стрелку.
+//
+// # Что именно это доказывает
+//
+// До 2026-08-15 такого состояния не существовало: точка отсчёта была на одном
+// элементе, а концы выводились от неё полудлиной — то есть на границе машина
+// «перепрыгивала» с элемента на элемент целиком. Клиент платил за это дважды:
+// хорду между шкворнями приходилось СЖИМАТЬ у конца элемента (иначе шкворень
+// прижимался к границе и кузов уезжал на полбазы), а показ между снимками через
+// границу не интерполировался вовсе.
+//
+// Проверка идёт ЧЕРЕЗ ВСЮ поездку, а не в одной точке: связность отрезка — это
+// инвариант, и нарушить его можно на любом из четырёх переходов пути.
+func TestSpanCrossesTheBoundary(t *testing.T) {
+	w, m := world(t, 40, netloc.DirForward)
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserReverse})
+	seen := map[string]bool{}
+	both := 0
+	for range 400 {
+		step(t, w, m, 1)
+		mo := motion(t, m)
+		if err := mo.Span.Connected(w.net); err != nil {
+			t.Fatalf("отрезок разъехался: %v (%+v)", err, mo.Span)
+		}
+		if got, want := mo.Span.Length(), stockHalf(t)*2; got != want {
+			t.Fatalf("длина отрезка стала %s, а машина длиной %s", got, want)
+		}
+		for _, iv := range mo.Span {
+			seen[iv.Element] = true
+		}
+		if len(mo.Span) > 1 {
+			both++
+		}
+	}
+	if both == 0 {
+		t.Fatal("за поездку машина ни разу не легла на два элемента — граница не пройдена")
+	}
+	if len(seen) < 3 {
+		t.Fatalf("за поездку побывали на %d элементах: %v", len(seen), seen)
+	}
+	t.Logf("кадров с телом на двух элементах: %d, элементов пройдено: %d", both, len(seen))
+}
+
+// stockHalf — полдлины ВЛ80 фикстуры, в мере пути.
+func stockHalf(t *testing.T) units.Distance {
+	t.Helper()
+	st, ok := set(t).StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе нет паспорта VL80")
+	}
+	half, err := units.MetersToDistance(st.LengthM / 2)
+	if err != nil {
+		t.Fatalf("полудлина: %v", err)
+	}
+	return half
+}
+
+// TestMachineStopsAtTheOtherBody — ЗАПРЕТ НАЛОЖЕНИЯ В ДВИЖЕНИИ: машина встаёт,
+// упёршись в стоящую, и встаёт ВПЛОТНУЮ, а не за метр до неё.
+//
+// # Почему «вплотную» — отдельное утверждение
+//
+// Потому что простой способ запретить наложение — отказаться от шага целиком,
+// когда он ведёт в чужой отрезок. Он проще и он приближение: машина встала бы не
+// доезжая на путь одного подшага (0.14 м при 6.9 м/с), и зазор зависел бы от
+// скорости — то есть на экране два тела то стояли бы вплотную, то с щелью.
+// Поэтому шаг делится пополам до микрометра, и проверяется именно это.
+func TestMachineStopsAtTheOtherBody(t *testing.T) {
+	w, m := world(t, 40, netloc.DirForward)
+	// Вторая машина стоит впереди по ходу: едем вперёд (по росту u), ставим её
+	// дальше по элементу.
+	const parked = "01a3185c-6002-7242-8242-000001424242"
+	st, ok := w.set.StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе нет паспорта VL80")
+	}
+	other := match.Unit{ID: parked, Name: "LOCO_2", Type: "VL80",
+		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward}}
+	m.Units = append(m.Units, other)
+	mo, err := match.StartMotion(other, st, w.net.Elements[seedmap.StationMain])
+	if err != nil {
+		t.Fatalf("вторая машина: %v", err)
+	}
+	m.SetMotion(parked, mo)
+
+	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
+	step(t, w, m, 400)
+
+	moving := motion(t, m)
+	if moving.Speed != 0 {
+		t.Fatalf("машина не остановилась перед стоящей: скорость %v", moving.Speed)
+	}
+	// ВПЛОТНУЮ: конец A едущей и конец B стоящей сошлись в одной точке.
+	headEl, headS := spanEndA(t, moving.Span)
+	parkedSpan, _ := m.MotionOf(parked)
+	tailEl, tailS := parkedSpan.Span[0].Element, parkedSpan.Span[0].From
+	if headEl != tailEl || headS != tailS {
+		t.Fatalf("встала концом на (%s, %s), а хвост стоящей на (%s, %s) — зазор %s",
+			headEl, headS, tailEl, tailS, tailS-headS)
+	}
+	// И НЕ ПРОЛЕЗЛА: наложения нет ни на микрометр.
+	if _, at, busy := m.Conflict(locoID, moving.Span); busy {
+		t.Fatalf("машины наложились: %+v", at)
+	}
+	// И СТОИТ: ещё сто тиков под полной тягой ничего не меняют.
+	step(t, w, m, 100)
+	if again := motion(t, m); again.S != moving.S || again.Speed != 0 {
+		t.Fatalf("упёршаяся в соседа машина сдвинулась: %s -> %s", moving.S, again.S)
+	}
 }

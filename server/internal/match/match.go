@@ -120,6 +120,14 @@ type Match struct {
 	// Ключа нет у машины без пневматики — та тормозит одним числом, и давлений у
 	// неё не существует (content.StockType.AirBrake).
 	Air map[string]brake.State `json:"-"`
+	// Occupied — ОБРАТНЫЙ ИНДЕКС ЗАНЯТОСТИ: по элементу — ссылки на визиты тел,
+	// которые на нём лежат. Разбор — в occupancy.go.
+	//
+	// Правится только SetMotion, вместе с самим отрезком. Читается через
+	// Conflict, OccupiedBy и DeviceBusy — поле остаётся открытым лишь потому,
+	// что снимок партии копируется по полям (engine.snapshotLocked), и это
+	// единственный способ ничего не забыть при добавлении нового.
+	Occupied Occupancy `json:"-"`
 	// Turnouts — положение остряков по устройствам: "straight" или "diverging".
 	//
 	// СОСТОЯНИЕ, А НЕ КОМАНДА. Переводить стрелки — работа диспетчера, и её
@@ -237,10 +245,6 @@ func Start(id, path string, net *track.CompiledNetwork, set *content.Set) (*Matc
 // обязана не подняться, а не доехать до клиента полусобранной.
 func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set) error {
 	seen := map[string]bool{}
-	// occupied — занятые отрезки по элементам, в s. Нужен для запрета
-	// наложения: две машины в одном месте — не «спорная ситуация», а карта,
-	// которую нельзя поднять.
-	occupied := map[string][][2]units.Distance{}
 	for i, u := range list {
 		if err := mapfmt.ValidID("подвижная единица", u.ID); err != nil {
 			return fmt.Errorf("match: единица %d: %w", i, err)
@@ -271,23 +275,32 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 			return fmt.Errorf("match: единица %s: u = %v", mapfmt.Labeled(u.Name, u.ID), u.At.U)
 		}
 
-		from, to, err := extentS(u, st, el)
+		// СОСТОЯНИЕ ФИЗИКИ СОБИРАЕТСЯ ЗДЕСЬ, ДО ПРОВЕРКИ НАЛОЖЕНИЯ: проверять
+		// надо тот самый отрезок, который ляжет в мир, а не второй, построенный
+		// рядом по тем же правилам.
+		mo, err := StartMotion(u, st, el)
 		if err != nil {
-			return fmt.Errorf("match: единица %s: %w", mapfmt.Labeled(u.Name, u.ID), err)
+			return err
 		}
-		for _, busy := range occupied[u.At.Element] {
-			// Полуоткрытые интервалы: касание концами наложением НЕ считается.
-			// Соглашение принято раньше и не здесь (ClearAhead-5zd), но
-			// применяется впервые — при целых микрометрах равенство достижимо,
-			// и «какая из двух сторон границы занята» не имеет естественного
-			// ответа.
-			if from < busy[1] && busy[0] < to {
-				return fmt.Errorf("match: единица %s накладывается на уже стоящую "+
-					"на элементе %s: [%s, %s) против [%s, %s)",
-					mapfmt.Labeled(u.Name, u.ID), u.At.Element, from, to, busy[0], busy[1])
+		// ЗАПРЕТ НАЛОЖЕНИЯ спрашивает ТОТ ЖЕ ИНДЕКС, что и всё остальное в мире.
+		//
+		// Здесь стояла своя карта занятых интервалов — второй ответ на тот же
+		// вопрос, живший ровно до конца загрузки. Он и разошёлся бы первым: у
+		// него не было ни визитов, ни элементов, кроме элемента расстановки, то
+		// есть тело, легшее на два элемента, он проверил бы наполовину.
+		if ref, at, busy := m.Conflict(u.ID, mo.Span); busy {
+			// Метка ищется в РАЗБИРАЕМОМ СПИСКЕ, а не в m.Units: тот заполняется
+			// в самом конце place, и во время проверки пуст — отказ назвал бы
+			// вторую сторону голым UUID ровно тогда, когда имя и нужно.
+			other := ref.Unit
+			for _, o := range list {
+				if o.ID == ref.Unit {
+					other = mapfmt.Labeled(o.Name, o.ID)
+				}
 			}
+			return fmt.Errorf("match: единица %s накладывается на %s: элемент %s, [%s, %s)",
+				mapfmt.Labeled(u.Name, u.ID), other, at.Element, at.From, at.To)
 		}
-		occupied[u.At.Element] = append(occupied[u.At.Element], [2]units.Distance{from, to})
 		// ОРГАНЫ ЗАВОДЯТСЯ ВМЕСТЕ С МАШИНОЙ, а не от первой команды: машина,
 		// стоящая на путях, имеет положение рукояток — нулевую тягу и реверсор
 		// в нуле, — и «состояния ещё нет» у неё не бывает. Пустая карта тут
@@ -306,15 +319,12 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 		}
 		// СОСТОЯНИЕ ФИЗИКИ ЗАВОДИТСЯ ВМЕСТЕ С МАШИНОЙ, у всего, что катится:
 		// стоящая машина имеет положение и нулевую скорость, а «состояния ещё
-		// нет» у неё не бывает. Перевод u → s делается здесь один раз.
-		mo, err := StartMotion(u, el)
-		if err != nil {
-			return err
-		}
-		if m.Motions == nil {
-			m.Motions = map[string]Motion{}
-		}
-		m.Motions[u.ID] = mo
+		// нет» у неё не бывает. Перевод u → s сделан выше и один раз.
+		//
+		// Через SetMotion, а не прямой записью в карту: занятость перекладывает
+		// он, и расстановка, писавшая мимо, оставила бы индекс пустым — то есть
+		// следующая единица легла бы на первую беспрепятственно.
+		m.SetMotion(u.ID, mo)
 		// ПНЕВМАТИКА ЗАВОДИТСЯ ЗАРЯЖЕННОЙ, а не пустой, и это решение о начале
 		// партии, а не удобство: машина, поставленная на путь, стоит с заряженной
 		// магистралью и отпущенными колодками — так её и оставляют. Пустая
@@ -339,7 +349,7 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 	return nil
 }
 
-// extentS считает занимаемый машиной отрезок в s и проверяет помещаемость.
+// startSpan — НАЧАЛЬНЫЙ ОТРЕЗОК ПУТИ по записи расстановки.
 //
 // # Почему в s, а не вычитанием u
 //
@@ -354,30 +364,41 @@ func (m *Match) place(list []Unit, net *track.CompiledNetwork, set *content.Set)
 //
 // Правило проекта: валидатор отказывает, а не чинит. Подвинуть машину внутрь
 // элемента значило бы поставить её не туда, куда сказал автор, и молча.
-// Пройти же хвостом через стрелку сегодня нечем: направленный обход портов —
-// это занятость веха В3, и до неё машина обязана помещаться в один элемент.
-func extentS(u Unit, st content.StockType, el track.CompiledElement) (from, to units.Distance, err error) {
+//
+// # ПОЧЕМУ ТРЕБОВАНИЕ «ВЛЕЗТЬ В ОДИН ЭЛЕМЕНТ» ОСТАЛОСЬ, ХОТЯ ОТРЕЗОК ПРИЕХАЛ
+//
+// Физика хвостом через стрелку теперь проходит: отрезок наращивается через порт
+// и лежит на скольких угодно элементах (track.Span). Требование осталось у
+// РАССТАНОВКИ, и по своей причине: чтобы положить тело на два элемента, надо
+// знать, в какую сторону от точки его продолжать, — а это зависит от положения
+// остряка в момент загрузки. Расстановка же ДОКУМЕНТ: она обязана читаться
+// одинаково при любом положении стрелок, иначе один и тот же файл давал бы
+// разные миры.
+//
+// Снимется это вместе с тем, кто объявит начальное положение остряков частью
+// расстановки. До тех пор отказ честен: он говорит ровно то, что есть.
+func startSpan(u Unit, st content.StockType, el track.CompiledElement) (track.Span, error) {
 	uMicro, err := units.MetersToDistance(u.At.U)
 	if err != nil {
-		return 0, 0, fmt.Errorf("смещение u: %w", err)
+		return nil, fmt.Errorf("смещение u: %w", err)
 	}
 	if uMicro > el.LengthU {
-		return 0, 0, fmt.Errorf("u = %s больше длины элемента %s (%s)", uMicro, el.ID, el.LengthU)
+		return nil, fmt.Errorf("u = %s больше длины элемента %s (%s)", uMicro, el.ID, el.LengthU)
 	}
 	center, err := el.Prof.UToS(uMicro)
 	if err != nil {
-		return 0, 0, fmt.Errorf("перевод u в s: %w", err)
+		return nil, fmt.Errorf("перевод u в s: %w", err)
 	}
 	half, err := units.MetersToDistance(st.LengthM / 2)
 	if err != nil {
-		return 0, 0, fmt.Errorf("полудлина типа %s: %w", st.ID, err)
+		return nil, fmt.Errorf("полудлина типа %s: %w", st.ID, err)
 	}
-	from, to = center-half, center+half
+	from, to := center-half, center+half
 	if from < 0 || to > el.LengthS {
-		return 0, 0, fmt.Errorf("машина типа %s длиной %.2f м, поставленная серединой на u = %.2f м, "+
+		return nil, fmt.Errorf("машина типа %s длиной %.2f м, поставленная серединой на u = %.2f м, "+
 			"занимает [%s, %s] элемента %s длиной %s — не помещается; "+
-			"хвостом через стрелку сегодня не проходят",
+			"расстановка кладёт тело в один элемент (разбор — у startSpan)",
 			st.ID, st.LengthM, u.At.U, from, to, el.ID, el.LengthS)
 	}
-	return from, to, nil
+	return track.Span{{Element: el.ID, From: from, To: to, Direction: u.At.Direction}}, nil
 }

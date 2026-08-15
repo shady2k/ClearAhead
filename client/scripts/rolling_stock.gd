@@ -60,6 +60,11 @@ class Unit extends RefCounted:
 	## у того же элемента, по которому машину и ставили.
 	var element: TrackGeom.Element = null
 	var u_m := 0.0
+	## ОТРЕЗОК ПУТИ, ЗАНЯТЫЙ МАШИНОЙ, как его прислал сервер (TrackSpan). По нему
+	## ставятся шкворни — они вправе оказаться на соседнем элементе, — и по нему
+	## же показ идёт между снимками. Пустой означает «сервер отрезка не прислал»:
+	## тогда постановка вырождается в прежнюю, по касательной.
+	var span: Array = []
 	## Сдвиг единицы НА ПРОШЛОМ КАДРЕ, метры в мире. Держит сторож рывка: настоящий
 	## рывок — это разрыв, то есть шаг, несравнимый с соседними, и сравнивать его
 	## не с чем, если соседний шаг не помнить.
@@ -126,6 +131,8 @@ static func place(parent: Node3D, live: Dictionary, types: Dictionary,
 		var u_ref := float(at.get("u", 0.0))
 		u.element = el
 		u.u_m = u_ref
+		# ОТРЕЗОК — СОСЕД `at` НА ПРОВОДЕ, а не его поле (вид unit договора).
+		u.span = TrackSpan.parse(d.get("span"))
 		u.pose = el.pose_at(u_ref)
 
 		var posts := cabs_of(assets.get(u.appearance, {}) as Dictionary)
@@ -135,7 +142,7 @@ static func place(parent: Node3D, live: Dictionary, types: Dictionary,
 
 		u.node = Node3D.new()
 		u.node.name = "unit_" + uid
-		u.node.transform = _stand(el, u_ref, u.bogie_base_m, u.reversed)
+		u.node.transform = _stand(u.span, el, u_ref, u.bogie_base_m, u.reversed, by_id)
 		parent.add_child(u.node)
 
 		u.box = _box(u)
@@ -158,11 +165,17 @@ static func place(parent: Node3D, live: Dictionary, types: Dictionary,
 ##
 ## # Что здесь НЕ делается
 ##
-## Не сглаживается и не досчитывается. Между снапшотами клиент показывает
-## последнее присланное положение: объявленной кинематики показа
-## (ClearAhead-t5h §6) в этой редакции нет, и досчитывать нечем. Десять снимков
-## в секунду при инерции поезда — это ход, а не рывки; когда понадобится
-## больше, придёт объявленный экстраполятор, а не самодеятельность рендера.
+## Не сглаживается и не досчитывается САМО. Где показывать машину, решает
+## объявленная кинематика показа (DisplayMotion, ClearAhead-t5h §6): она отдаёт
+## точку отсчёта и отрезок пути на показываемое мгновение, а здесь это
+## превращается в трансформ. Своей второй кинематики у рендера нет.
+##
+## # ОТРЕЗОК СВЕРЯЕТСЯ ТОЖЕ, и это не мелочь
+##
+## Ранний выход «ничего не изменилось» смотрел на точку отсчёта и направление.
+## С отрезком этого стало мало: при том же u машина вправе лежать по-разному —
+## хвост уходит с одного элемента на другой, — и хорда между шкворнями от этого
+## меняется. Пропустив такой кадр, показ держал бы кузов на прежней хорде.
 ##
 ## Возвращает причину словами, если переставить нельзя (элемента нет в сети), и
 ## пустую строку, если всё встало.
@@ -173,14 +186,35 @@ static func move(u: Unit, at: Dictionary, elements: Dictionary) -> String:
 	var el := elements[el_id] as TrackGeom.Element
 	var u_ref := float(at.get("u", 0.0))
 	var reversed := String(at.get("direction", "")) == "reverse"
-	if u.element == el and is_equal_approx(u.u_m, u_ref) and u.reversed == reversed:
+	var span: Array = at.get("span", []) as Array
+	if u.element == el and is_equal_approx(u.u_m, u_ref) and u.reversed == reversed \
+			and _same_span(u.span, span):
 		return ""
 	u.element = el
 	u.u_m = u_ref
 	u.reversed = reversed
+	u.span = span
 	u.pose = el.pose_at(u_ref)
-	u.node.transform = _stand(el, u_ref, u.bogie_base_m, reversed)
+	u.node.transform = _stand(span, el, u_ref, u.bogie_base_m, reversed, elements)
 	return ""
+
+
+## _same_span — тот же ли отрезок. Сравнение с ДОПУСКОМ: координаты приезжают
+## float'ами, и правило проекта «float64 не сверяется байт в байт» действует и
+## здесь. Цена ошибки в обе стороны мелкая (лишний пересчёт трансформа либо
+## пропущенный кадр в микрометр), но выбирать её надо сознательно.
+static func _same_span(a: Array, b: Array) -> bool:
+	if a.size() != b.size():
+		return false
+	for i in a.size():
+		var x := a[i] as Dictionary
+		var y := b[i] as Dictionary
+		if String(x["element"]) != String(y["element"]) \
+				or String(x["direction"]) != String(y["direction"]) \
+				or not is_equal_approx(float(x["from"]), float(y["from"])) \
+				or not is_equal_approx(float(x["to"]), float(y["to"])):
+			return false
+	return true
 
 
 ## cabs_of — посты машиниста записи каталога, переведённые в оси УЗЛА ЕДИНИЦЫ.
@@ -273,12 +307,13 @@ static func show_mesh(u: Unit, bytes: PackedByteArray, asset: Dictionary) -> Str
 ## касательной. Это законный случай: у короткой единицы база может быть меньше
 ## шага оси, и хорда тогда ничего не уточняет.
 ##
-## # ХОРДА СЖИМАЕТСЯ У КОНЦА ЭЛЕМЕНТА, и это починка прыжка в 12.6 м
+## # ШКВОРЕНЬ СТОИТ ТАМ, ГДЕ ОН СТОИТ — В ТОМ ЧИСЛЕ НА СОСЕДНЕМ ЭЛЕМЕНТЕ
 ##
 ## Element.pose_at НАЧИНАЕТСЯ с clampf(pu, 0, length_m) — и правильно делает:
-## позы за концом элемента сервер не присылал, выдумывать её нельзя. Но шкворень,
-## прижатый к концу, а второй — нет, даёт НЕСИММЕТРИЧНУЮ хорду: её середина
-## уезжает к границе, и кузов показан не там, где машина.
+## позы за концом элемента сервер не присылал, выдумывать её нельзя. Пока у
+## клиента была одна лишь точка отсчёта, шкворень у конца элемента прижимался к
+## границе, хорда становилась НЕСИММЕТРИЧНОЙ, её середина уезжала к границе, и
+## кузов показывался не там, где машина.
 ##
 ## ЗАМЕР (make cab-probe, отладочный вывод сторожа рывка): при переходе
 ## E_MAIN → SW1:straight середина кузова прыгала на 12.576 / 12.742 / 13.193 /
@@ -287,37 +322,80 @@ static func show_mesh(u: Unit, bytes: PackedByteArray, asset: Dictionary) -> Str
 ## полубазы от обоих концов сразу. Владелец назвал это «поезд может сойти с
 ## рельс» и «прыгает».
 ##
-## Лечится сжатием: half берётся не больше, чем осталось до КАЖДОГО конца.
-## Тогда хорда остаётся симметричной относительно u_ref при любом u, у самого
-## конца плавно вырождается в касательную, а на границе элементов обе стороны
-## сходятся в одной точке — разрыва нет вовсе.
+## # Что стояло здесь до 2026-08-15 и почему умерло
 ##
-## ЦЕНА НАЗВАНА: у конца элемента поправка хорды пропадает, и на кривой остаётся
-## та самая жёсткость по касательной (L²/2R = 0.29 м для базы 24.7 м на R = 500).
-## Это в сорок раз меньше прыжка, который она отменяет, и это ПРИБЛИЖЕНИЕ, а не
-## ложь: оно объявлено здесь.
+## Стояло СЖАТИЕ ХОРДЫ: half брался не больше, чем осталось до каждого конца
+## элемента. Оно отменяло прыжок и стоило поправки — у конца элемента хорда
+## вырождалась в касательную, и на кривой возвращалась жёсткость L²/2R = 0.29 м
+## для базы 24.7 м на R = 500. Приближение было объявлено вслух здесь же, вместе
+## с условием, при котором оно снимется.
 ##
-## НАСТОЯЩЕЕ ЛЕЧЕНИЕ — не здесь. Шкворень обязан уметь стоять на СОСЕДНЕМ
-## элементе, а какой элемент соседний, решает сеть и положение остряка — то есть
-## сервер. Клиенту для этого нужен не кусок топологии, а ЗАНЯТЫЙ МАШИНОЙ ОТРЕЗОК
-## ПУТИ с провода (ClearAhead-7n0v): у него сегодня появился первый потребитель.
-static func _stand(el: TrackGeom.Element, u_ref: float, base_m: float, reversed: bool) -> Transform3D:
-	var half: float = minf(base_m * 0.5, minf(u_ref, el.length_m - u_ref))
-	if half < 0.0:
-		# u вне элемента: это не наш случай, но и прижимать его молча незачем —
-		# pose_at сам прижмёт, а хорды при этом не будет.
-		half = 0.0
-	var a := el.pose_at(u_ref + half)
-	var b := el.pose_at(u_ref - half)
+## Условие наступило: сервер присылает ЗАНЯТЫЙ МАШИНОЙ ОТРЕЗОК ПУТИ
+## (ClearAhead-7n0v, contract/channel.v1.json, поле span). Какой элемент
+## соседний, решает по-прежнему он — клиент ни куска топологии не получил и не
+## выдумывает. Он получил ПУТЬ, по которому машина лежит, и шкворень теперь
+## отмеряется вдоль него: половина базы (12.36 м) всегда короче половины машины
+## (17.09 м), значит оба шкворня лежат ВНУТРИ присланного отрезка при любом
+## положении, и прижимать нечего.
+##
+## СЖАТИЕ ОСТАЛОСЬ ОДНОЙ ВЕТКОЙ — для машины, у которой отрезка нет вовсе. Это
+## не задел впрок: отрезка нет у единицы без состояния физики, а у неё и `at` —
+## запись расстановки, а не положение. Ветка честно говорит, что показывает.
+static func _stand(span: Array, el: TrackGeom.Element, u_ref: float, base_m: float,
+		reversed: bool, elements: Dictionary) -> Transform3D:
+	var half := base_m * 0.5
+	var a: TrackGeom.AxisPoint = null
+	var b: TrackGeom.AxisPoint = null
+	var at := TrackSpan.offset_of(span, el.id, u_ref) if not span.is_empty() else -1.0
+	if at >= 0.0 and half > 0.0:
+		# ШКВОРНИ ОТМЕРЯЮТСЯ ВДОЛЬ ПУТИ, и знак берётся у направления визита: ход
+		# B → A совпадает с ростом u только там, где визит forward. Курс же
+		# считается ПО РОСТУ u — того требует _basis_at, которому «повёрнута ли
+		# машина» приходит отдельным признаком.
+		var along := 1.0 if at_direction(span, at) == TrackSpan.FORWARD else -1.0
+		a = _pose_on(span, elements, at + half * along, el, u_ref)
+		b = _pose_on(span, elements, at - half * along, el, u_ref)
+	else:
+		# ОТРЕЗКА НЕТ: прежняя постановка со сжатием хорды. Цена названа в шапке.
+		var clamped: float = minf(half, minf(u_ref, el.length_m - u_ref))
+		if clamped < 0.0:
+			clamped = 0.0
+		a = el.pose_at(u_ref + clamped)
+		b = el.pose_at(u_ref - clamped)
 	var heading := el.pose_at(u_ref).heading
 	var origin := TerrainMesh.to_godot(a.x, a.y, a.z).lerp(TerrainMesh.to_godot(b.x, b.y, b.z), 0.5)
-	if half > 0.0 and (a.x != b.x or a.y != b.y):
+	if a.x != b.x or a.y != b.y:
 		# Курс — по ХОРДЕ между шкворнями. Отметка тоже усредняется: на переломе
 		# профиля тело опирается на два конца, а не висит по касательной.
 		heading = atan2(a.y - b.y, a.x - b.x)
 	else:
 		origin = TerrainMesh.to_godot(el.pose_at(u_ref).x, el.pose_at(u_ref).y, el.pose_at(u_ref).z)
 	return Transform3D(_basis_at(heading, reversed), origin)
+
+
+## at_direction — направление визита, в который попадает точка на расстоянии d
+## от конца B. Нужно постановке: знак «вдоль роста u» живёт у визита, а не у
+## отрезка целиком.
+static func at_direction(span: Array, d: float) -> String:
+	var p := TrackSpan.point_at(span, d)
+	return String(p.get("direction", TrackSpan.FORWARD))
+
+
+## _pose_on — поза точки, отстоящей на d от конца B отрезка.
+##
+## Элемента может не оказаться в сети клиента: отрезок и сеть приезжают разными
+## ответами, и состояние вправе обогнать сеть на одну правку. Тогда шкворень
+## ставится по ПОСЛЕДНЕМУ ИЗВЕСТНОМУ элементу с прижатием — то есть ровно так,
+## как ставился до отрезка. Это не тихая подстановка: положение остаётся верным
+## приближением, а недостающий элемент назовёт отдельная жалоба
+## (world.gd::_show_stock).
+static func _pose_on(span: Array, elements: Dictionary, d: float,
+		fallback: TrackGeom.Element, fallback_u: float) -> TrackGeom.AxisPoint:
+	var p := TrackSpan.point_at(span, d)
+	var id := String(p.get("element", ""))
+	if id == "" or not elements.has(id):
+		return fallback.pose_at(fallback_u)
+	return (elements[id] as TrackGeom.Element).pose_at(float(p["u"]))
 
 
 ## _basis_at — поворот единицы по курсу оси.

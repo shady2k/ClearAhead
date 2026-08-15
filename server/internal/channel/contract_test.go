@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -49,13 +50,29 @@ func contractPath() string { return filepath.Join("..", "..", "..", "contract", 
 
 const loco1ID = "01a3185c-6001-7242-8242-000000424242"
 
-func testMatch() *match.Match {
-	return &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
+func testMatch(t *testing.T) *match.Match {
+	t.Helper()
+	net, set := station(t), shippedSet(t)
+	m := &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
 		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
 	}},
 		Controls: map[string]match.Controls{loco1ID: match.Stopped()},
 	}
+	// ОТРЕЗОК ПУТИ — ПО ТОЙ ЖЕ ПРИЧИНЕ, ЧТО И ОРГАНЫ. Фикстура собирается мимо
+	// match.Start, а он заводит состояние физики вместе с машиной; без него
+	// локомотив приехал бы на провод без отрезка, и договор проверялся бы о
+	// форму, которой в бою не бывает.
+	st, ok := set.StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе фикстуры нет паспорта VL80")
+	}
+	mo, err := match.StartMotion(m.Units[0], st, net.Elements[seedmap.StationMain])
+	if err != nil {
+		t.Fatalf("начальное состояние фикстуры: %v", err)
+	}
+	m.SetMotion(loco1ID, mo)
+	return m
 }
 
 // shippedSet — БОЕВОЙ набор контента, а не фикстура.
@@ -103,7 +120,7 @@ func dial(t *testing.T) *talk {
 	if err != nil {
 		t.Fatalf("договор не читается: %v", err)
 	}
-	e := engine.New(testMatch(), nil)
+	e := engine.New(testMatch(t), nil)
 	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t), station(t)))
 	t.Cleanup(srv.Close)
 
@@ -262,8 +279,30 @@ type bump struct{}
 
 func (bump) Name() string { return "bump" }
 
+// bumpS — на сколько поддельная правка двигает машину, микрометры.
+//
+// ДВИГАЕТСЯ ОТРЕЗОК ПУТИ, А НЕ ЗАПИСЬ РАССТАНОВКИ. Прежняя редакция правила
+// g.Units[0].At.U — то есть ДОКУМЕНТ, — и это перестало быть движением в тот
+// день, когда у машины появилось состояние физики: на провод уезжает положение
+// ИЗ СОСТОЯНИЯ, а документ говорит лишь, где машину поставили. Правка документа
+// меняла хеш и не меняла картинку — то есть проверяла рассылку и не проверяла,
+// что доехало.
+const bumpS = units.Distance(1_500_000)
+
 func (bump) Apply(g *match.Match) error {
-	g.Units[0].At.U += 1.5
+	mo, ok := g.MotionOf(loco1ID)
+	if !ok {
+		return fmt.Errorf("у машины %s нет состояния физики", loco1ID)
+	}
+	sp := append(track.Span(nil), mo.Span...)
+	for i := range sp {
+		sp[i].From += bumpS
+		sp[i].To += bumpS
+	}
+	if err := mo.SetSpan(sp); err != nil {
+		return err
+	}
+	g.SetMotion(loco1ID, mo)
 	return nil
 }
 
@@ -306,7 +345,13 @@ func TestSnapshotGoesOnChangeBeforeMaxAge(t *testing.T) {
 	}
 	// Число сверяется С ДОПУСКОМ, а не байт в байт: правило проекта про float64
 	// действует и в тесте, который его же и защищает.
-	if got, want := env.Units[0].At.U, 151.5; got < want-1e-6 || got > want+1e-6 {
+	//
+	// ОЖИДАЕМОЕ ВЫВЕДЕНО, А НЕ ЗАПИСАНО ЧИСЛОМ: правка двигает машину в s, а на
+	// провод уезжает u, и совпадают они только на элементе без уклона. Фикстура
+	// сегодня плоская — но записать 151.5 значило бы спрятать это условие в
+	// константу, которая переживёт первый же уклон в фикстуре и соврёт.
+	want := 150.0 + bumpS.Meters()
+	if got := env.Units[0].At.U; got < want-1e-6 || got > want+1e-6 {
 		t.Fatalf("в снапшоте u = %v, ожидалось %v", got, want)
 	}
 }
@@ -392,7 +437,7 @@ func TestServerConstantsMatchContract(t *testing.T) {
 // TestWrongRegionIsNotFound — адрес несуществующего региона обязан отвечать
 // 404 ДО апгрейда: канал не открывается на то, чего нет.
 func TestWrongRegionIsNotFound(t *testing.T) {
-	e := engine.New(testMatch(), nil)
+	e := engine.New(testMatch(t), nil)
 	srv := httptest.NewServer(channel.NewHandler(e, uuidv7.Deterministic(), shippedSet(t), station(t)))
 	defer srv.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

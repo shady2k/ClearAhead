@@ -31,8 +31,10 @@ import (
 // loco1ID — идентификатор локомотива фикстуры.
 const loco1ID = "01a3185c-6001-7242-8242-000000424242"
 
-func testMatch() *match.Match {
-	return &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
+func testMatch(t *testing.T) *match.Match {
+	t.Helper()
+	net, set := station(t), testSet(t)
+	m := &match.Match{ID: "M1", Region: "ST_A", Units: []match.Unit{{
 		ID: loco1ID, Name: "LOCO_1", Type: "VL80",
 		At: netloc.PointU{Element: seedmap.StationMain, U: 150, Direction: netloc.DirForward},
 	}},
@@ -41,6 +43,20 @@ func testMatch() *match.Match {
 		// оказался бы без кабины вовсе.
 		Controls: map[string]match.Controls{loco1ID: match.Stopped()},
 	}
+	// ОТРЕЗОК ПУТИ — ПО ТОЙ ЖЕ ПРИЧИНЕ, ЧТО И ОРГАНЫ. Фикстура собирается мимо
+	// match.Start, а он заводит состояние физики вместе с машиной; без него
+	// локомотив приехал бы на провод без отрезка, и договор проверялся бы о
+	// форму, которой в бою не бывает.
+	st, ok := set.StockType("VL80")
+	if !ok {
+		t.Fatal("в наборе фикстуры нет паспорта VL80")
+	}
+	mo, err := match.StartMotion(m.Units[0], st, net.Elements[seedmap.StationMain])
+	if err != nil {
+		t.Fatalf("начальное состояние фикстуры: %v", err)
+	}
+	m.SetMotion(loco1ID, mo)
+	return m
 }
 
 // testSet — набор контента с одним типом VL80: тем же, что боевой, но без
@@ -104,7 +120,7 @@ func station(t *testing.T) *track.CompiledNetwork {
 
 func testHandler(t *testing.T) *Handler {
 	t.Helper()
-	return NewHandler(engine.New(testMatch(), nil), uuidv7.Deterministic(), testSet(t), station(t))
+	return NewHandler(engine.New(testMatch(t), nil), uuidv7.Deterministic(), testSet(t), station(t))
 }
 
 // newConn — соединение без сокета: h.request сокета не касается вовсе, а
@@ -409,7 +425,7 @@ func setControls(t *testing.T, h *Handler, st *connState, id int, params string)
 // TestSetControlsAppliesAndAnswersWithWhatStood — команда доезжает до партии, а
 // ответ несёт положение, КОТОРОЕ ВСТАЛО.
 func TestSetControlsAppliesAndAnswersWithWhatStood(t *testing.T) {
-	e := engine.New(testMatch(), nil)
+	e := engine.New(testMatch(t), nil)
 	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
@@ -463,7 +479,7 @@ func TestSetControlsRefusals(t *testing.T) {
 	}
 	for i, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			e := engine.New(testMatch(), nil)
+			e := engine.New(testMatch(t), nil)
 			h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 			stop := ticking(e)
 			defer stop()
@@ -482,7 +498,7 @@ func TestSetControlsRefusals(t *testing.T) {
 // TestSetControlsRequiresAllOrgans — частичная команда отвергается формой, а не
 // доезжает до партии с додуманными нулями.
 func TestSetControlsRequiresAllOrgans(t *testing.T) {
-	e := engine.New(testMatch(), nil)
+	e := engine.New(testMatch(t), nil)
 	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
@@ -497,7 +513,7 @@ func TestSetControlsRequiresAllOrgans(t *testing.T) {
 // Без ключа идемпотентности повтор наложил бы прежнее положение поверх новой
 // правки; с ключом он возвращает прежний ответ и партии не касается.
 func TestRepeatedControlsCommandAppliesOnce(t *testing.T) {
-	e := engine.New(testMatch(), nil)
+	e := engine.New(testMatch(t), nil)
 	h := NewHandler(e, uuidv7.Deterministic(), testSet(t), station(t))
 	stop := ticking(e)
 	defer stop()
