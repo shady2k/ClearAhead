@@ -194,6 +194,31 @@ func StateHash(m *match.Match) string {
 		writeStr(id)
 		writeStr(m.Turnouts[id])
 	}
+	// ИДУЩИЙ ОСТРЯК — ТОЖЕ СОСТОЯНИЕ, и это ПЯТЫЙ по счёту случай того же рода:
+	// органы управления, физика, занятость, положение стрелки — каждый раз
+	// состояние забывали положить в хеш, и каждый раз это выглядело как «команда
+	// принята и не доехала».
+	//
+	// Здесь цена выше прежних: без записи о переводе снапшоты во время хода
+	// остряка шли бы только биением, и остряк, который весь смысл имеет в
+	// движении, дёргался бы раз в секунду вместо хода.
+	//
+	// ОСТАТОК КВАНТУЕТСЯ, а не пишется как есть: он микросекундный, и хеш от
+	// него менялся бы каждый тик даже там, где на экране ничего не меняется.
+	// Шаг квантования — миллисекунда: мельче не различает ни один показ.
+	moves := make([]string, 0, len(m.TurnoutMoves))
+	for id := range m.TurnoutMoves {
+		moves = append(moves, id)
+	}
+	slices.Sort(moves)
+	writeUint(uint64(len(moves)))
+	for _, id := range moves {
+		mv := m.TurnoutMoves[id]
+		writeStr(id)
+		writeStr(mv.From)
+		writeStr(mv.To)
+		writeUint(uint64(mv.Left / units.Millisecond))
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 

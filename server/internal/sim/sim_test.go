@@ -496,7 +496,7 @@ func TestThrownTurnoutSendsTheTrainToTheBranch(t *testing.T) {
 			// С ПОДХОДА, общим портом: с главного пути на боковой проход не
 			// попасть — он в другом конце устройства.
 			w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
-			if err := m.SetTurnout(seedmap.StationSW1, c.position, w.net); err != nil {
+			if err := m.SetTurnout(seedmap.StationSW1, c.position, w.net, 0); err != nil {
 				t.Fatalf("перевод стрелки: %v", err)
 			}
 			drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
@@ -537,7 +537,7 @@ func TestTurnoutUnderTheTrainDoesNotThrow(t *testing.T) {
 	w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
 	drive(t, m, match.Controls{Traction: 33, Reverser: match.ReverserForward})
 	runUntil(t, w, m, seedmap.StationSW1+mapfmt.PassageStraight, 600)
-	err := m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net)
+	err := m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, 0)
 	if err == nil {
 		t.Fatal("стрелка переведена под составом")
 	}
@@ -575,7 +575,7 @@ func TestTurnoutIsHeldByTheOverhangingTail(t *testing.T) {
 	if mo.S >= half {
 		t.Fatalf("точка отсчёта уже в %s от начала — хвост сошёл со стрелки, проверять нечего", mo.S)
 	}
-	err = m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net)
+	err = m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, 0)
 	var ref *protocol.Refusal
 	if !errors.As(err, &ref) || ref.Reason != protocol.ReasonTurnoutOccupied {
 		t.Fatalf("стрелка переведена под хвостом машины: %v", err)
@@ -616,6 +616,80 @@ func TestNextTurnoutIsTheOneAhead(t *testing.T) {
 	// больше длины его проекции на уклоне.
 	if ahead.DistanceM < 132 || ahead.DistanceM > 135 {
 		t.Fatalf("до стрелки %.2f м, ожидалось около 133.6 м (150 м минус полдлины машины)", ahead.DistanceM)
+	}
+}
+
+// TestNextTurnoutIsSeenFacingThePoint — стрелка видна и с ПОШЁРСТНОГО подхода,
+// то есть остриём вперёд.
+//
+// # Почему этот тест заведён отдельно от соседнего
+//
+// Соседний ведёт машину по главному пути к SW1.S — ПРОТИВОШЁРСТНО, со стороны
+// крестовины. В том порту два ребра, и обход проходил его без единой оговорки.
+//
+// У ОСТРИЯ РЁБЕР ТРИ: подход и оба прохода. Обход требовал единственного соседа
+// и молча сдавался — то есть игрок, въезжающий на станцию с границы карты (а
+// иначе он на неё и не попадает), пульта не видел вовсе. Дефект прожил до
+// 2026-08-15 и найден игрой, а не проверкой, ровно потому, что проверялся один
+// подход из двух.
+//
+// Числа: подход 120 м, машина стоит на u = 60 носом к росту u, то есть к SW1.C
+// в конце подхода. От точки отсчёта до острия 60 м, от конца машины — на
+// полдлины меньше (ВЛ80 32.84 м): около 43.6 м.
+func TestNextTurnoutIsSeenFacingThePoint(t *testing.T) {
+	w, m := worldOn(t, seedmap.StationApproach, 60, netloc.DirForward)
+	states, err := m.States(w.net)
+	if err != nil {
+		t.Fatalf("проекция на провод: %v", err)
+	}
+	ahead := states[0].Ahead
+	if ahead == nil {
+		t.Fatal("идя к острию SW1, впереди стрелки не нашлось")
+	}
+	if ahead.Turnout != seedmap.StationSW1 {
+		t.Fatalf("впереди назвалась стрелка %s, а на конце подхода стоит SW1", ahead.Turnout)
+	}
+	if ahead.DistanceM < 42 || ahead.DistanceM > 45 {
+		t.Fatalf("до острия %.2f м, ожидалось около 43.6 м (60 м минус полдлины машины)", ahead.DistanceM)
+	}
+}
+
+// TestMachineOnTheTurnoutDoesNotSeeItAhead — стрелка, на которой машина стоит,
+// «впереди» не называется.
+//
+// Оборотная сторона правки выше: порт спрашивается на устройство, а у бокового
+// прохода в общем порту лежит его же собрат. Не отсеки своё устройство — и
+// машина, ВЕДУЩИЙ КОНЕЦ КОТОРОЙ УЖЕ НА СТРЕЛКЕ, получила бы расстояние до того,
+// на чём она уже лежит.
+//
+// МАШИНА ВЪЕЗЖАЕТ НА СТРЕЛКУ ХОДОМ, А НЕ СТАВИТСЯ НА НЕЁ. Поставить нельзя:
+// расстановка кладёт тело в ОДИН элемент (startSpan), а ВЛ80 длиной 34.18 м в
+// проход 33.5 м не помещается. Это не обход проверки, а её точное условие: на
+// стрелке машина бывает только проездом.
+func TestMachineOnTheTurnoutDoesNotSeeItAhead(t *testing.T) {
+	w, m := world(t, 60, netloc.DirReverse)
+	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward})
+	// Едем к острию, пока ведущий конец не зайдёт на проход. Точка отсчёта на
+	// полдлины позади него: u < 17.09 значит, что конец уже за границей элемента.
+	var ahead *match.AheadTurnout
+	reached := false
+	for range 200 {
+		step(t, w, m, 1)
+		states, err := m.States(w.net)
+		if err != nil {
+			t.Fatalf("проекция на провод: %v", err)
+		}
+		ahead = states[0].Ahead
+		if states[0].At.Element == seedmap.StationMain && states[0].At.U < 15 {
+			reached = true
+			break
+		}
+	}
+	if !reached {
+		t.Fatal("машина не доехала до стрелки за 200 тиков — проверять нечего")
+	}
+	if ahead != nil && ahead.Turnout == seedmap.StationSW1 {
+		t.Fatalf("ведущий конец уже на SW1, а она названа впереди: %+v", ahead)
 	}
 }
 
@@ -1030,4 +1104,87 @@ func TestMachineStopsAtTheOtherBody(t *testing.T) {
 	if again := motion(t, m); again.S != moving.S || again.Speed != 0 {
 		t.Fatalf("упёршаяся в соседа машина сдвинулась: %s -> %s", moving.S, again.S)
 	}
+}
+
+// TestTurnoutThrowTakesTime — ПЕРЕВОД ИДЁТ ВРЕМЯ, и пока он идёт, стрелка не
+// стоит нигде.
+//
+// Слово владельца 2026-08-16: «стрелка, когда переключается, это не должна
+// делать резко, как сейчас». До того команда меняла положение в тот же тик:
+// остряк прыгал на 152 мм за кадр.
+//
+// Проверяется ТРИ вещи, и каждая — своё утверждение о мире:
+//
+//	идёт время      — положение встаёт не раньше объявленного срока;
+//	не стоит нигде  — пока идёт, TurnoutAt пуст, и ехать по стрелке нельзя;
+//	доля растёт     — снапшот несёт ход, а не только его начало и конец.
+func TestTurnoutThrowTakesTime(t *testing.T) {
+	w, m := world(t, 150, netloc.DirForward)
+	const throw = 4 * units.Second
+	if err := m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, throw); err != nil {
+		t.Fatalf("перевод отвергнут: %v", err)
+	}
+	if at := m.TurnoutAt(seedmap.StationSW1); at != "" {
+		t.Fatalf("сразу после команды стрелка стоит %q — остряк ещё идёт", at)
+	}
+	// Полсрока: остряк на середине пути, и доля это показывает.
+	step(t, w, m, int(throw/2/tickDT))
+	sw := turnoutOf(t, m, w, seedmap.StationSW1)
+	if !sw.Moving {
+		t.Fatal("на середине срока остряк уже не идёт")
+	}
+	if sw.Progress < 0.4 || sw.Progress > 0.6 {
+		t.Fatalf("на середине срока доля перевода %.3f, ожидалось около 0.5", sw.Progress)
+	}
+	if sw.Position != "" {
+		t.Fatalf("идущая стрелка стоит %q", sw.Position)
+	}
+	// Ещё полсрока и один тик: остряк дошёл.
+	step(t, w, m, int(throw/2/tickDT)+1)
+	sw = turnoutOf(t, m, w, seedmap.StationSW1)
+	if sw.Moving {
+		t.Fatalf("через %s остряк всё ещё идёт", throw)
+	}
+	if sw.Position != match.TurnoutDiverging {
+		t.Fatalf("остряк дошёл до %q, а шёл на diverging", sw.Position)
+	}
+}
+
+// TestTurnoutThrowReversesFromWhereItIs — команда на ходу разворачивает остряк
+// оттуда, где он есть, а не начинает срок заново.
+//
+// Иначе игрок, передумавший через полсрока, ждал бы полный срок обратно — то
+// есть дольше, чем шёл бы остряк на самом деле. У привода так не бывает: он
+// тянет ту же тягу в обратную сторону с того же места.
+func TestTurnoutThrowReversesFromWhereItIs(t *testing.T) {
+	w, m := world(t, 150, netloc.DirForward)
+	const throw = 4 * units.Second
+	if err := m.SetTurnout(seedmap.StationSW1, match.TurnoutDiverging, w.net, throw); err != nil {
+		t.Fatalf("перевод отвергнут: %v", err)
+	}
+	step(t, w, m, int(throw/4/tickDT)) // четверть пути
+	if err := m.SetTurnout(seedmap.StationSW1, match.TurnoutStraight, w.net, throw); err != nil {
+		t.Fatalf("разворот отвергнут: %v", err)
+	}
+	// Обратно идти столько же, сколько прошёл: четверть срока.
+	step(t, w, m, int(throw/4/tickDT)+1)
+	sw := turnoutOf(t, m, w, seedmap.StationSW1)
+	if sw.Moving {
+		t.Fatalf("остряк идёт спустя четверть срока после разворота: доля %.3f", sw.Progress)
+	}
+	if sw.Position != match.TurnoutStraight {
+		t.Fatalf("остряк вернулся в %q, а разворачивали к straight", sw.Position)
+	}
+}
+
+// turnoutOf — состояние одной стрелки из проекции на провод.
+func turnoutOf(t *testing.T, m *match.Match, w *World, id string) match.TurnoutState {
+	t.Helper()
+	for _, sw := range m.TurnoutStates(w.net) {
+		if sw.ID == id {
+			return sw
+		}
+	}
+	t.Fatalf("стрелки %s нет в проекции", id)
+	return match.TurnoutState{}
 }

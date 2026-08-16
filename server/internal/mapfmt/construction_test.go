@@ -365,3 +365,162 @@ func TestTimberShorterThanSleeperIsRejected(t *testing.T) {
 		seedmap.Station(withType(func(tt *mapfmt.TrackType) { tt.Timber.LengthMax = 2.5 })),
 		"короче sleeper.length")
 }
+
+// TestRailSectionRejectsBadShape — СЕЧЕНИЕ РЕЛЬСА: каждая ошибка автора названа
+// своим отказом.
+//
+// Все пять случаев доехали бы до кадра ИСПРАВНЫМ НА ВИД рельсом, и это довод в
+// пользу отказа, а не подстановки: обход наизнанку даёт вывернутый металл (тот
+// же класс ошибки, что коробки домов 2026-08-12, найденные глазами владельца), а
+// сдвиг сечения наружу уводит колею, ничего при этом не нарушая по высоте.
+func TestRailSectionRejectsBadShape(t *testing.T) {
+	// Верное сечение — то же, что у затравки, только записанное здесь: тест
+	// портит ЗАВЕДОМО ХОРОШЕЕ, и хорошее обязано быть видно рядом с порчей.
+	good := func() []mapfmt.SectionPoint {
+		return []mapfmt.SectionPoint{
+			{0, 0}, {0, -0.045}, {0.0285, -0.060}, {0.0285, -0.150},
+			{-0.0375, -0.168}, {-0.0375, -0.180},
+			{0.1125, -0.180}, {0.1125, -0.168},
+			{0.0465, -0.150}, {0.0465, -0.060}, {0.075, -0.045}, {0.075, 0},
+		}
+	}
+	// Хорошее сечение обязано ПРОХОДИТЬ: тест, у которого зелёный случай не
+	// проверен, доказывает только то, что валидатор что-нибудь отвергает.
+	if err := mapfmt.Validate(seedmap.Line(withType(func(tt *mapfmt.TrackType) {
+		tt.Rail.Section = good()
+	}))); err != nil {
+		t.Fatalf("верное сечение отвергнуто: %v", err)
+	}
+
+	cases := []struct {
+		name    string
+		corrupt func([]mapfmt.SectionPoint) []mapfmt.SectionPoint
+		reason  string
+	}{
+		{"точек мало", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			return s[:4]
+		}, "нужно хотя бы"},
+		{"обход по часовой стрелке", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			out := make([]mapfmt.SectionPoint, len(s))
+			for i := range s {
+				out[i] = s[len(s)-1-i]
+			}
+			return out
+		}, "по часовой"},
+		{"металл над поверхностью катания", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			s[0] = mapfmt.SectionPoint{0, 0.01}
+			return s
+		}, "выше поверхности катания"},
+		{"высота разошлась с rail.height", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			for i := range s {
+				if s[i][1] < -0.17 {
+					s[i][1] = -0.25
+				}
+			}
+			return s
+		}, "высота рельса объявлена дважды"},
+		{"головка шире объявленной", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			s[len(s)-1] = mapfmt.SectionPoint{0.09, 0}
+			return s
+		}, "рабочая грань не там"},
+		{"сечение сдвинуто от рабочей грани", func(s []mapfmt.SectionPoint) []mapfmt.SectionPoint {
+			for i := range s {
+				s[i][0] += 0.02
+			}
+			return s
+		}, "начало отсчёта"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Line(withType(func(tt *mapfmt.TrackType) {
+				tt.Rail.Section = c.corrupt(good())
+			})), c.reason)
+		})
+	}
+}
+
+// TestRailWithoutSectionIsValid — карта БЕЗ сечения законна, и это объявленное
+// упрощение, а не дыра.
+//
+// Рельс без сечения рисуется прямоугольником head_width × height — тем самым,
+// что прожил в контракте с редакции 6 и назван вслух с обеих сторон провода.
+// Отказ здесь означал бы, что каждая карта мира обязана нести профиль в тот же
+// день, когда профиль впервые появился.
+func TestRailWithoutSectionIsValid(t *testing.T) {
+	if err := mapfmt.Validate(seedmap.Line()); err != nil {
+		t.Fatalf("карта без сечения отвергнута: %v", err)
+	}
+}
+
+// TestSwitchBlockIsRequiredForTurnouts — стрелка без остряка не выходит наружу.
+//
+// Тот же отказ и по тому же доводу, что у брусьев: цена пропуска измерена не
+// рассуждением, а игрой. До 2026-08-15 остряка не было ни у одной стрелки, и
+// перевод не менял на путях ничего — игрок жал клавишу, панель меняла слово,
+// мир стоял (ClearAhead-86mb).
+func TestSwitchBlockIsRequiredForTurnouts(t *testing.T) {
+	rejectsConstruction(t, seedmap.Station(withType(func(tt *mapfmt.TrackType) {
+		tt.Switch = nil
+	})), "нет блока switch")
+}
+
+// TestSwitchRejectsImpossibleBlade — числа остряка проверяются диапазоном и
+// согласованностью с рельсом.
+//
+// Ход шире трёх ширин головки — отдельный отказ, а не диапазон: полметра законны
+// для узкой колеи и незаконны рядом с головкой Р65 в 75 мм. Общий диапазон здесь
+// молчал бы, и в кадре это дало бы не «стрелку», а разрыв пути с провалом
+// колеса.
+func TestSwitchRejectsImpossibleBlade(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(*mapfmt.TrackType)
+		reason  string
+	}{
+		{"остряк короче метра", func(tt *mapfmt.TrackType) { tt.Switch.BladeLength = 0.5 }, "switch.blade_length"},
+		{"остряк длиннее двадцати метров", func(tt *mapfmt.TrackType) { tt.Switch.BladeLength = 25 }, "switch.blade_length"},
+		{"ход остряка ничтожен", func(tt *mapfmt.TrackType) { tt.Switch.Throw = 0.001 }, "switch.throw"},
+		{"ход остряка шире головки втрое", func(tt *mapfmt.TrackType) { tt.Switch.Throw = 0.4 }, "разрывает путь"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Station(withType(c.corrupt)), c.reason)
+		})
+	}
+}
+
+// TestFrogBlockIsRequiredForTurnouts — стрелка без крестовины не выходит наружу.
+//
+// Третий блок того же рода, что timber и switch, и отказ по тому же доводу: без
+// него нитки в крестовине просто пересекаются — ни желоба, ни усовика, ни
+// контррельса, то есть место перехода колеса с нитки на нитку не показано ничем.
+func TestFrogBlockIsRequiredForTurnouts(t *testing.T) {
+	rejectsConstruction(t, seedmap.Station(withType(func(tt *mapfmt.TrackType) {
+		tt.Frog = nil
+	})), "нет блока frog")
+}
+
+// TestFrogRejectsImpossibleGeometry — числа крестовины проверяются диапазоном и
+// согласованностью между собой.
+//
+// Две последние проверки — не диапазонные, и это важно: раструб уже желоба и
+// нитка короче своих отгибов законны каждым числом порознь. Первое даёт воронку,
+// сужающуюся навстречу колесу; второе — контррельс, состоящий из одних отгибов.
+func TestFrogRejectsImpossibleGeometry(t *testing.T) {
+	cases := []struct {
+		name    string
+		corrupt func(*mapfmt.TrackType)
+		reason  string
+	}{
+		{"желоб ничтожен", func(tt *mapfmt.TrackType) { tt.Frog.Flangeway = 0.001 }, "frog.flangeway"},
+		{"желоб контррельса огромен", func(tt *mapfmt.TrackType) { tt.Frog.CheckFlangeway = 0.5 }, "frog.check_flangeway"},
+		{"усовик длиной с перегон", func(tt *mapfmt.TrackType) { tt.Frog.WingLength = 50 }, "frog.wing_length"},
+		{"отгиб длиннее контррельса", func(tt *mapfmt.TrackType) { tt.Frog.Flare = 1.9 }, "не помещаются"},
+		{"раструб уже желоба", func(tt *mapfmt.TrackType) { tt.Frog.FlareGap = 0.03 }, "не шире желобов"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			rejectsConstruction(t, seedmap.Station(withType(c.corrupt)), c.reason)
+		})
+	}
+}

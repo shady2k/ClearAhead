@@ -32,6 +32,9 @@ const STATE_POSITION := "position"
 const STATE_HAND := "hand"
 const STATE_SIDE := "side"
 const STATE_NAME := "name"
+## Величина, которой мир задаёт длину переводной тяги (content.MeasureReach).
+## Величина, а не состояние: число, а не строка.
+const MEASURE_REACH := "reach"
 
 ## Положения остряка и рукости — строки провода. Клиент их не толкует: он
 ## передаёт их модели, а та знает свои углы.
@@ -59,6 +62,13 @@ var shown_hand := ""
 var reason := ""
 
 var _built: ModelBuild.Built = null
+## Длина тяги в двух положениях стрелки. Присланы сервером; ноль значит, что
+## тяги у механизма нет и растягивать нечего.
+var _reach_straight: float = 0.0
+var _reach_diverging: float = 0.0
+## Насколько тяга ВЫТЯНУТА сейчас: 0 — как при прямом положении, 1 — как при
+## боковом. −1 значит «ещё не показывали».
+var _reach_shown: float = -1.0
 ## Сторона от оси пути: +1 слева, −1 справа. Ставится по знаку присланного
 ## выноса.
 var _side := 1.0
@@ -75,6 +85,8 @@ static func build(d: TrackBuild.TurnoutDrive, base_drop_m: float, model: Diction
 	s.label = d.label
 	s.drive = d.drive
 	s._side = 1.0 if d.offset_m >= 0.0 else -1.0
+	s._reach_straight = d.reach_straight_m
+	s._reach_diverging = d.reach_diverging_m
 	s.name = "Drive_%s" % d.owner
 	var p := d.pose
 	# ПОДОШВА ПРИВОДА — НЕ НА ГОЛОВКЕ РЕЛЬСА. Датум z — верх головки (контракт
@@ -128,10 +140,20 @@ func position_side() -> float:
 ## На сколько поворачивать — знает ОПИСАНИЕ ТЕЛА, а не этот файл: здесь строка
 ## состояния передаётся модели, и всё. Возвращает true, если что-то и вправду
 ## повернулось: мир по этому решает, стоит ли пересчитывать зависящее от показа.
-func show_position(pos: String, hand: String = "") -> bool:
+func show_position(pos: String, hand: String = "", toward_diverging: float = -1.0) -> bool:
 	if _built == null:
 		return false
 	var turned := false
+	# ТЯГА ИДЁТ ВМЕСТЕ С ОСТРЯКОМ. Её длина меняется ровно на ход остряка, и
+	# доля хода приходит оттуда же, откуда доля перевода, — из снапшота.
+	# Отрицательная доля значит «сервер не сказал», и тогда тяга не трогается.
+	if toward_diverging >= 0.0 and _reach_straight > 0.0 and _reach_diverging > 0.0:
+		var k := clampf(toward_diverging, 0.0, 1.0)
+		if not is_equal_approx(k, _reach_shown):
+			var reach := lerpf(_reach_straight, _reach_diverging, k)
+			if _built.apply_measure(MEASURE_REACH, reach) > 0:
+				_reach_shown = k
+				turned = true
 	if (hand == HAND_LEFT or hand == HAND_RIGHT) and hand != shown_hand:
 		if _built.apply_state(STATE_HAND, hand) > 0:
 			shown_hand = hand

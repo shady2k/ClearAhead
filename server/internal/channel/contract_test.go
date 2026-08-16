@@ -686,10 +686,13 @@ func TestTurnoutCommandOverSocketMatchesContract(t *testing.T) {
 	var env struct {
 		Time     units.SimTime `json:"time"`
 		Turnouts []struct {
-			ID       string `json:"id"`
-			Name     string `json:"name"`
-			Position string `json:"position"`
-			Drive    string `json:"drive"`
+			ID       string  `json:"id"`
+			Name     string  `json:"name"`
+			Position string  `json:"position"`
+			Moving   bool    `json:"moving"`
+			To       string  `json:"to"`
+			Progress float64 `json:"progress"`
+			Drive    string  `json:"drive"`
 		} `json:"turnouts"`
 	}
 	if err := json.Unmarshal(n.Params, &env); err != nil {
@@ -704,17 +707,31 @@ func TestTurnoutCommandOverSocketMatchesContract(t *testing.T) {
 		t.Fatalf("в снапшоте %d стрелок, на станции 2: %s", len(env.Turnouts), n.Params)
 	}
 	var moved, other string
+	var pos string
 	drives := map[string]string{}
 	for _, sw := range env.Turnouts {
 		drives[sw.ID] = sw.Drive
 		if sw.ID == seedmap.StationSW1 {
-			moved = sw.Position
+			pos = sw.Position
+			if sw.Moving {
+				moved = sw.To
+			}
 		} else {
 			other = sw.Position
 		}
 	}
+	// ПОСЛЕ КОМАНДЫ ОСТРЯК ИДЁТ, А НЕ СТОИТ. С 2026-08-16 перевод — процесс
+	// (слово владельца: «стрелка, когда переключается, это не должна делать
+	// резко»), и снапшот обязан показать ХОД: положения нет, зато названа цель.
+	//
+	// Проверяется здесь именно НЕМЕДЛЕННОСТЬ: до этой правки в хеш состояния
+	// клали положение, а идущий остряк туда не попадал — и снапшоты во время
+	// хода шли бы только секундным биением. Это ПЯТЫЙ случай того же рода.
 	if moved != "diverging" {
-		t.Fatalf("переведённая стрелка стоит %q, а команда просила diverging", moved)
+		t.Fatalf("стрелка идёт в %q, а команда просила diverging", moved)
+	}
+	if pos != "" {
+		t.Fatalf("стрелка в переводе стоит %q — идущий остряк не стоит нигде", pos)
 	}
 	if other != "straight" {
 		t.Fatalf("нетронутая стрелка стоит %q — команда задела чужой остряк", other)

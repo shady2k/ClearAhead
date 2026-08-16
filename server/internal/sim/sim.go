@@ -94,6 +94,11 @@ func (w *World) Advance(m *match.Match, dt units.SimTime) error {
 	if dt <= 0 {
 		return nil
 	}
+	// ОСТРЯКИ ИДУТ ДО МАШИН, а не после, и порядок здесь значим: стрелка,
+	// дошедшая до положения в этот тик, обязана быть уже переведённой, когда по
+	// ней поедут. Обратный порядок дал бы машину, прошедшую по стрелке за миг до
+	// того, как остряк встал.
+	m.AdvanceTurnouts(dt)
 	for _, u := range m.Units {
 		if err := w.advanceUnit(m, u, dt); err != nil {
 			return err

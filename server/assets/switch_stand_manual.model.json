@@ -3,6 +3,7 @@
   "model": "switch_stand_manual",
   "device": "manual",
   "title": "ручной перевод",
+  "throw_seconds": 1.0,
   "axes": "x_right_y_up_z_back",
   "units": "m",
   "angles": "deg",
@@ -30,6 +31,11 @@
     "plate_field": {
       "colour": "#eeeee6",
       "roughness": 0.85,
+      "metallic": 0.0
+    },
+    "rod": {
+      "colour": "#3a3a3e",
+      "roughness": 0.62,
       "metallic": 0.0
     }
   },
@@ -243,46 +249,90 @@
                 0
               ],
               "size": [
-                0.38,
-                0.3
+                0.4,
+                0.34
               ],
-              "thickness": 0.03,
+              "thickness": 0.012,
               "mark": {
-                "polygon": [
-                  [
-                    0.1,
-                    0.38
-                  ],
-                  [
-                    0.58,
-                    0.38
-                  ],
-                  [
-                    0.58,
-                    0.14
-                  ],
-                  [
-                    0.94,
-                    0.5
-                  ],
-                  [
-                    0.58,
-                    0.86
-                  ],
-                  [
-                    0.58,
-                    0.62
-                  ],
-                  [
-                    0.1,
-                    0.62
-                  ]
-                ],
                 "material": "paint_black",
-                "both_sides": true
+                "both_sides": true,
+                "polygons": [
+                  [
+                    [
+                      0.04,
+                      0.94
+                    ],
+                    [
+                      0.38,
+                      0.5
+                    ],
+                    [
+                      0.04,
+                      0.06
+                    ],
+                    [
+                      0.24000000000000002,
+                      0.06
+                    ],
+                    [
+                      0.5800000000000001,
+                      0.5
+                    ],
+                    [
+                      0.24000000000000002,
+                      0.94
+                    ]
+                  ],
+                  [
+                    [
+                      0.38,
+                      0.94
+                    ],
+                    [
+                      0.72,
+                      0.5
+                    ],
+                    [
+                      0.38,
+                      0.06
+                    ],
+                    [
+                      0.5800000000000001,
+                      0.06
+                    ],
+                    [
+                      0.92,
+                      0.5
+                    ],
+                    [
+                      0.5800000000000001,
+                      0.94
+                    ]
+                  ]
+                ]
               }
             }
           ]
+        },
+        {
+          "name": "ahead",
+          "shape": "plate",
+          "material": "plate_field",
+          "at": [
+            0,
+            0,
+            0
+          ],
+          "rotate": [
+            0,
+            90,
+            0
+          ],
+          "size": [
+            0.14,
+            0.34
+          ],
+          "thickness": 0.012
         }
       ]
     },
@@ -293,14 +343,6 @@
         0.16,
         0
       ],
-      "pivot": {
-        "axis": "y",
-        "by": "side",
-        "states": {
-          "left": 90,
-          "right": -90
-        }
-      },
       "parts": [
         {
           "name": "board",
@@ -322,6 +364,42 @@
             "height": 0.62,
             "both_sides": true
           }
+        }
+      ]
+    },
+    {
+      "name": "rod",
+      "at": [
+        0,
+        0.02,
+        0
+      ],
+      "pivot": {
+        "axis": "y",
+        "by": "side",
+        "states": {
+          "left": 90,
+          "right": -90
+        }
+      },
+      "stretch": {
+        "axis": "z",
+        "by": "reach"
+      },
+      "parts": [
+        {
+          "name": "shaft",
+          "shape": "cylinder",
+          "material": "rod",
+          "at": [
+            0,
+            0,
+            0.5
+          ],
+          "radius": 0.022,
+          "height": 1.0,
+          "axis": "z",
+          "sides": 8
         }
       ]
     }

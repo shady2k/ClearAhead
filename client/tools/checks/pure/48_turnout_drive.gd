@@ -72,6 +72,12 @@ func run() -> void:
 	if model.is_empty():
 		return
 	var stand := SwitchStand.build(d0, drop, model)
+	# УЗЕЛ КЛАДЁТСЯ В ДЕРЕВО, и это не оформление. Godot считает global_transform
+	# только для узлов В ДЕРЕВЕ; у отсоединённой ветки он отдаёт МЕСТНЫЙ поворот.
+	# Первый замер указателя (ниже) на этом и обманулся: щиток отвечал единичным
+	# базисом при любом положении, и проверка «ребром к ходу» проходила от того,
+	# что мерить было нечего.
+	ctx.tree.root.add_child(stand)
 	_ok("тело собралось без отказа", stand.reason == "", stand.reason)
 	_ok("привод сел на брус, а не на головку рельса", drop > 0.0 and stand.position.y < d0.pose.z,
 		"подошва %.3f при отметке головки %.3f, рельс %.3f" % [stand.position.y, d0.pose.z, drop])
@@ -115,6 +121,177 @@ func run() -> void:
 		_ok("на левой стрелке стрела смотрит в другую сторону",
 			absf(arrow.rotation.y - at_right) > 0.01,
 			"%.4f против %.4f рад" % [arrow.rotation.y, at_right])
+
+	# УКАЗАТЕЛЬ ЧИТАЕТСЯ С ПУТИ, И ЧИТАЕТСЯ ПРАВИЛЬНО — а не просто «показывает
+	# два разных угла».
+	#
+	# Проверки выше держали РАЗЛИЧИМОСТЬ: прямое положение выглядит не так, как
+	# боковое, стрела правой стрелки — не так, как левой. Различимость проходит и
+	# у ЗЕРКАЛЬНОГО указателя: поменяй два угла местами — и он покажет боковое
+	# положение за прямое, а обе проверки останутся зелёными. Владелец увидел
+	# именно это (2026-08-15): «подсказка для стрелки показывает в неверном
+	# направлении».
+	#
+	# Ниже проверяется СМЫСЛ, по ИСИ, и в осях мира, а не в углах описания:
+	#
+	#   по прямому пути — щиток РЕБРОМ к подъезжающему (видна полоса);
+	#   на боковой      — щиток ПЛАШМЯ, и стрела указывает в сторону схода.
+	#
+	# Ось пути берётся из позы привода, потому что именно вдоль неё и поставлен
+	# узел механизма (SwitchStand.build).
+	var vane := _find_node(stand, "vane")
+	_ok("у стрелы есть щиток", vane != null)
+	if vane != null:
+		var f := d0.pose.forward()
+		var along := Vector3(f.x, 0.0, -f.y)          # ход по возрастанию u в осях движка
+		var l := d0.pose.left()
+		var to_left := Vector3(l.x, 0.0, -l.y)        # левая рука хода там же
+		stand.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_RIGHT)
+		# Лицо щитка — нормаль пластины, ось Z её узла.
+		var face_straight: Vector3 = vane.global_transform.basis.z.normalized()
+		_ok("по прямому пути щиток стоит ребром к подъезжающему",
+			absf(face_straight.dot(along)) < 0.2,
+			"лицо к ходу %.3f (ребро — около нуля)" % face_straight.dot(along))
+		stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT)
+		var face_div: Vector3 = vane.global_transform.basis.z.normalized()
+		_ok("на боковой путь щиток разворачивается плашмя",
+			absf(face_div.dot(along)) > 0.8,
+			"лицо к ходу %.3f (плашмя — около единицы)" % face_div.dot(along))
+		# Стрела нарисована в сторону +X щитка (знак mark в описании), и на
+		# правой стрелке она обязана смотреть ВПРАВО от хода.
+		var tip: Vector3 = vane.global_transform.basis.x.normalized()
+		_ok("на правой стрелке стрела указывает вправо от хода",
+			tip.dot(to_left) < -0.7,
+			"стрела к левой руке %.3f (вправо — около минус единицы)" % tip.dot(to_left))
+		stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_LEFT)
+		var tip_left: Vector3 = vane.global_transform.basis.x.normalized()
+		_ok("на левой стрелке стрела указывает влево от хода",
+			tip_left.dot(to_left) > 0.7,
+			"стрела к левой руке %.3f (влево — около единицы)" % tip_left.dot(to_left))
+
+		# ОБЕ СТОРОНЫ ЩИТКА ПОКАЗЫВАЮТ В ОДНУ СТОРОНУ МИРА.
+		#
+		# Настоящая стрела на железном щитке смотрит туда, куда уходит боковой
+		# путь, с какого конца на неё ни гляди. Изнанка же делается поворотом на
+		# 180°, и без зеркала развёртки она смотрит ровно наоборот — а подходят к
+		# SW1 затравки как раз со стороны крестовины, то есть на изнанку.
+		#
+		# Направление знака считается из ДВУХ множителей: куда повёрнут сам щиток
+		# и в какую сторону положена развёртка. Второй множитель здесь и
+		# проверяется — без него зеркало можно снять, не уронив ни строки.
+		var dirs: Array[Vector3] = []
+		for c in vane.get_children():
+			var mi := c as MeshInstance3D
+			if mi == null:
+				continue
+			var m := mi.material_override as StandardMaterial3D
+			# Лица отбираются по НАНЕСЁННОМУ РИСУНКУ, а не по имени узла: третий
+			# ребёнок щитка — сама пластина, и знака на ней нет.
+			if m == null or m.albedo_texture == null:
+				continue
+			var flip := -1.0 if m.uv1_scale.x < 0.0 else 1.0
+			dirs.append(mi.global_transform.basis.x.normalized() * flip)
+		_ok("у щитка обе стороны", dirs.size() == 2, str(dirs.size()))
+		if dirs.size() == 2:
+			_ok("знак с изнанки указывает в ту же сторону мира, что с лица",
+				dirs[0].dot(dirs[1]) > 0.99,
+				"лицо %s, изнанка %s" % [dirs[0], dirs[1]])
+
+	# ПЕРЕВОДНАЯ ТЯГА. Длина у неё НЕ СВОЙСТВО ТЕЛА: это расстояние от станины до
+	# остряка, а вынос станины считает сервер. До 2026-08-16 у ручного привода
+	# тяги не было вовсе, а у электрического она была длиной 0.6 м при
+	# расстоянии до нитки 1.115 м — то есть висела в воздухе (ClearAhead-bsjq,
+	# слово владельца: «сам девайс стоит, но он не прикреплён к рельсу»).
+	#
+	# Проверяется, что длина ПРИШЛА и ПРИМЕНИЛАСЬ: часть, оставшаяся единичной,
+	# и есть тяга, не дотянувшаяся до рельса.
+	_ok("сервер прислал длину тяги", d0.reach_straight_m > 0.0 and d0.reach_diverging_m > 0.0,
+		"прямо %.3f, на боковую %.3f" % [d0.reach_straight_m, d0.reach_diverging_m])
+	# ТЯГА ДЛИННЕЕ ВЫНОСА СТАНИНЫ, то есть пересекает путь, а не торчит вбок.
+	# Сравнивается с ПРИСЛАННЫМ выносом, а не с половиной колеи: колеи у привода
+	# своей нет, и вписать её сюда числом значило бы выдумать факт о станции
+	# ровно там, где проверяют, что клиент их не выдумывает.
+	_ok("тяга длиннее выноса станины — она пересекает путь",
+		d0.reach_straight_m > absf(d0.offset_m),
+		"тяга %.3f м при выносе %.3f м" % [d0.reach_straight_m, absf(d0.offset_m)])
+	var rod := _find_node(stand, "rod")
+	_ok("у механизма есть тяга", rod != null)
+	if rod != null:
+		stand.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_RIGHT, 0.0)
+		var at_straight: float = rod.scale.z
+		_ok("тяга растянута на присланную длину",
+			absf(at_straight - d0.reach_straight_m) < 1e-6,
+			"масштаб %.4f при длине %.4f м" % [at_straight, d0.reach_straight_m])
+		stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT, 1.0)
+		_ok("на боковом пути тяга иной длины — она ходит вместе с остряком",
+			absf(rod.scale.z - d0.reach_diverging_m) < 1e-6,
+			"масштаб %.4f при длине %.4f м" % [rod.scale.z, d0.reach_diverging_m])
+		# И ПОСЕРЕДИНЕ ПЕРЕВОДА — посередине: длина идёт вместе с остряком, а не
+		# скачком в конце.
+		stand.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT, 0.5)
+		var mid := (d0.reach_straight_m + d0.reach_diverging_m) * 0.5
+		_ok("на середине перевода тяга посередине", absf(rod.scale.z - mid) < 1e-6,
+			"масштаб %.4f при середине %.4f м" % [rod.scale.z, mid])
+
+	# ИСИ ПРОВЕРЯЕТСЯ У КАЖДОГО ТЕЛА, А НЕ У ПЕРВОГО ПОПАВШЕГОСЯ.
+	#
+	# Всё, что выше, построено на drives[0] — то есть на ОДНОМ механизме из двух.
+	# Углы указателя лежат в описании тела, у каждого рода своём, и проверка
+	# одного тела не говорит о другом ровно ничего. Владелец увидел это раньше
+	# проверки: «опять они смотрят не в ту сторону» — про кадр с электроприводом,
+	# которого ни одна строка выше не касалась.
+	for d_raw in drives:
+		var dd: TrackBuild.TurnoutDrive = d_raw
+		var mm := _model(String(dd.drive))
+		if mm.is_empty():
+			continue
+		var st2 := SwitchStand.build(dd, dd.base_drop_m, mm)
+		ctx.tree.root.add_child(st2)
+		var vn := _find_node(st2, "vane")
+		if vn == null:
+			_ok("у механизма %s есть щиток указателя" % dd.drive, false)
+			st2.queue_free()
+			continue
+		var f2 := dd.pose.forward()
+		var along2 := Vector3(f2.x, 0.0, -f2.y)
+		var l2 := dd.pose.left()
+		var left2 := Vector3(l2.x, 0.0, -l2.y)
+		st2.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_RIGHT)
+		var n_str: Vector3 = vn.global_transform.basis.z.normalized()
+		_ok("%s: по прямому пути щиток ребром к подъезжающему" % dd.drive,
+			absf(n_str.dot(along2)) < 0.2, "лицо к ходу %.3f" % n_str.dot(along2))
+		st2.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT)
+		var n_div: Vector3 = vn.global_transform.basis.z.normalized()
+		_ok("%s: на боковой путь щиток плашмя" % dd.drive,
+			absf(n_div.dot(along2)) > 0.8, "лицо к ходу %.3f" % n_div.dot(along2))
+		var tip2: Vector3 = vn.global_transform.basis.x.normalized()
+		_ok("%s: на правой стрелке стрела указывает вправо от хода" % dd.drive,
+			tip2.dot(left2) < -0.7, "стрела к левой руке %.3f" % tip2.dot(left2))
+
+		# МАШИНИСТУ ЕСТЬ ЧТО ВИДЕТЬ В ОБОИХ ПОЛОЖЕНИЯХ. Пластин у указателя две,
+		# крест-накрест: стрела и белая полоса. По прямому пути к машинисту
+		# повёрнута ПОЛОСА, на боковой — СТРЕЛА.
+		#
+		# Одной пластины не хватало, и это видно было только с пути: щиток,
+		# стоящий ребром, — это три сантиметра торца, то есть ничего. Со стороны
+		# же (а игрок стоит именно сбоку, он и переводит стрелку рукой) видна
+		# стрела — при прямом положении. Владелец прочёл это как «опять смотрят не
+		# в ту сторону», и был прав: сигнал читался наоборот.
+		#
+		# Нашёл это СТЕНД ПРЕДМЕТА (make bench) за пять секунд — после того как
+		# те же полчаса ушли на снимки мира с небом и тенями.
+		var stripe := _find_node(st2, "ahead")
+		_ok("%s: у указателя есть знак прямого пути" % dd.drive, stripe != null)
+		if stripe != null:
+			st2.show_position(SwitchStand.POS_STRAIGHT, SwitchStand.HAND_RIGHT)
+			var s_str: Vector3 = stripe.global_transform.basis.z.normalized()
+			_ok("%s: по прямому пути к машинисту повёрнут знак «прямо»" % dd.drive,
+				absf(s_str.dot(along2)) > 0.8, "лицо к ходу %.3f" % s_str.dot(along2))
+			st2.show_position(SwitchStand.POS_DIVERGING, SwitchStand.HAND_RIGHT)
+			var s_div: Vector3 = stripe.global_transform.basis.z.normalized()
+			_ok("%s: на боковой знак «прямо» уходит ребром, уступая стреле" % dd.drive,
+				absf(s_div.dot(along2)) < 0.2, "лицо к ходу %.3f" % s_div.dot(along2))
+		st2.queue_free()
 
 	# ТАБЛИЧКА: щиток на месте, номер на нём — присланный.
 	var plate := _find_node(stand, "board")

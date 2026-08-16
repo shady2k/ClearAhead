@@ -64,8 +64,17 @@ func buildTurnoutGrids(m *mapfmt.Map, els map[string]Element, rg *RenderGeometry
 	for i := range c.Types {
 		types[c.Types[i].ID] = c.Types[i]
 	}
+	// ПРИВОДЫ ЧИТАЮТСЯ ГОТОВЫМИ, а не считаются заново: брусья под станиной
+	// удлиняются до её выноса, и второе вычисление того же выноса разъехалось бы
+	// с первым — привод стоял бы рядом с помостом, построенным для него же.
+	// Порядок вызовов держит compile.go: сперва привод, потом решётка.
+	drives := make(map[string]RenderTurnoutDrive, len(rg.TurnoutDrives))
+	for _, d := range rg.TurnoutDrives {
+		drives[d.Owner] = d
+	}
 	for _, t := range m.Topology.Turnouts {
-		g, err := turnoutGrid(els, types, c, t)
+		d, hasDrive := drives[t.ID]
+		g, err := turnoutGrid(els, types, c, t, d, hasDrive)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
@@ -79,9 +88,12 @@ func buildTurnoutGrids(m *mapfmt.Map, els map[string]Element, rg *RenderGeometry
 	return nil
 }
 
-// turnoutGrid считает брусья одной стрелки.
+// turnoutGrid считает брусья одной стрелки. Привод передаётся, чтобы брусья под
+// станиной вышли длиннее прочих; hasDrive = false означает «привода у стрелки
+// нет», и тогда решётка считается одним правилом на всю длину.
 func turnoutGrid(els map[string]Element, types map[string]mapfmt.TrackType,
-	c *mapfmt.Construction, t mapfmt.Turnout) (*RenderTurnoutGrid, error) {
+	c *mapfmt.Construction, t mapfmt.Turnout,
+	drive RenderTurnoutDrive, hasDrive bool) (*RenderTurnoutGrid, error) {
 	typ := t.Type
 	if typ == "" {
 		typ = c.DefaultType
@@ -139,7 +151,14 @@ func turnoutGrid(els map[string]Element, types map[string]mapfmt.TrackType,
 		if err != nil {
 			return nil, err
 		}
-		length, offset := timberSpan(spread, tt.Sleeper.Length, tb.LengthMax)
+		// ПОД ПРИВОДОМ БРУС ДЛИННЕЕ. Требуемый вылет считается со стороны станины
+		// — той, что противоположна сходу, — и только у брусьев, попавших в окно
+		// вокруг неё. Ноль означает «привода тут нет» и правило не меняет.
+		reach := 0.0
+		if hasDrive && math.Abs(u-drive.U) <= DriveTimberWindow {
+			reach = math.Abs(drive.Offset) + DriveTimberReach
+		}
+		length, offset := timberSpan(spread, tt.Sleeper.Length, tb.LengthMax, reach)
 		g.Timbers = append(g.Timbers, RenderTimber{
 			U:      u,
 			Length: length,
@@ -182,15 +201,29 @@ func axisSpread(sEl Element, su float64, dEl Element, du float64) (float64, erro
 // прямому пути, — и упор в length_max растит брус только в сторону схода, а не в
 // обе. Растяни его симметрично, и под прямым путём кончился бы вылет: у
 // длиннейших брусьев рельс встал бы на самый торец.
-func timberSpan(spread, sleeperLength, lengthMax float64) (length, offset float64) {
+//
+// reach — насколько далеко брус обязан уйти в сторону, ПРОТИВОПОЛОЖНУЮ сходу:
+// столько требует привод, чтобы станина стояла на брусе, а не за его концом
+// (разбор — у DriveTimberReach). Ноль означает «под этим брусом привода нет», и
+// тогда ближний край остаётся на половине шпалы, как у всех прочих.
+//
+// УПОР В LENGTH_MAX РЕЖЕТ СО СТОРОНЫ СХОДА, а не со стороны привода, и это
+// выбор, а не побочность: боковой путь при обрезке теряет вылет бруса, привод —
+// опору целиком. Первое видно как короткий брус, второе — как ящик, висящий над
+// откосом. Цена названа здесь, потому что на карте с длинным выносом и коротким
+// length_max это станет заметно.
+func timberSpan(spread, sleeperLength, lengthMax, reach float64) (length, offset float64) {
 	sign := 1.0
 	if spread < 0 {
 		sign = -1.0
 	}
-	near := -sign * sleeperLength / 2 // край со стороны прямого пути
-	full := sleeperLength + math.Abs(spread)
+	half := sleeperLength / 2
+	nearHalf := math.Max(half, reach) // докуда брус уходит от оси в сторону привода
+	near := -sign * nearHalf          // край со стороны прямого пути
+	far := sign * (half + math.Abs(spread))
+	full := nearHalf + half + math.Abs(spread)
 	if full <= lengthMax {
-		return full, spread / 2
+		return full, (near + far) / 2
 	}
 	return lengthMax, near + sign*lengthMax/2
 }

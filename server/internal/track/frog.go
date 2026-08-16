@@ -106,7 +106,7 @@ func frogFeature(els map[string]Element, types map[string]mapfmt.TrackType,
 	}
 	return &RenderFeature{
 		Owner: t.ID,
-		Kind:  "frog",
+		Kind:  FeatureFrog,
 		Point: RenderPoint{X: cand.x, Y: cand.y},
 		// Порядок адресов: прямой проход, затем боковой (спека §5).
 		Addresses: []RenderAddress{

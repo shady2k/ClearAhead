@@ -66,6 +66,10 @@ class Built extends RefCounted:
 	## Держатся списком, потому что по одному состоянию поворачиваются несколько
 	## частей (у указателя — щиток, у механизма — балансир).
 	var pivots := {}
+	## stretches — растяжимые части: имя ВЕЛИЧИНЫ -> список {node, axis}.
+	## Отдельно от pivots, потому что это другая связь с миром: pivot берёт
+	## строку и поворачивает, stretch берёт число и задаёт размер.
+	var stretches := {}
 	## reason — почему не собралось. Пусто — собралось.
 	var reason := ""
 
@@ -98,6 +102,34 @@ class Built extends RefCounted:
 					node.rotation.z = deg_to_rad(deg)
 			turned += 1
 		return turned
+
+
+	## apply_measure — задать размер частям, растяжимым по этой величине.
+	##
+	## Растяжимая часть авторена ЕДИНИЧНОЙ вдоль своей оси (правило формата), и
+	## величина мира становится её масштабом напрямую. Неположительная величина
+	## НЕ ПРИМЕНЯЕТСЯ: нулевой масштаб схлопывает часть в точку, а отрицательный
+	## выворачивает её наизнанку — и то и другое хуже, чем часть, оставшаяся
+	## единичной и видимая как ошибка.
+	##
+	## Возвращает число растянутых частей — по нему мир видит, дошла ли величина.
+	func apply_measure(key: String, value: float) -> int:
+		if not stretches.has(key) or value <= 0.0:
+			return 0
+		var done := 0
+		for p in (stretches[key] as Array):
+			var node: Node3D = p["node"]
+			var sc := node.scale
+			match String(p["axis"]):
+				"x":
+					sc.x = value
+				"y":
+					sc.y = value
+				_:
+					sc.z = value
+			node.scale = sc
+			done += 1
+		return done
 
 
 ## build — собрать тело по описанию.
@@ -192,6 +224,16 @@ static func _part(p: Dictionary, mats: Dictionary, labels: Dictionary, out: Buil
 			"axis": String(pv.get("axis", "y")),
 			"states": pv.get("states", {}) as Dictionary,
 		})
+	var stretch: Variant = p.get("stretch", null)
+	if stretch is Dictionary:
+		var sv := stretch as Dictionary
+		var mkey := String(sv.get("by", ""))
+		if not out.stretches.has(mkey):
+			out.stretches[mkey] = []
+		(out.stretches[mkey] as Array).append({
+			"node": node,
+			"axis": String(sv.get("axis", "z")),
+		})
 	for child in (p.get("parts", []) as Array):
 		var c := _part(child as Dictionary, mats, labels, out)
 		if c != null:
@@ -261,6 +303,25 @@ static func _plate(node: Node3D, p: Dictionary, mats: Dictionary,
 		both = bool((mark as Dictionary).get("both_sides", true))
 	elif label is Dictionary:
 		both = bool((label as Dictionary).get("both_sides", true))
+	# ЗНАК И НАДПИСЬ ОБОРАЧИВАЮТСЯ ПО-РАЗНОМУ, и это не тонкость показа.
+	#
+	# Изнанка получается поворотом щитка на 180° вокруг вертикали. Для НАДПИСИ
+	# это ровно то, что нужно: текст читается слева направо с обеих сторон, как
+	# на всякой двусторонней табличке.
+	#
+	# Для ЗНАКА это враньё. Знак указывает НА МЕСТО В МИРЕ: стрела указателя
+	# показывает, куда уходит боковой путь (ИСИ), и настоящая стрела на железном
+	# щитке смотрит в ОДНУ И ТУ ЖЕ сторону, с какого конца на неё ни гляди.
+	# Повёрнутая на 180° копия смотрит в противоположную.
+	#
+	# ЦЕНА БЫЛА ЗАПЛАЧЕНА: локомотив затравки стоит на главном пути, к SW1
+	# подходят со стороны крестовины — то есть смотрят как раз на изнанку. Стрела
+	# показывала сход не в ту сторону, и увидел это владелец
+	# (ClearAhead-8jw7, 2026-08-15), а не проверка.
+	#
+	# Лечится зеркалом РАЗВЁРТКИ, а не второй текстурой: u' = 1 − u возвращает
+	# рисунок в ту же сторону мира при том же повороте щитка.
+	var mirror_back := mark is Dictionary
 	var sides: Array = [1.0, -1.0] if both else [1.0]
 	for s in sides:
 		var face := MeshInstance3D.new()
@@ -276,6 +337,9 @@ static func _plate(node: Node3D, p: Dictionary, mats: Dictionary,
 		face.position = Vector3(0, 0, float(s) * (t * 0.5 + 0.002))
 		if float(s) < 0:
 			face.rotation.y = PI
+			if mirror_back:
+				fm.uv1_scale = Vector3(-1.0, 1.0, 1.0)
+				fm.uv1_offset = Vector3(1.0, 0.0, 0.0)
 		node.add_child(face)
 
 
@@ -309,17 +373,23 @@ static func _face_texture(owner_node: Node3D, p: Dictionary, mats: Dictionary,
 	vp.add_child(bg)
 	if mark is Dictionary:
 		var mk := mark as Dictionary
-		var poly := PackedVector2Array()
-		for pt_raw in (mk.get("polygon", []) as Array):
-			var pt := pt_raw as Array
-			# Начало координат знака — ЛЕВЫЙ НИЖНИЙ угол лица; у канвы Godot оно в
-			# левом верхнем, отсюда переворот по вертикали.
-			poly.append(Vector2(float(pt[0]) * px.x, (1.0 - float(pt[1])) * px.y))
-		var node := Polygon2D.new()
-		node.polygon = poly
 		var mm: StandardMaterial3D = mats.get(String(mk.get("material", "")), null)
-		node.color = mm.albedo_color if mm != null else Color.BLACK
-		vp.add_child(node)
+		# КОНТУРОВ НЕСКОЛЬКО, и каждый рисуется своим Polygon2D. Знак стрелочного
+		# указателя — два шеврона друг за другом; один контур на всё описал бы их
+		# только через перемычку, то есть нарисовал бы то, чего на щитке нет.
+		for poly_raw in (mk.get("polygons", []) as Array):
+			var poly := PackedVector2Array()
+			for pt_raw in (poly_raw as Array):
+				var pt := pt_raw as Array
+				# Начало координат знака — ЛЕВЫЙ НИЖНИЙ угол лица; у канвы Godot оно
+				# в левом верхнем, отсюда переворот по вертикали.
+				poly.append(Vector2(float(pt[0]) * px.x, (1.0 - float(pt[1])) * px.y))
+			if poly.size() < 3:
+				continue
+			var node := Polygon2D.new()
+			node.polygon = poly
+			node.color = mm.albedo_color if mm != null else Color.BLACK
+			vp.add_child(node)
 	if text != "":
 		var lb := label as Dictionary
 		var lbl := Label.new()

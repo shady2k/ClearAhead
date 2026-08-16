@@ -2,6 +2,7 @@ package content
 
 import (
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -94,8 +95,51 @@ func TestModelDescribesTheIndicatorByISI(t *testing.T) {
 	if _, ok := byState[StateHand]; !ok {
 		t.Fatal("стрела указателя не привязана к стороне схода — по ИСИ она направлена в сторону бокового пути")
 	}
-	if _, ok := byState[StateSide]; !ok {
-		t.Fatal("ни одна часть не привязана к стороне, с которой стоит механизм: табличка окажется в поле")
+}
+
+// TestNumberPlateFacesTheDriver — ТАБЛИЧКУ С НОМЕРОМ ЧИТАЕТ МАШИНИСТ, и ничто её
+// поперёк пути не разворачивает.
+//
+// # Что здесь стояло и чего это стоило
+//
+// Щиток с номером висел на повороте по СТОРОНЕ УСТАНОВКИ (side: left 90°,
+// right −90°), и довод в прежней проверке звучал так: «ни одна часть не
+// привязана к стороне, с которой стоит механизм: табличка окажется в поле».
+// Довод отвечал не на тот вопрос. Поворот на прямой угол разворачивает щиток
+// ПОПЕРЁК пути: читать его становится тому, кто стоит в междупутье, а машинист
+// видит торец в полтора сантиметра. Владелец увидел ровно это (2026-08-15):
+// «табличка на стрелке повёрнута не к машинисту, а на 90 градусов».
+//
+// Нулевой поворот ставит щиток лицом ВДОЛЬ пути, а надпись у него набита с обеих
+// сторон (label.both_sides), поэтому номер читается с обоих подходов — и стороне
+// установки здесь делать нечего.
+//
+// Проверяется СТРУКТУРА, а не угол: угол — решение автора тела, а вот «номер не
+// разворачивают поперёк» — требование к устройству, и оно проверяемо у любой
+// будущей модели, как бы её ни нарисовали.
+//
+// Сторона установки из формата НЕ УХОДИТ: у электропривода на ней держится
+// переводная тяга (часть rod), и там она означает ровно то, что должна, — куда
+// механизму тянуться к остряку.
+func TestNumberPlateFacesTheDriver(t *testing.T) {
+	for _, name := range []string{"switch_stand_manual", "switch_stand_electric"} {
+		m := shippedModel(t, name)
+		var walk func(p Part, turnedBy string)
+		walk = func(p Part, turnedBy string) {
+			if p.Pivot != nil {
+				turnedBy = p.Pivot.By
+			}
+			if p.Label != nil && turnedBy == StateSide {
+				t.Fatalf("%s: щиток %q развёрнут по стороне установки — номер встаёт поперёк пути, и машинист видит торец",
+					name, p.Name)
+			}
+			for _, c := range p.Parts {
+				walk(c, turnedBy)
+			}
+		}
+		for _, p := range m.Parts {
+			walk(p, "")
+		}
 	}
 }
 
@@ -183,4 +227,92 @@ func TestPivotOnUnknownStateIsRefused(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "которого мир не присылает") {
 		t.Fatalf("подвижность по выдуманному состоянию принята: %v", err)
 	}
+}
+
+// TestDriveRodStretchesToTheBlade — У ОБОИХ ПРИВОДОВ ЕСТЬ ТЯГА, И ДЛИНУ ЕЙ
+// ЗАДАЁТ МИР.
+//
+// Проверяется не длина (её знает станция, а не тело), а СВЯЗЬ: часть объявлена
+// растяжимой по величине reach. Без неё тяга остаётся тем, чем была до
+// 2026-08-16, — константой в файле: у ручного привода её не было вовсе, у
+// электрического она была 0.6 м при расстоянии до нитки 1.115 м, то есть висела
+// в воздухе (ClearAhead-bsjq).
+//
+// Заодно проверяется ЕДИНИЧНОСТЬ: растяжимая часть авторится размером ровно 1
+// вдоль своей оси, потому что мир этот размер умножает. Автор, записавший 0.6,
+// получил бы тягу вдвое короче нужной — и ни одного отказа.
+func TestDriveRodStretchesToTheBlade(t *testing.T) {
+	for _, name := range []string{"switch_stand_manual", "switch_stand_electric"} {
+		m := shippedModel(t, name)
+		var rod *Part
+		var walk func(p *Part)
+		walk = func(p *Part) {
+			if p.Stretch != nil {
+				rod = p
+			}
+			for i := range p.Parts {
+				walk(&p.Parts[i])
+			}
+		}
+		for i := range m.Parts {
+			walk(&m.Parts[i])
+		}
+		if rod == nil {
+			t.Fatalf("%s: ни одной растяжимой части — тяге неоткуда взять длину", name)
+		}
+		if rod.Stretch.By != MeasureReach {
+			t.Fatalf("%s: тяга растянута по величине %q, а не по %q", name, rod.Stretch.By, MeasureReach)
+		}
+		// РАСТЯЖИМАЯ ЧАСТЬ АВТОРЕНА ЕДИНИЧНОЙ: дальний край её содержимого вдоль
+		// оси растяжения лежит ровно на единице, потому что мир этот размер
+		// УМНОЖАЕТ. Автор, записавший 0.6, получил бы тягу вдвое короче нужной —
+		// и ни одного отказа.
+		//
+		// Мерится ДАЛЬНИЙ КРАЙ, а не размер одной части: тяга собрана из
+		// нескольких стержней (шибер и контрольные линейки), и «размер части»
+		// перестал быть тем же числом, что длина группы. Первая редакция
+		// проверки искала цилиндр с той же осью и на брусе-шибере отвечала нулём.
+		axis := axisIndex(rod.Stretch.Axis)
+		if axis < 0 {
+			t.Fatalf("%s: ось растяжения %q неизвестна", name, rod.Stretch.Axis)
+		}
+		var far float64
+		var scan func(p *Part, at float64)
+		scan = func(p *Part, at float64) {
+			pos := at + p.At[axis]
+			half := 0.0
+			switch {
+			case p.Shape == ShapeCylinder && p.Axis == rod.Stretch.Axis:
+				half = p.Height / 2
+			case p.Shape == ShapeBox && len(p.Size) > axis:
+				half = p.Size[axis] / 2
+			}
+			if pos+half > far {
+				far = pos + half
+			}
+			for i := range p.Parts {
+				scan(&p.Parts[i], pos)
+			}
+		}
+		for i := range rod.Parts {
+			scan(&rod.Parts[i], 0)
+		}
+		if math.Abs(far-1) > 1e-9 {
+			t.Fatalf("%s: растяжимая часть достаёт до %v вдоль %s, а обязана быть единичной",
+				name, far, rod.Stretch.Axis)
+		}
+	}
+}
+
+// axisIndex — «x» | «y» | «z» в номер оси. Отрицательное — ось неизвестна.
+func axisIndex(a string) int {
+	switch a {
+	case "x":
+		return 0
+	case "y":
+		return 1
+	case "z":
+		return 2
+	}
+	return -1
 }

@@ -165,55 +165,69 @@ static func sleeper_mesh(list: Array[TrackBuild.Sleeper]) -> ArrayMesh:
 	return _mesh(verts, norms, idx)
 
 
-## rail_body_mesh — рельсы телом, ОБЪЯВЛЕННЫМ УПРОЩЕНИЕМ.
+## rail_body_mesh — рельсы телом.
 ##
-## Прямоугольник `head_width × rail.height`, внутренней гранью на ±gauge/2.
-## Это не профиль рельса и не выдаётся за него: контракт (редакция 6 §8) держит
-## профиль отложенным и прямо называет прямоугольник упрощением. Заведена ровно
-## одна величина формы — ширина головки, — и заведена по условию: gauge задан
-## между ВНУТРЕННИМИ РАБОЧИМИ ГРАНЯМИ, и без ширины головки рельс некуда
-## поставить, не выдумав её.
+## # Две ветки, и обе объявлены
 ##
-## Цена умолчания измерена на снесённом спайке: без ширины головки нитки
-## поставили по осям головок вместо рабочих граней, и колея вышла 1.335 вместо
-## 1.435.
+## ПРИСЛАНО СЕЧЕНИЕ (`rail.section`) — рельс строится экструзией присланного
+## многоугольника: головка, шейка, подошва. Ни одного числа формы клиент при
+## этом не знает и не заводит.
 ##
-## Рисуются три грани — верх и два бока. Низ не рисуется: он лежит на шпале и не
-## виден ниоткуда, а треугольники стоят денег.
+## СЕЧЕНИЯ НЕТ — прежнее ОБЪЯВЛЕННОЕ УПРОЩЕНИЕ: прямоугольник
+## `head_width × rail.height`, внутренней гранью на ±gauge/2. Оно не выдаётся за
+## профиль ни здесь, ни на сервере; карта без сечения законна (валидатор
+## пропускает её нарочно), и клиент, подставивший бы сюда свой Р65, выдумал бы
+## факт о мире.
+##
+## Ширина головки нужна ОБЕИМ веткам, и заведена она по условию: gauge задан
+## между ВНУТРЕННИМИ РАБОЧИМИ ГРАНЯМИ, и без неё рельс некуда поставить, не
+## выдумав. Цена умолчания измерена на снесённом спайке: нитки поставили по осям
+## головок вместо рабочих граней, и колея вышла 1.335 вместо 1.435.
+##
+## У упрощения рисуются три грани — верх и два бока. Низ не рисуется: он лежит на
+## шпале и не виден ниоткуда, а треугольники стоят денег.
 static func rail_body_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if span.has_rail_section():
+		return rail_profile_mesh(span)
 	if not span.has_rail_body() or span.axis.size() < 2:
 		return null
 	var n := span.axis.size()
 	var inner := span.gauge_m * 0.5
 	var outer := inner + span.rail_head_width_m
-	var band := span.rail_head_width_m * RAILHEAD_WIDTH
-	var head_i := inner + (span.rail_head_width_m - band) * 0.5
-	var head_o := head_i + band
+	# Вырез под накат ВМЕСТЕ С ФАСКАМИ: их рисуют соседние меши, и тело обязано
+	# уступить им всю полосу разом.
+	var bands := head_bands(span.rail_head_width_m)
+	var head_i := inner + bands.x
+	var head_o := inner + bands.w
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var idx := PackedInt32Array()
 
 	var sides: Array[float] = [1.0, -1.0]
 	for sgn in sides:
-		var top_i := _rail_chain(span, sgn, inner, true)
-		var top_hi := _rail_chain(span, sgn, head_i, true)
-		var top_ho := _rail_chain(span, sgn, head_o, true)
-		var top_o := _rail_chain(span, sgn, outer, true)
-		var bot_i := _rail_chain(span, sgn, inner, false)
-		var bot_o := _rail_chain(span, sgn, outer, false)
-		# Верх режется на три полосы: две ржавые кромки и середина, которую
-		# забирает накат. Полосы стыкуются, а не накладываются, поэтому за
-		# z-буфер здесь драться нечему.
-		if sgn > 0.0:
-			_quad_strip(verts, norms, idx, top_i, top_hi)
-			_quad_strip(verts, norms, idx, top_ho, top_o)
-			_quad_strip(verts, norms, idx, top_o, bot_o)
-			_quad_strip(verts, norms, idx, bot_i, top_i)
-		else:
-			_quad_strip(verts, norms, idx, top_hi, top_i)
-			_quad_strip(verts, norms, idx, top_o, top_ho)
-			_quad_strip(verts, norms, idx, bot_o, top_o)
-			_quad_strip(verts, norms, idx, top_i, bot_i)
+		# КУСКАМИ, А НЕ ЦЕЛИКОМ: у прохода стрелки нитка есть не везде — её место
+		# занимают остряк с рамным рельсом и сердечник крестовины. Где именно,
+		# сказал сервер (turnout_rail_gaps); у обычного пути кусок один — вся ось.
+		for run in span.rail_runs(sgn):
+			var top_i := _rail_chain(span, run, sgn, inner, true)
+			var top_hi := _rail_chain(span, run, sgn, head_i, true)
+			var top_ho := _rail_chain(span, run, sgn, head_o, true)
+			var top_o := _rail_chain(span, run, sgn, outer, true)
+			var bot_i := _rail_chain(span, run, sgn, inner, false)
+			var bot_o := _rail_chain(span, run, sgn, outer, false)
+			# Верх режется на три полосы: две ржавые кромки и середина, которую
+			# забирает накат. Полосы стыкуются, а не накладываются, поэтому за
+			# z-буфер здесь драться нечему.
+			if sgn > 0.0:
+				_quad_strip(verts, norms, idx, top_i, top_hi)
+				_quad_strip(verts, norms, idx, top_ho, top_o)
+				_quad_strip(verts, norms, idx, top_o, bot_o)
+				_quad_strip(verts, norms, idx, bot_i, top_i)
+			else:
+				_quad_strip(verts, norms, idx, top_hi, top_i)
+				_quad_strip(verts, norms, idx, top_o, top_ho)
+				_quad_strip(verts, norms, idx, bot_o, top_o)
+				_quad_strip(verts, norms, idx, top_i, bot_i)
 	if idx.is_empty():
 		return null
 	return _mesh(verts, norms, idx)
@@ -230,38 +244,623 @@ static func railhead_mesh(span: TrackBuild.Span) -> ArrayMesh:
 	if not span.has_rail_body() or span.axis.size() < 2:
 		return null
 	var inner := span.gauge_m * 0.5
-	var band := span.rail_head_width_m * RAILHEAD_WIDTH
-	var head_i := inner + (span.rail_head_width_m - band) * 0.5
-	var head_o := head_i + band
+	# Вырез под накат ВМЕСТЕ С ФАСКАМИ: их рисуют соседние меши, и тело обязано
+	# уступить им всю полосу разом.
+	var bands := head_bands(span.rail_head_width_m)
+	var head_i := inner + bands.x
+	var head_o := inner + bands.w
 	var verts := PackedVector3Array()
 	var norms := PackedVector3Array()
 	var idx := PackedInt32Array()
 	var sides: Array[float] = [1.0, -1.0]
 	for sgn in sides:
-		var a := _rail_chain(span, sgn, head_i, true)
-		var b := _rail_chain(span, sgn, head_o, true)
-		if sgn > 0.0:
-			_quad_strip(verts, norms, idx, a, b)
-		else:
-			_quad_strip(verts, norms, idx, b, a)
+		# Кусками — по тому же правилу, что и тело рельса: наката нет там, где нет
+		# самой нитки, иначе блестящая полоса шла бы поверх сердечника.
+		for run in span.rail_runs(sgn):
+			var a := _rail_chain(span, run, sgn, head_i, true)
+			var b := _rail_chain(span, run, sgn, head_o, true)
+			if sgn > 0.0:
+				_quad_strip(verts, norms, idx, a, b)
+			else:
+				_quad_strip(verts, norms, idx, b, a)
 	if idx.is_empty():
 		return null
 	return _mesh(verts, norms, idx)
+
+
+## rail_fillet_mesh — ФАСКИ ГОЛОВКИ: две полоски по краям наката на каждой нитке.
+##
+## Отдельным мешем по той же причине, по которой отделён накат: у поверхности
+## своя физика, а материал у меша один. Полосы стыкуются с накатом и с телом, а
+## не накладываются, — за z-буфер драться нечему.
+static func rail_fillet_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if not span.has_rail_body() or span.axis.size() < 2:
+		return null
+	var inner := span.gauge_m * 0.5
+	var bands := head_bands(span.rail_head_width_m)
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var sides: Array[float] = [1.0, -1.0]
+	for sgn in sides:
+		for run in span.rail_runs(sgn):
+			for pair in [Vector2(bands.x, bands.y), Vector2(bands.z, bands.w)]:
+				var a := _rail_chain(span, run, sgn, inner + pair.x, true)
+				var b := _rail_chain(span, run, sgn, inner + pair.y, true)
+				if sgn > 0.0:
+					_quad_strip(verts, norms, idx, a, b)
+				else:
+					_quad_strip(verts, norms, idx, b, a)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## rail_profile_mesh — рельсы ЭКСТРУЗИЕЙ ПРИСЛАННОГО СЕЧЕНИЯ.
+##
+## # Как сечение садится на путь
+##
+## Сечение приходит в своих осях: x поперёк пути ОТ ВНУТРЕННЕЙ РАБОЧЕЙ ГРАНИ
+## наружу, y от ПОВЕРХНОСТИ КАТАНИЯ вниз. Оба датума контрактные и уже здесь: у
+## правой нитки рабочая грань лежит на +gauge/2 по левой нормали, у левой — на
+## −gauge/2, а отметка оси `p.z` и ЕСТЬ поверхность катания (датум z, редакция 6
+## §2). Перевод поэтому в одну строку на точку и без единой поправки.
+##
+## НАРУЖУ У КАЖДОЙ НИТКИ СВОЁ, и это то же зеркало, каким уже разведены нитки:
+## сечение одно на обе, второго многоугольника нет, потому что два описания
+## одного рельса разошлись бы колеёй.
+##
+## # Чего здесь нет
+##
+## Торцов. Рельс уходит за границу участка и стыкуется со следующим; закрыв его
+## крышкой, мы получили бы стык, видимый изнутри на каждом шве, — а нижняя грань
+## не рисовалась и у прямоугольника по той же причине, по которой её не видно.
+##
+## Боковая поверхность строится ПО ОБХОДУ сечения, включая замыкающее ребро
+## «последняя точка → первая»: сечение замкнуто по построению контракта, и
+## пропустить это ребро значило бы оставить рельс со щелью во всю длину пути.
+static func rail_profile_mesh(span: TrackBuild.Span) -> ArrayMesh:
+	if not span.has_rail_section() or span.axis.size() < 2:
+		return null
+	var sec := span.rail_section
+	var m := sec.size()
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var sides: Array[float] = [1.0, -1.0]
+	for sgn in sides:
+		# Кусками — разбор у rail_body_mesh: нитки нет там, где её место занято
+		# остряком с рамным рельсом либо сердечником.
+		for run in span.rail_runs(sgn):
+			_profile_run(span, run, sgn, sec, verts, norms, idx)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## _profile_run — экструзия сечения по одному непрерывному куску нитки.
+##
+## Отдельной функцией, а не третьим вложенным циклом: внутри и так два — по
+## вершинам сечения и по его рёбрам, — и третий сделал бы правило «где режется
+## верх головки» неразличимым в лесенке отступов.
+static func _profile_run(span: TrackBuild.Span, run: Array, sgn: float,
+		sec: PackedVector2Array, verts: PackedVector3Array,
+		norms: PackedVector3Array, idx: PackedInt32Array) -> void:
+	var m := sec.size()
+	# Цепочка на каждую вершину сечения считается ОДИН РАЗ и переиспользуется
+	# соседним ребром: посчитай её дважды, и полосы разойдутся на округлении.
+	var chains: Array[PackedVector3Array] = []
+	for i in m:
+		chains.append(_section_chain(span, run, sgn, sec[i]))
+	var bands := head_bands(span.rail_head_width_m)
+	for i in m:
+		var j := (i + 1) % m
+		var a := sec[i]
+		var b := sec[j]
+		# ВЕРХ ГОЛОВКИ РЕЖЕТСЯ, а накат кладётся в вырез. Не украшение: `z`
+		# элемента объявлен ПОВЕРХНОСТЬЮ КАТАНИЯ (редакция 6 §2), поэтому
+		# накат лежит В уровне головки, а не накладкой поверх неё (разбор — у
+		# RAILHEAD_WIDTH). Затяни здесь верх сплошной полосой — и накат стал
+		# бы дракой за z-буфер во всю длину пути.
+		if absf(a.y) <= TOP_EPS and absf(b.y) <= TOP_EPS:
+			for seg in _top_gaps(a.x, b.x, bands.x, bands.w):
+				var c0 := _section_chain(span, run, sgn, Vector2(seg.x, 0.0))
+				var c1 := _section_chain(span, run, sgn, Vector2(seg.y, 0.0))
+				if sgn > 0.0:
+					_quad_strip(verts, norms, idx, c1, c0)
+				else:
+					_quad_strip(verts, norms, idx, c0, c1)
+			continue
+		# ПРАВАЯ НИТКА ОБХОДИТСЯ В ОБРАТНУЮ СТОРОНУ, и это не подгонка знака.
+		#
+		# Сечение объявлено против часовой стрелки в СВОИХ осях (x наружу, y
+		# вверх). У правой нитки перевод в оси движка ЗЕРКАЛЬНЫЙ: x сечения
+		# растёт в сторону −Z, y — в сторону +Y, и обход, оставленный тем же,
+		# становится в мире часовым. Ровно на этом рельс и вышел изнанкой в
+		# первой редакции — все 104 треугольника нормалями внутрь металла.
+		#
+		# У левой нитки зеркала нет (x сечения растёт в сторону +Z), и обход
+		# сохраняется. Тем же зеркалом уже разведены и нитки прямоугольника
+		# выше — там оно записано порядком аргументов, здесь знаком.
+		if sgn > 0.0:
+			_quad_strip(verts, norms, idx, chains[j], chains[i])
+		else:
+			_quad_strip(verts, norms, idx, chains[i], chains[j])
+
+
+## frog_rail_mesh — усовик или контррельс: то же сечение вдоль присланной линии.
+##
+## # Почему это НЕ ветка rail_profile_mesh
+##
+## У той две нитки, симметричные относительно оси, и вынос у неё постоянный.
+## Здесь ОДНА нитка, вынос у неё СВОЙ В КАЖДОЙ ТОЧКЕ (отгиб к раструбу), а
+## сторона, в которую растёт сечение, прислана сервером. Общего между ними —
+## одна строка про сечение; свести их значило бы завести функцию с тремя флагами.
+##
+## # Накат: у усовика он ЕСТЬ, у контррельса нет (2026-08-16)
+##
+## Сперва наката не было ни у той, ни у другой нитки, и это было объявлено
+## упрощением. Цена вскрылась в кадре: крестовина вышла КОРИЧНЕВЫМ ПЯТНОМ среди
+## блестящих ниток — «почему она коричневая?». По усовику колесо катится, и след
+## на нём такой же, как на любой ходовой нитке; по контррельсу не катится вовсе.
+##
+## Поэтому верхнее ребро сечения режется под накат ровно так же, как у рельса
+## участка, — но только у тех ниток, которые ходовые. Кто ходовая, говорит вид,
+## присланный сервером.
+##
+## Торцов нет по той же причине, что у рельса участка: нитка кончается стыком со
+## следующей, а крышка была бы видна изнутри.
+static func frog_rail_mesh(rail: TrackBuild.FrogRail) -> ArrayMesh:
+	if not rail.ready() or rail.rail_section.size() < 3:
+		return null
+	var sec := rail.rail_section
+	var m := sec.size()
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var chains: Array[PackedVector3Array] = []
+	for i in m:
+		chains.append(_frog_chain(rail, sec[i]))
+	var bands := head_bands(rail.rail_head_width_m)
+	var railed := _rides_on(rail.kind)
+	for i in m:
+		var j := (i + 1) % m
+		var a := sec[i]
+		var b := sec[j]
+		# ВЕРХ ГОЛОВКИ РЕЖЕТСЯ ПОД НАКАТ — у ходовой нитки, разбор в шапке.
+		if railed and absf(a.y) <= TOP_EPS and absf(b.y) <= TOP_EPS:
+			for seg in _top_gaps(a.x, b.x, bands.x, bands.w):
+				var c0 := _frog_chain(rail, Vector2(seg.x, 0.0))
+				var c1 := _frog_chain(rail, Vector2(seg.y, 0.0))
+				if rail.grow > 0.0:
+					_quad_strip(verts, norms, idx, c1, c0)
+				else:
+					_quad_strip(verts, norms, idx, c0, c1)
+			continue
+		# Зеркало то же, что у правой нитки участка: сечение объявлено против
+		# часовой в СВОИХ осях, и когда оно растёт по левой нормали (grow > 0),
+		# перевод в оси движка переворачивает обход.
+		if rail.grow > 0.0:
+			_quad_strip(verts, norms, idx, chains[j], chains[i])
+		else:
+			_quad_strip(verts, norms, idx, chains[i], chains[j])
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## frog_railhead_mesh — НАКАТ короткой нитки: та же полоса, что у рельса участка.
+##
+## Пусто у нитки, по которой колесо не катится: у контррельса следа нет и быть не
+## может, а нарисованный он соврал бы про то, где идёт колесо.
+static func frog_railhead_mesh(rail: TrackBuild.FrogRail) -> ArrayMesh:
+	if not rail.ready() or not _rides_on(rail.kind):
+		return null
+	return _ride_strip(rail, 0.0)
+
+
+## frog_rail_fillet_mesh — фаски короткой нитки: то же, что у рельса участка.
+static func frog_rail_fillet_mesh(rail: TrackBuild.FrogRail) -> ArrayMesh:
+	if not rail.ready() or not _rides_on(rail.kind):
+		return null
+	return _ride_strip(rail, rail.rail_head_width_m * RAILHEAD_FILLET)
+
+
+## _ride_strip — полоса вдоль головки: сам накат (fillet = 0) либо две фаски по
+## его краям.
+##
+## ШИРИНА НАКАТА СВОЯ В КАЖДОЙ ТОЧКЕ, когда её прислали: у остряка и сердечника
+## колесо принимает нагрузку постепенно, и полоса растёт с нуля. Где ширина ноль,
+## полоса рвётся — там наката нет вовсе.
+static func _ride_strip(rail: TrackBuild.FrogRail, fillet: float) -> ArrayMesh:
+	var head := rail.rail_head_width_m
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var a := PackedVector3Array()
+	var b := PackedVector3Array()
+	var c := PackedVector3Array()
+	var d := PackedVector3Array()
+	for k in rail.axis.size():
+		var ride: float = rail.ride_at(k)
+		if ride < 0.0:
+			ride = head * RAILHEAD_WIDTH
+		# Наката нет там, где нитка опущена под головку соседней: колесо там идёт
+		# по ней, а не по этой. Слово владельца: «как у этих железок внутри может
+		# быть накат?»
+		if ride <= 1e-4:
+			_one_strip(verts, norms, idx, a, b, rail.grow)
+			_one_strip(verts, norms, idx, c, d, rail.grow)
+			a = PackedVector3Array(); b = PackedVector3Array()
+			c = PackedVector3Array(); d = PackedVector3Array()
+			continue
+		var inner := (head - ride) * 0.5
+		var outer := inner + ride
+		if fillet <= 0.0:
+			a.append(_frog_point(rail, k, inner))
+			b.append(_frog_point(rail, k, outer))
+		else:
+			a.append(_frog_point(rail, k, maxf(inner - fillet, 0.0)))
+			b.append(_frog_point(rail, k, inner))
+			c.append(_frog_point(rail, k, outer))
+			d.append(_frog_point(rail, k, minf(outer + fillet, head)))
+	_one_strip(verts, norms, idx, a, b, rail.grow)
+	_one_strip(verts, norms, idx, c, d, rail.grow)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## _frog_point — точка на верху нитки крестовины, на выносе x от рабочей грани.
+static func _frog_point(rail: TrackBuild.FrogRail, k: int, x: float) -> Vector3:
+	var p: TrackGeom.AxisPoint = rail.axis[k]
+	var nl := p.left()
+	var off: float = rail.faces[k] + rail.grow * x * rail.width_at(k)
+	return TerrainMesh.to_godot(p.x + nl.x * off, p.y + nl.y * off, p.z - rail.sink_at(k))
+
+
+## _one_strip — полоса с обходом по стороне роста. Зеркало то же, что у нитки.
+static func _one_strip(verts: PackedVector3Array, norms: PackedVector3Array,
+		idx: PackedInt32Array, a: PackedVector3Array, b: PackedVector3Array,
+		grow: float) -> void:
+	if a.size() < 2:
+		return
+	if grow > 0.0:
+		_quad_strip(verts, norms, idx, a, b)
+	else:
+		_quad_strip(verts, norms, idx, b, a)
+
+
+## _rides_on — катится ли колесо по этой нитке.
+##
+## Усовик — ходовая: он и есть нитка прохода, отведённая перед сердечником.
+## Остряк — тоже: по нему колесо идёт на свой путь. Контррельс — нет: он держит
+## гребень, а колесо по нему не катится.
+static func _rides_on(kind: String) -> bool:
+	return kind == TrackBuild.FROG_WING or kind == TrackBuild.BLADE
+
+
+## frog_casting_mesh — СЕРДЕЧНИК: сплошная отливка между двумя гранями.
+##
+## # Почему это перемычка, а не рельс
+##
+## Сердечник — то место, где обе нитки перестают быть нитками: они входят в
+## отливку и выходят её крыльями. До 2026-08-16 их там не было вовсе — нитки
+## просто ПЕРЕСЕКАЛИСЬ, месили друг друга гранями и давали в кадре зазубрину.
+## Владелец сказал прямо: «крестовина неправильно нарисована».
+##
+## Тело строится МЕЖДУ двумя присланными гранями: одна идёт по нитке прямого
+## прохода, другая по нитке бокового, и сходятся они в точке крестовины. То, что
+## между ними, и есть отливка — от поверхности катания вниз на высоту рельса.
+##
+## Форма приближённая и это объявлено: у настоящего сердечника есть горло, хвост
+## и переменная ширина желоба, а здесь — прямая перемычка постоянной высоты.
+## Зато она СПЛОШНАЯ, и пересечения ниток в кадре больше нет.
+static func frog_casting_mesh(a: TrackBuild.FrogRail, b: TrackBuild.FrogRail) -> ArrayMesh:
+	var lv := _casting_levels(a, b)
+	if lv.is_empty():
+		return null
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var left: Array = lv["left"]
+	var right: Array = lv["right"]
+	# ВЕРХ — только некатаная середина: две полосы наката и две фаски вдоль
+	# рабочих граней рисуют соседние меши (frog_casting_head_mesh и …_fillet_mesh).
+	_quad_strip(verts, norms, idx, lv["mid_a"], lv["mid_b"])
+	# БОКА ПО УРОВНЯМ: площадка → плечо → шейка → подошва. Скосы между ними и есть
+	# то, чем отливка отличается от вертикальной стенки.
+	for i in range(left.size() - 1):
+		_quad_strip(verts, norms, idx, left[i], left[i + 1])
+		_quad_strip(verts, norms, idx, right[i + 1], right[i])
+	# Дно рисуется: сердечник виден снизу — между брусьями просвет.
+	_quad_strip(verts, norms, idx, left[left.size() - 1], right[right.size() - 1])
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## _casting_levels — линии сердечника на четырёх уровнях по высоте.
+##
+## # Почему у отливки профиль, а не стенка
+##
+## Грани сердечника идут по ниткам и у острия сходятся в миллиметры. Тело,
+## построенное между ними как есть, давало ВЕРТИКАЛЬНЫЙ НОЖ: стенку в сантиметр
+## толщиной и восемнадцать высотой посреди пути.
+##
+## У настоящей отливки в миллиметры сходится только ВЕРХНЯЯ ПЛОЩАДКА, а под ней
+## лежит рельсовое тело. Модель CA-1/9-R65-v1 (§Б) даёт его четырьмя уровнями,
+## считая ширину площадки w = |грань − грань|:
+##
+##   верх (глубина 0)         w — как разошлись грани, без всякого ограничения
+##   плечо (45 мм)            max(75, w)
+##   шейка (135 мм)           max(30, w − 45)
+##   подошва (180 мм)         max(150, w + 75)
+##
+## Скос 11 → 75 мм на глубине головной части и есть то, что убирает нож.
+static func _casting_levels(a: TrackBuild.FrogRail, b: TrackBuild.FrogRail) -> Dictionary:
+	if not a.ready() or not b.ready():
+		return {}
+	var top_a := _frog_chain(a, Vector2.ZERO)
+	var top_b := _frog_chain(b, Vector2.ZERO)
+	var n := mini(top_a.size(), top_b.size())
+	if n < 2:
+		return {}
+	if (top_a[1] - top_a[0]).cross(top_b[0] - top_a[0]).y < 0.0:
+		var swap := top_a
+		top_a = top_b
+		top_b = swap
+	top_a.resize(n)
+	top_b.resize(n)
+	var head := a.rail_head_width_m
+	var full := a.rail_height_m
+	# Глубины уровней — доли высоты рельса: головная часть, шейка, подошва.
+	var depth := [0.0, full * CASTING_SHOULDER, full * CASTING_NECK, full]
+	var left: Array = []
+	var right: Array = []
+	for _i in depth.size():
+		left.append(PackedVector3Array())
+		right.append(PackedVector3Array())
+	var mid_a := PackedVector3Array()
+	var mid_b := PackedVector3Array()
+	for k in n:
+		var wide := top_a[k].distance_to(top_b[k])
+		var dir := (top_b[k] - top_a[k]).normalized() if wide > 1e-6 else _across(top_a, k)
+		var mid := (top_a[k] + top_b[k]) * 0.5
+		# ПОНИЖЕНИЕ ОСТРИЯ: у настоящей отливки верх выходит на поверхность катания
+		# не сразу — колесо передаёт нагрузку постепенно. Считает его тот, кто знает
+		# расстояние от острия, — сама нитка (FrogRail.sink_at).
+		var sink := Vector3(0.0, a.sink_at(k), 0.0)
+		# ПЛОЩАДКА НЕ БЫВАЕТ УЖЕ ЧЕТЫРЁХ МИЛЛИМЕТРОВ: у самого острия грани сходятся
+		# в ноль, и полосы вырождаются в линию — треугольники нулевой площади, у
+		# которых нет ни нормали, ни стороны. Проверка оболочки показала это
+		# вывернутыми рёбрами, как только шаг разбиения стал мелким.
+		var top_w := maxf(wide, CASTING_TIP_M)
+		var widths := [
+			top_w,
+			maxf(head, top_w),
+			maxf(head * CASTING_NECK_SHARE, top_w - head * CASTING_SHOULDER_STEP),
+			maxf(head * 2.0, top_w + head),
+		]
+		for i in depth.size():
+			var half := float(widths[i]) * 0.5
+			var down := Vector3(0.0, float(depth[i]), 0.0)
+			# ЧЕРЕЗ ЛОКАЛЬНУЮ И ОБРАТНО: Packed*Array в GDScript — значение, и
+			# append по месту в чужом массиве уходит в копию. Первая редакция этой
+			# функции так и потеряла все боковины разом: проверка оболочки сказала
+			# «граней вбок 0».
+			var lrow: PackedVector3Array = left[i]
+			var rrow: PackedVector3Array = right[i]
+			lrow.append(mid - dir * half - down - sink)
+			rrow.append(mid + dir * half - down - sink)
+			left[i] = lrow
+			right[i] = rrow
+		# Некатаная середина верха: то, что осталось между полосами наката с их
+		# фасками. Отступ берётся ИЗ ТОЙ ЖЕ ширины наката, по которой полосы и
+		# строятся, — иначе тело и накат разойдутся, и вдоль отливки откроется щель.
+		var ride: float = a.ride_at(k)
+		if ride < 0.0:
+			ride = head * RAILHEAD_WIDTH
+		var edge := ride + head * RAILHEAD_FILLET
+		if ride <= 1e-4 or wide < 2.0 * edge:
+			mid_a.append(top_a[k] - sink)
+			mid_b.append(top_b[k] - sink)
+		else:
+			mid_a.append(top_a[k] + dir * edge - sink)
+			mid_b.append(top_b[k] - dir * edge - sink)
+	return {"left": left, "right": right, "mid_a": mid_a, "mid_b": mid_b}
+
+
+## frog_casting_head_mesh — ВЕРХНЯЯ ПЛОЩАДКА СЕРДЕЧНИКА: по ней идёт колесо.
+##
+## Отдельным мешем по той же причине, по которой накат рельса отделён от его
+## тела: у полированной стали другая физика поверхности, и одним материалом это
+## не выражается. Заведено 2026-08-16 по вопросу владельца «почему она коричневая,
+## эта крестовина?» — вся зона крестовины была ржавой, включая то, что колесо
+## полирует каждым проходом.
+static func frog_casting_head_mesh(a: TrackBuild.FrogRail, b: TrackBuild.FrogRail) -> ArrayMesh:
+	return _casting_bands(a, b, true)
+
+
+## frog_casting_fillet_mesh — ФАСКИ СЕРДЕЧНИКА: полоски между накатом и серединой.
+##
+## Тот же переход, что на головке рельса: «не может же быть ржавчина и тут же уже
+## накат». Считается той же функцией, что накат, — только другими долями.
+static func frog_casting_fillet_mesh(a: TrackBuild.FrogRail, b: TrackBuild.FrogRail) -> ArrayMesh:
+	return _casting_bands(a, b, false)
+
+
+## _casting_bands — пара продольных полос на площадке сердечника, по одной у
+## каждой рабочей грани, между долями [from, to] ширины головки.
+##
+## ДВЕ ПОЛОСЫ ПО КРАЯМ, А НЕ ВСЯ ПЛОЩАДКА: колесо идёт по сердечнику вдоль его
+## рабочих граней — по одной с каждой стороны, — а середина хвоста не катана
+## ничем, там колея уже разошлась. Сплошная блестящая площадка читалась «клином
+## полированной стали», чего на переводе не бывает.
+##
+## И НЕ С САМОГО ОСТРИЯ: пока отливка уже двух полос, колесо ещё несёт усовик, и
+## блестеть тут нечему. Слово владельца: «как у этих железок внутри может быть
+## накат?»
+static func _casting_bands(a: TrackBuild.FrogRail, b: TrackBuild.FrogRail,
+		from_ride: bool) -> ArrayMesh:
+	var lv := _casting_levels(a, b)
+	if lv.is_empty():
+		return null
+	var top_a: PackedVector3Array = (lv["left"] as Array)[0]
+	var top_b: PackedVector3Array = (lv["right"] as Array)[0]
+	var fillet := a.rail_head_width_m * RAILHEAD_FILLET
+	var verts := PackedVector3Array()
+	var norms := PackedVector3Array()
+	var idx := PackedInt32Array()
+	var la := PackedVector3Array()
+	var lb := PackedVector3Array()
+	var ra := PackedVector3Array()
+	var rb := PackedVector3Array()
+	for k in mini(top_a.size(), top_b.size()):
+		var ride: float = a.ride_at(k)
+		if ride < 0.0:
+			ride = a.rail_head_width_m * RAILHEAD_WIDTH
+		var lo := 0.0 if from_ride else ride
+		var hi := ride if from_ride else ride + fillet
+		var wide := top_a[k].distance_to(top_b[k])
+		# Полос нет, пока площадка у́же двух полос с фасками: там колесо ещё несёт
+		# усовик, и накату взяться неоткуда.
+		if ride <= 1e-4 or wide < 2.0 * (ride + fillet):
+			_strip_pair(verts, norms, idx, la, lb, ra, rb)
+			la = PackedVector3Array(); lb = PackedVector3Array()
+			ra = PackedVector3Array(); rb = PackedVector3Array()
+			continue
+		var dir := (top_b[k] - top_a[k]).normalized()
+		la.append(top_a[k] + dir * lo)
+		lb.append(top_a[k] + dir * hi)
+		ra.append(top_b[k] - dir * hi)
+		rb.append(top_b[k] - dir * lo)
+	_strip_pair(verts, norms, idx, la, lb, ra, rb)
+	if idx.is_empty():
+		return null
+	return _mesh(verts, norms, idx)
+
+
+## _strip_pair — две полосы одним куском. Правая зеркальна левой относительно оси
+## сердечника, но обход у неё тот же: зеркало уже учтено порядком концов.
+static func _strip_pair(verts: PackedVector3Array, norms: PackedVector3Array,
+		idx: PackedInt32Array, la: PackedVector3Array, lb: PackedVector3Array,
+		ra: PackedVector3Array, rb: PackedVector3Array) -> void:
+	if la.size() < 2:
+		return
+	_quad_strip(verts, norms, idx, la, lb)
+	_quad_strip(verts, norms, idx, ra, rb)
+
+
+## _across — поперечное направление там, где грани сошлись в точку и разности
+## между ними уже нет. Берётся из хода самой линии: ось пути тут прямая, и
+## перпендикуляр к ней в горизонтали — единственное осмысленное «поперёк».
+static func _across(line: PackedVector3Array, k: int) -> Vector3:
+	var j: int = k + 1 if k + 1 < line.size() else k - 1
+	var along := (line[j] - line[k])
+	if k + 1 >= line.size():
+		along = -along
+	along.y = 0.0
+	if along.length() < 1e-9:
+		return Vector3.RIGHT
+	return along.normalized().cross(Vector3.UP)
+
+
+
+## _frog_chain — направляющая по одной вершине сечения вдоль нитки крестовины.
+##
+## Вынос рабочей грани у каждой точки СВОЙ и уже посчитан при разборе
+## (TrackBuild.frog_rails): показ его не выводит, он его откладывает.
+static func _frog_chain(rail: TrackBuild.FrogRail, pt: Vector2) -> PackedVector3Array:
+	var n := rail.axis.size()
+	var out := PackedVector3Array()
+	out.resize(n)
+	for k in n:
+		var p: TrackGeom.AxisPoint = rail.axis[k]
+		var nl := p.left()
+		# ОСТРОЖКА: сечение сужается к острию и опускается под головку рамного
+		# рельса. У ниток без острожки доля равна единице, понижение нулю, и
+		# выражение сходится к прежнему.
+		var off: float = rail.faces[k] + rail.grow * pt.x * rail.width_at(k)
+		out[k] = TerrainMesh.to_godot(
+			p.x + nl.x * off, p.y + nl.y * off, p.z + pt.y - rail.sink_at(k))
+	return out
+
+
+## TOP_EPS — с какого отступа точка сечения считается лежащей на поверхности
+## катания. Десятая доля миллиметра: мельче любого размера рельса и крупнее шума
+## разбора чисел из JSON.
+const TOP_EPS := 1e-4
+
+## _top_gaps — что осталось от верхнего ребра сечения после выреза под накат.
+##
+## Возвращает отрезки по x В ТОМ ЖЕ НАПРАВЛЕНИИ, в каком шло ребро: направление
+## обхода задаёт сторону нормали, и вернуть отрезки «как удобно» значило бы
+## вывернуть кусок головки наизнанку.
+##
+## Ребро, не задевшее полосу наката, возвращается целиком — сечение вправе
+## описывать верх головки не одним ребром, а несколькими.
+static func _top_gaps(xa: float, xb: float, lo: float, hi: float) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var left := minf(xa, xb)
+	var right := maxf(xa, xb)
+	var cut_lo := maxf(lo, left)
+	var cut_hi := minf(hi, right)
+	if cut_hi <= cut_lo:
+		out.append(Vector2(xa, xb))
+		return out
+	var parts: Array[Vector2] = []
+	if cut_lo > left:
+		parts.append(Vector2(left, cut_lo))
+	if right > cut_hi:
+		parts.append(Vector2(cut_hi, right))
+	if xa <= xb:
+		return parts
+	for k in range(parts.size() - 1, -1, -1):
+		out.append(Vector2(parts[k].y, parts[k].x))
+	return out
+
+
+## _section_chain — направляющая по одной вершине сечения вдоль всего участка.
+##
+## Вершина сечения задана в осях (x наружу от рабочей грани, y вниз от
+## поверхности катания); здесь она превращается в мировую точку у каждой точки
+## оси. Отдельной функцией по той же причине, что и _rail_chain: соседние полосы
+## обязаны считать одну и ту же точку одним и тем же выражением.
+static func _section_chain(span: TrackBuild.Span, axis: Array, sgn: float,
+		pt: Vector2) -> PackedVector3Array:
+	# НИТКА НЕПОДВИЖНА ВСЕГДА, в том числе на переводе: рамными рельсами стали
+	# обе нитки прямого прохода, а остряк с 2026-08-16 — своя деталь со своим
+	# телом (TrackBuild.Blade). До того показ отводил саму нитку, и это означало,
+	# что рамного рельса не существует: его роль играл прижатый остряк, уезжавший
+	# вместе с переводом.
+	var n := axis.size()
+	var offset := (span.gauge_m * 0.5 + pt.x) * sgn
+	var out := PackedVector3Array()
+	out.resize(n)
+	for k in n:
+		var p: TrackGeom.AxisPoint = axis[k]
+		var nl := p.left()
+		out[k] = TerrainMesh.to_godot(p.x + nl.x * offset, p.y + nl.y * offset, p.z + pt.y)
+	return out
 
 
 ## _rail_chain — направляющая нитки на боковом выносе `offset` от оси, поверху
 ## (`at_top`) или по подошве. Вынесена затем, что тело и накат обязаны считать
 ## одни и те же точки: разойдись они на округлении, и между ними откроется щель
 ## во всю длину пути.
-static func _rail_chain(span: TrackBuild.Span, sgn: float, offset: float, at_top: bool) -> PackedVector3Array:
-	var n := span.axis.size()
+static func _rail_chain(span: TrackBuild.Span, axis: Array, sgn: float,
+		offset: float, at_top: bool) -> PackedVector3Array:
+	# Нитка неподвижна — разбор тот же, что у _section_chain.
+	var n := axis.size()
+	var off := offset * sgn
 	var out := PackedVector3Array()
 	out.resize(n)
 	for k in n:
-		var p: TrackGeom.AxisPoint = span.axis[k]
+		var p: TrackGeom.AxisPoint = axis[k]
 		var nl := p.left()
 		var z := p.z if at_top else p.z - span.rail_height_m
-		out[k] = TerrainMesh.to_godot(p.x + nl.x * offset * sgn, p.y + nl.y * offset * sgn, z)
+		out[k] = TerrainMesh.to_godot(p.x + nl.x * off, p.y + nl.y * off, z)
 	return out
 
 
@@ -380,39 +979,6 @@ static func line_mesh(axis: Array[TrackGeom.AxisPoint]) -> ImmediateMesh:
 		mesh.surface_add_vertex(TerrainMesh.to_godot(p.x, p.y, p.z))
 	mesh.surface_end()
 	return mesh
-
-
-## frog_mesh — крестовины галочками.
-##
-## Точка и обе касательные присланы; выдумана только ДЛИНА КРЫЛА и его ширина —
-## и это прямо разрешено: «FROG_WING — длина галочки поверх стрелки — штрих для
-## читаемости, ничем не измеряется на месте» (render-contract §2, таблица
-## владения). Числа выбраны так, чтобы галочка читалась в виде на всю станцию;
-## второй клиент вправе взять другие, и мир от этого не изменится.
-static func frog_mesh(list: Array[TrackBuild.Frog], wing_m: float, half_w_m: float) -> ArrayMesh:
-	if list.is_empty():
-		return null
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var idx := PackedInt32Array()
-	for f_raw in list:
-		var f: TrackBuild.Frog = f_raw
-		for t in f.tangents:
-			var d := t.normalized()
-			if d == Vector2.ZERO:
-				continue
-			var n := Vector2(-d.y, d.x) * half_w_m
-			var b := verts.size()
-			verts.append(TerrainMesh.to_godot(f.point.x + n.x, f.point.y + n.y, f.point.z))
-			verts.append(TerrainMesh.to_godot(f.point.x - n.x, f.point.y - n.y, f.point.z))
-			verts.append(TerrainMesh.to_godot(f.point.x + d.x * wing_m - n.x, f.point.y + d.y * wing_m - n.y, f.point.z))
-			verts.append(TerrainMesh.to_godot(f.point.x + d.x * wing_m + n.x, f.point.y + d.y * wing_m + n.y, f.point.z))
-			for c in 4:
-				norms.append(Vector3.UP)
-			idx.append_array([b, b + 1, b + 2, b, b + 2, b + 3])
-	if idx.is_empty():
-		return null
-	return _mesh(verts, norms, idx)
 
 
 ## _quad_strip — полоса между двумя направляющими, дописанная в общие буферы.
@@ -619,8 +1185,14 @@ const SLEEPER_RUN := 2.2       # м — период рисунка ВДОЛЬ �
 ## здесь стоял ещё худший случай: ОДИН плоский solid_material(0.42, 0.40, 0.40) —
 ## albedo и больше ничего. Комментарий рядом при этом описывал два материала:
 ## он пережил код, который объяснял.
-const C_RAIL := Color(0.24, 0.19, 0.16)      # бок и подошва: ржавчина
+## Ржавчина ПРИГЛУШЕНА 2026-08-16: было (0.24, 0.19, 0.16), и владелец сказал
+## «сильно коричневая». Бок рельса под открытым небом — это не рыжая окалина, а
+## тёмный серо-бурый налёт: рыжина держится недели, дальше поверхность темнеет и
+## сереет. Отношение красного к синему было 1.50, стало 1.16.
+const C_RAIL := Color(0.215, 0.195, 0.185)   # бок и подошва: ржавчина
 const C_RAILHEAD := Color(0.62, 0.63, 0.66)  # накат: полированная колесом сталь
+## Фаска — между ними и ближе к накату: она стёрта колесом, но не отполирована.
+const C_RAILFILLET := Color(0.40, 0.39, 0.38)
 
 ## ШИРИНА НАКАТА — ДОЛЯ ГОЛОВКИ, А НЕ СВОИ МЕТРЫ, и это решение надо назвать.
 ##
@@ -631,7 +1203,36 @@ const C_RAILHEAD := Color(0.62, 0.63, 0.66)  # накат: полированн�
 ## head_width и появился в контракте. Поэтому от спайка берётся не число, а его
 ## ОТНОШЕНИЕ: 0.062 / 0.071 = 0.87 ширины головки. Пришлёт сервер другой рельс —
 ## накат поедет вместе с ним.
-const RAILHEAD_WIDTH := 0.87   # доля ширины головки, которую занимает накат
+const RAILHEAD_WIDTH := 0.72   # доля ширины головки, которую занимает чистый накат
+
+## ФАСКА — ПЕРЕХОД ОТ НАКАТА К РЖАВЧИНЕ, доля ширины головки на каждую сторону.
+##
+## Заведена 2026-08-16 словом владельца: «переход какой-то должен быть, не может
+## же быть ржавчина и тут же уже накат». И он прав по существу: у настоящего
+## рельса край головки скруглён, колесо задевает его вскользь, и полоса там не
+## зеркальная и не ржавая — она серая, потёртая.
+##
+## Выражено ТРЕТЬИМ МАТЕРИАЛОМ, а не градиентом: у нас нет ни развёртки, ни
+## вершинных цветов на путевых мешах, а металличность по вершинам не
+## интерполируется вовсе — «полуметалла не бывает» действует и здесь. Три полосы
+## стыкуются, как и прежде две.
+##
+## Сумма: 0.72 наката + 2 × 0.075 фаски = 0.87 головки — ровно столько, сколько
+## занимал накат до этой правки.
+const RAILHEAD_FILLET := 0.075
+
+## УРОВНИ СЕРДЕЧНИКА — доли высоты рельса и ширины головки (CA-1/9-R65-v1 §Б).
+##
+## Глубина головной части 45 мм из 180 — четверть; шейка кончается на 135 мм —
+## три четверти. Ширины: шейка не у́же 30 мм (0.4 головки), подошва не у́же 150 мм
+## (две головки), а от ширины площадки шейка отступает на 45 мм (0.6 головки).
+const CASTING_SHOULDER := 0.25
+const CASTING_NECK := 0.75
+const CASTING_NECK_SHARE := 0.40
+const CASTING_SHOULDER_STEP := 0.60
+## Наименьшая ширина верхней площадки, метры: у настоящего сердечника остриё
+## срезано до 9–12 мм, острее не бывает по технологии литья.
+const CASTING_TIP_M := 0.009
 
 ## ВЫСТУП В 4 ММ ОТВЕРГНУТ. У спайка накат стоял НА головке и торчал над ней на
 ## RAILHEAD_T = 0.004 м — у него верх рельса был его собственной выдумкой, и
@@ -706,6 +1307,36 @@ static func rail_material() -> StandardMaterial3D:
 	return m
 
 
+## head_bands — границы полос на верху головки, от внутренней грани наружу.
+##
+## Одна функция на всех, кто их считает: тело рельса режет по крайним, накат
+## лежит между средними, фаски — в двух зазорах. Посчитай их порознь — полосы
+## разойдутся, и между ними откроется щель во всю длину пути.
+##
+## Возвращает (наружная граница выреза слева, начало наката, конец наката,
+## наружная граница выреза справа) в осях сечения — от рабочей грани наружу.
+static func head_bands(head_width_m: float) -> Vector4:
+	var band := head_width_m * RAILHEAD_WIDTH
+	var fil := head_width_m * RAILHEAD_FILLET
+	var band_i := (head_width_m - band) * 0.5
+	var band_o := band_i + band
+	return Vector4(band_i - fil, band_i, band_o, band_o + fil)
+
+
+## railfillet_material — ФАСКА: кромка головки между накатом и ржавчиной.
+##
+## Полуметалл здесь ЗАКОННЫЙ, в отличие от тела рельса: это не «сталь, окрашенная
+## ржавчиной», а стёртая поверхность с остатками окисла — у неё и правда
+## промежуточное отражение. Довод, по которому полуметалла не бывает у ТЕЛА,
+## записан у railhead_material и остаётся в силе.
+static func railfillet_material() -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = C_RAILFILLET
+	m.roughness = 0.62
+	m.metallic = 0.45
+	return m
+
+
 ## railhead_material — НАКАТ: сталь.
 ##
 ## metallic 1.0, а не 0.85: полуметалла не бывает. Это от спайка остаётся.
@@ -776,12 +1407,42 @@ static func rail_material() -> StandardMaterial3D:
 ## работает в ту же сторону, что и эта правка, — просто спайк остановился на
 ## полпути, потому что смотрел на накат сверху, где он мельче пикселя и цвета не
 ## имеет. У машиниста та же полоса занимает 14 пикселей поперёк.
+## # ТРЕТИЙ ЗАХОД НА СИНЕВУ, 2026-08-16, и на этот раз лечится причина
+##
+## Разбор выше верен целиком и остаётся: у МЕТАЛЛА нет диффузной составляющей,
+## весь его цвет — отражение карты излучения, а в ней у нас нет ничего, кроме
+## процедурного неба. Отсюда и вывод разбора: «цвет наката это цвет неба и
+## ничего больше». Шероховатость лечила следствие — усредняла полусферу, — и
+## платила бликом; поэтому её и откатили.
+##
+## Из четырёх отвергнутых вариантов не был назван пятый, самый прямой: НЕ ДЕЛАТЬ
+## НАКАТ МЕТАЛЛОМ. Диэлектрик берёт цвет из АЛЬБЕДО и света, а не из отражения
+## неба, и блик у него остаётся — солнечный, а не небесный. Синеть ему нечем.
+##
+## Физически это неправда: сталь — металл. Но и «металл, зеркалящий одно небо»
+## неправда ровно так же, и вторая заметнее: владелец жаловался на синие рельсы
+## ДВАЖДЫ (2026-08-12 и 2026-08-16). Из двух неправд выбрана та, которая даёт
+## верный ЦВЕТ, и выбор назван здесь, а не спрятан в числах.
+##
+## ЗАМЕР (пипетка по снимку роли driver, кадр throat, самое синее в нижней
+## половине; у балласта рядом отношение b/r ровно 1.00):
+##
+##     металл, шероховатость 0.22 → rgb (64, 85, 109), b/r 1.72   ← было
+##     диэлектрик, шероховатость 0.25 → см. строку ниже            ← стало
+##
+## Настоящее лечение — окружение, которое есть что зеркалить: отражающая проба
+## у камеры либо небо с честной нижней полусферой. Оба стоят кадра целиком, и
+## оба ждут своего дня; этот выбор их не отменяет, а откладывает.
 static func railhead_material() -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = C_RAILHEAD
-	# 0.22 — спайково. Оно и даёт бликовую нить; всё, что выше, её размазывает.
-	m.roughness = 0.22
-	m.metallic = 1.0
+	m.roughness = 0.25
+	m.metallic = 0.0
+	# Блик диэлектрика слабее металлического, и накат без него стал бы просто
+	# светлой полосой. Полная зеркальность у диэлектрика — это не «как металл»,
+	# а «как полированный камень»: цвет остаётся своим, ярче становится только
+	# отблик.
+	m.specular = 1.0
 	return m
 
 

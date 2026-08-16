@@ -129,6 +129,15 @@ FRAME  ?= network
 REACH ?=
 REACH_ARG := $(if $(REACH),--reach=$(REACH))
 
+## SHOT у зонда стрелки — снимок ВБЛИЗИ, которого не даёт ни один обзорный кадр:
+## make dev-shot наводится на сеть целиком, и остряк с желобом в 46 мм там мельче
+## пикселя. Зонд ставит человека вплотную к приводу, и его окно — единственное
+## место, где перевод видно глазами.
+##
+##   make turnout-probe PROBE_SHOT=$(CURDIR)/shots/turnout.png
+PROBE_SHOT ?=
+PROBE_SHOT_ARG := $(if $(PROBE_SHOT),--shot=$(PROBE_SHOT))
+
 ## PROBE_REACH — УКОРОЧЕННЫЙ ВЗГЛЯД ДЛЯ ЗОНДОВ, и это ответ на «тесты идут
 ## долго» (владелец, 2026-08-15), данный ЗАМЕРОМ, а не на глаз.
 ##
@@ -188,7 +197,7 @@ NOHUD_ARG := $(if $(NOHUD),--shot-no-hud)
 # position '-9000'». Снимок не делался вовсе, а виноватым выглядел клиент.
 COMMA := ,
 
-.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe stock-probe
+.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe stock-probe bench
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -497,10 +506,36 @@ cab-probe: client-import
 ##
 ## --headless НЕВОЗМОЖЕН (мир строится сценой, сцене нужен вьюпорт),
 ## --role=driver обязателен: подходить к приводу некому.
+## bench — СТЕНД ПРЕДМЕТА: одна вещь в пустой комнате, четыре вида, ни сервера,
+## ни рельефа, ни теней, ни неба. Секунда против двадцати у снимка мира.
+##
+## Заведён 2026-08-16 словом владельца: «зачем мы поднимаем полный клиент godot
+## для этого? Ещё потом боремся с тенями? Неужели нельзя написать простой тест,
+## который рендерит ассет в разных плоскостях без теней и всего прочего?»
+##
+##   make bench MODEL=switch_stand_manual STATE=position=diverging,hand=right
+##   make bench MODEL=switch_stand_electric OUT=/tmp/e.png
+##   make bench TRACK=1            участок пути: рельс с сечением и накат
+##   make bench FROG=1             крестовина: нитки, усовики, контррельсы, сердечник
+##
+## FROG берёт числа из СНИМКА СЕТИ (client/tools/fixtures), а не у живого
+## сервера: стенд на то и стенд, что не поднимает мир. Переснять снимок —
+## make client-fixtures при поднятом сервере.
+BENCH_OUT ?= /tmp/bench.png
+MODEL     ?= switch_stand_manual
+STATE     ?=
+TRACK     ?=
+FROG      ?=
+OUT       ?= $(BENCH_OUT)
+bench: client-import
+	$(GODOT) --path $(CLIENT) --position -9000,-9000 --script res://tools/bench.gd -- \
+		--out=$(OUT) $(if $(FROG),--frog,$(if $(TRACK),--track,--model=$(MODEL))) \
+		$(if $(STATE),--state=$(STATE))
+
 turnout-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/turnout_probe.gd -- \
-		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG)
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG) $(PROBE_SHOT_ARG)
 
 
 ## net-probe — НА КАКОМ ЭТАПЕ ТОРМОЗА. Сервер должен быть уже поднят.

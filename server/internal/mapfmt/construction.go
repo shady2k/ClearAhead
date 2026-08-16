@@ -2,6 +2,7 @@ package mapfmt
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/shady2k/ClearAhead/server/internal/units"
@@ -82,6 +83,24 @@ func (m *Map) validateConstruction() error {
 		if tt, ok := types[resolved]; ok && tt.Timber == nil {
 			return fmt.Errorf(
 				"%sстрелка %s: у типа %s нет блока timber — под переводом лежат не шпалы, и эпюру брусьев взять неоткуда",
+				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
+		}
+		// ОСТРЯКИ ОБЯЗАТЕЛЬНЫ ПО ТОМУ ЖЕ ДОВОДУ, ЧТО И БРУСЬЯ. Стрелка без
+		// подвижной части — это стрелка, перевод которой не виден на путях
+		// ничем: игрок жмёт клавишу, панель меняет слово, мир стоит. Цена
+		// пропуска измерена не рассуждением — так оно и было до 2026-08-15
+		// (ClearAhead-86mb).
+		if tt, ok := types[resolved]; ok && tt.Switch == nil {
+			return fmt.Errorf(
+				"%sстрелка %s: у типа %s нет блока switch — остряка нет, и перевод стрелки не виден на путях ничем",
+				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
+		}
+		// КРЕСТОВИНА ОБЯЗАТЕЛЬНА ПО ТОМУ ЖЕ ДОВОДУ. Без неё нитки в крестовине
+		// просто пересекаются: ни желоба, ни усовика, ни контррельса — то есть
+		// место, где колесо переходит с нитки на нитку, ничем не показано.
+		if tt, ok := types[resolved]; ok && tt.Frog == nil {
+			return fmt.Errorf(
+				"%sстрелка %s: у типа %s нет блока frog — крестовины нет, нитки в ней просто пересекаются",
 				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
 		}
 	}
@@ -250,6 +269,9 @@ func checkTrackType(prefix string, t *TrackType) error {
 	if !(t.Rail.HeadWidth >= MinRailHeadWidth && t.Rail.HeadWidth <= MaxRailHeadWidth) {
 		return bad("rail.head_width", t.Rail.HeadWidth, MinRailHeadWidth, MaxRailHeadWidth)
 	}
+	if err := checkRailSection(t); err != nil {
+		return fmt.Errorf("%sтип %q: %w", prefix, Labeled(t.Name, t.ID), err)
+	}
 	if !(t.Sleeper.Height >= MinSleeperHeight && t.Sleeper.Height <= MaxSleeperHeight) {
 		return bad("sleeper.height", t.Sleeper.Height, MinSleeperHeight, MaxSleeperHeight)
 	}
@@ -295,6 +317,70 @@ func checkTrackType(prefix string, t *TrackType) error {
 			return fmt.Errorf(
 				"%sтип %q: timber.length_max %g короче sleeper.length %g — брус перекрывает оба пути и короче шпалы быть не может",
 				prefix, Labeled(t.Name, t.ID), tb.LengthMax, t.Sleeper.Length)
+		}
+	}
+	if f := t.Frog; f != nil {
+		if !(f.Flangeway >= MinFlangeway && f.Flangeway <= MaxFlangeway) {
+			return bad("frog.flangeway", f.Flangeway, MinFlangeway, MaxFlangeway)
+		}
+		if !(f.CheckFlangeway >= MinFlangeway && f.CheckFlangeway <= MaxFlangeway) {
+			return bad("frog.check_flangeway", f.CheckFlangeway, MinFlangeway, MaxFlangeway)
+		}
+		if !(f.WingLength >= MinFrogRailLength && f.WingLength <= MaxFrogRailLength) {
+			return bad("frog.wing_length", f.WingLength, MinFrogRailLength, MaxFrogRailLength)
+		}
+		if !(f.CheckLength >= MinFrogRailLength && f.CheckLength <= MaxFrogRailLength) {
+			return bad("frog.check_length", f.CheckLength, MinFrogRailLength, MaxFrogRailLength)
+		}
+		if !(f.CastingLength >= MinFrogRailLength && f.CastingLength <= MaxFrogRailLength) {
+			return bad("frog.casting_length", f.CastingLength, MinFrogRailLength, MaxFrogRailLength)
+		}
+		// СЕРДЕЧНИК КОРОЧЕ УСОВИКА. Усовик обнимает сердечник с двух сторон и по
+		// построению длиннее его; отливка длиннее своих крыльев — это уже не
+		// крестовина, а вставка.
+		if f.CastingLength*2 > f.WingLength {
+			return fmt.Errorf(
+				"%sтип %q: сердечник %g в каждую сторону не помещается в усовик %g — крылья короче отливки",
+				prefix, Labeled(t.Name, t.ID), f.CastingLength, f.WingLength)
+		}
+		if !(f.Flare >= MinFlare && f.Flare <= MaxFlare) {
+			return bad("frog.flare", f.Flare, MinFlare, MaxFlare)
+		}
+		if !(f.FlareGap >= MinFlangeway && f.FlareGap <= MaxFlangeway) {
+			return bad("frog.flare_gap", f.FlareGap, MinFlangeway, MaxFlangeway)
+		}
+		// РАСТРУБ ШИРЕ РАБОЧЕГО ЖЕЛОБА. Отдельным отказом, а не диапазоном:
+		// оба числа порознь законны, а раструб уже желоба — это воронка,
+		// сужающаяся навстречу колесу.
+		if f.FlareGap <= f.Flangeway || f.FlareGap <= f.CheckFlangeway {
+			return fmt.Errorf(
+				"%sтип %q: frog.flare_gap %g не шире желобов (%g и %g) — раструб на то и раструб, что он шире",
+				prefix, Labeled(t.Name, t.ID), f.FlareGap, f.Flangeway, f.CheckFlangeway)
+		}
+		// ДВА ОТГИБА КОРОЧЕ САМОЙ НИТКИ. Иначе рабочей части не остаётся вовсе:
+		// контррельс, состоящий из одних отгибов, ничего не удерживает.
+		if 2*f.Flare >= f.CheckLength || 2*f.Flare >= f.WingLength {
+			return fmt.Errorf(
+				"%sтип %q: два отгиба по %g не помещаются в усовик %g и контррельс %g — рабочей части не остаётся",
+				prefix, Labeled(t.Name, t.ID), f.Flare, f.WingLength, f.CheckLength)
+		}
+	}
+	if t.Switch != nil {
+		sw := t.Switch
+		if !(sw.BladeLength >= MinBladeLength && sw.BladeLength <= MaxBladeLength) {
+			return bad("switch.blade_length", sw.BladeLength, MinBladeLength, MaxBladeLength)
+		}
+		if !(sw.Throw >= MinBladeThrow && sw.Throw <= MaxBladeThrow) {
+			return bad("switch.throw", sw.Throw, MinBladeThrow, MaxBladeThrow)
+		}
+		// Ход остряка ШИРЕ ГОЛОВКИ РЕЛЬСА — это не перевод, а вырванный рельс:
+		// отведённый остряк отходит от рамного на просвет, в который проваливается
+		// колесо. Отдельным отказом, а не диапазоном: 0.5 м законны для хода узкой
+		// колеи и незаконны рядом с головкой в 75 мм.
+		if sw.Throw > t.Rail.HeadWidth*BladeThrowHeads {
+			return fmt.Errorf(
+				"%sтип %q: switch.throw %g больше %g ширин головки (%g) — такой отвод не переводит стрелку, а разрывает путь",
+				prefix, Labeled(t.Name, t.ID), sw.Throw, BladeThrowHeads, t.Rail.HeadWidth)
 		}
 	}
 	return nil
@@ -392,6 +478,115 @@ func (m *Map) checkPlatformSizes(prefix string) error {
 				return bad("упор", st.ID, "width", st.Width, MinBufferStopWidth, MaxBufferStopWidth)
 			}
 		}
+	}
+	return nil
+}
+
+// checkRailSection — СЕЧЕНИЕ РЕЛЬСА: замкнутый простой многоугольник, обойдённый
+// против часовой стрелки, согласованный с высотой и шириной головки.
+//
+// # Почему проверок пять, а не одна
+//
+// Каждая ловит СВОЮ ошибку автора, и каждая из этих ошибок доезжает до кадра в
+// виде исправного на вид рельса:
+//
+//	мало точек          — сечения нет вовсе, рисовать нечего;
+//	обход по часовой    — рельс выворачивается наизнанку (тот же класс, что
+//	                      коробки домов 2026-08-12, найденные глазами);
+//	y > 0               — металл над поверхностью катания, то есть колесо
+//	                      катится по воздуху;
+//	глубина ≠ height    — два источника высоты рельса разошлись, и вертикальный
+//	                      стек (formation_to_rail_top) посчитан по одному из них;
+//	ширина верха ≠ head_width — рабочая грань не там, где её объявили, и колея
+//	                      поехала (замер спайка: 1.335 вместо 1.435).
+//
+// Ни одна из них НЕ ЧИНИТСЯ подстановкой: карта, где автор ошибся в сечении,
+// обязана получить отказ, а не правдоподобный рельс.
+func checkRailSection(t *TrackType) error {
+	s := t.Rail.Section
+	// СЕЧЕНИЕ НЕОБЯЗАТЕЛЬНО, и это не то умолчание, которое проект запрещает.
+	//
+	// Запрещено молчаливое ПРАВДОПОДОБНОЕ ЗАМЕЩЕНИЕ: карта без обязательного
+	// поля не должна получать выдуманное. Здесь замещения нет — есть ОБЪЯВЛЕННОЕ
+	// УПРОЩЕНИЕ, прожившее в контракте с редакции 6: рельс без сечения рисуется
+	// прямоугольником head_width × height, и упрощение названо вслух с обеих
+	// сторон провода. Клиент своего Р65 не подставляет.
+	//
+	// Обязательным сечение станет тогда же, когда исчезнет прямоугольник, — то
+	// есть когда у КАЖДОЙ карты он будет, и отказ перестанет означать «этот
+	// автор ещё не дошёл до профиля».
+	if len(s) == 0 {
+		return nil
+	}
+	if len(s) < MinRailSectionPoints {
+		return fmt.Errorf("rail.section: точек %d, нужно хотя бы %d — сечения нет",
+			len(s), MinRailSectionPoints)
+	}
+	if len(s) > MaxRailSectionPoints {
+		return fmt.Errorf("rail.section: точек %d, потолок %d", len(s), MaxRailSectionPoints)
+	}
+	// Знак площади — он же направление обхода. Считается по формуле шнурков;
+	// вырожденное сечение (площадь около нуля) отвергается тем же неравенством.
+	area := 0.0
+	for i := range s {
+		j := (i + 1) % len(s)
+		area += s[i].X()*s[j].Y() - s[j].X()*s[i].Y()
+	}
+	area /= 2
+	if area < MinRailSectionArea {
+		return fmt.Errorf(
+			"rail.section: площадь %+.6f м² — обход по часовой стрелке либо сечение вырождено; "+
+				"нужен обход против часовой в осях (x наружу, y вверх), иначе рельс выйдет вывернутым",
+			area)
+	}
+	depth := 0.0
+	// Головка — это точки, лежащие НА ПОВЕРХНОСТИ КАТАНИЯ. Их крайние x дают и
+	// ширину головки, и место рабочей грани; обе величины считаются от них, а не
+	// от габарита всего сечения, — подошва шире головки, и габарит соврал бы.
+	topMin, topMax := 0.0, 0.0
+	haveTop := false
+	for _, p := range s {
+		if p.Y() > MaxRailSectionY {
+			return fmt.Errorf(
+				"rail.section: точка (%g, %g) выше поверхности катания — y отсчитывается ОТ НЕЁ вниз и положительным не бывает",
+				p.X(), p.Y())
+		}
+		if -p.Y() > depth {
+			depth = -p.Y()
+		}
+		if p.Y() >= MaxRailSectionY-RailSectionTol {
+			if !haveTop || p.X() < topMin {
+				topMin = p.X()
+			}
+			if !haveTop || p.X() > topMax {
+				topMax = p.X()
+			}
+			haveTop = true
+		}
+	}
+	if !haveTop {
+		return fmt.Errorf(
+			"rail.section: ни одна точка не лежит на поверхности катания — головки у такого рельса нет, и колесу катиться не по чему")
+	}
+	if math.Abs(depth-t.Rail.Height) > RailSectionTol {
+		return fmt.Errorf(
+			"rail.section: сечение глубиной %g м при rail.height %g м — высота рельса объявлена дважды и разошлась",
+			depth, t.Rail.Height)
+	}
+	if math.Abs(topMax-topMin-t.Rail.HeadWidth) > RailSectionTol {
+		return fmt.Errorf(
+			"rail.section: головка поверху шириной %g м при rail.head_width %g м — "+
+				"рабочая грань не там, где объявлена, и колея поедет",
+			topMax-topMin, t.Rail.HeadWidth)
+	}
+	// РАБОЧАЯ ГРАНЬ — НАЧАЛО ОТСЧЁТА, и хоть одна точка обязана на ней лежать:
+	// сечение, целиком сдвинутое наружу, встало бы мимо колеи, не нарушив ни
+	// высоты, ни ширины головки.
+	if math.Abs(topMin) > RailSectionTol {
+		return fmt.Errorf(
+			"rail.section: головка начинается на x = %g м, а не на нуле — "+
+				"x отсчитывается ОТ РАБОЧЕЙ ГРАНИ, и она же начало отсчёта",
+			topMin)
 	}
 	return nil
 }

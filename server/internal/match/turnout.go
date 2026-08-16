@@ -8,6 +8,7 @@ import (
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/protocol"
 	"github.com/shady2k/ClearAhead/server/internal/track"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Стрелка как то, чем ИГРАЮТ: положение, занятость и перевод.
@@ -36,7 +37,20 @@ type TurnoutState struct {
 	// Name — читаемая метка: то же, что написано на табличке у самой стрелки.
 	Name string `json:"name,omitempty"`
 	// Position — положение остряка: TurnoutStraight или TurnoutDiverging.
+	//
+	// ПУСТО, ПОКА ОСТРЯК ИДЁТ: стрелка в переводе не стоит нигде, и ехать по ней
+	// нельзя ни прямо, ни на боковую. Клиент обязан показать это как перевод, а
+	// не как неизвестность, и для того рядом едут Moving, To и Progress.
 	Position string `json:"position"`
+	// Moving — идёт ли остряк прямо сейчас, To — куда, Progress — сколько уже
+	// прошёл, от 0 до 1.
+	//
+	// Доля, а не оставшееся время: клиент откладывает остряк по ней напрямую, и
+	// переводить время в долю на его стороне значило бы завести у него второе
+	// знание о том, сколько перевод длится.
+	Moving   bool    `json:"moving,omitempty"`
+	To       string  `json:"to,omitempty"`
+	Progress float64 `json:"progress,omitempty"`
 	// Drive — переводной механизм (mapfmt.DriveManual, DriveElectric). Едет
 	// вместе с положением, потому что от него зависит, КАК стрелку переводят, и
 	// пульт обязан показывать это, не ходя за вторым ресурсом.
@@ -73,14 +87,23 @@ type TurnoutState struct {
 func (m Match) TurnoutStates(net *track.CompiledNetwork) []TurnoutState {
 	out := make([]TurnoutState, 0, len(net.Devices))
 	for id, d := range net.Devices {
-		out = append(out, TurnoutState{
+		st := TurnoutState{
 			ID:         id,
 			Name:       d.Name,
 			Position:   m.TurnoutAt(id),
 			Drive:      d.Drive,
 			Hand:       d.Hand,
 			OccupiedBy: m.TurnoutHeldBy(net, id),
-		})
+		}
+		// ПЕРЕВОД ЕДЕТ ОТДЕЛЬНО ОТ ПОЛОЖЕНИЯ, потому что это разные вопросы:
+		// «где остряк стоит» и «куда он идёт». Пока идёт, первого ответа нет
+		// вовсе (TurnoutAt отдаёт пусто), и клиент рисует перевод по второму.
+		if mv, ok := m.TurnoutMoves[id]; ok && mv.Left > 0 {
+			st.Moving = true
+			st.To = mv.To
+			st.Progress = mv.Progress()
+		}
+		out = append(out, st)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
@@ -105,7 +128,8 @@ func (m Match) TurnoutStates(net *track.CompiledNetwork) []TurnoutState {
 // Проверить «игрок стоит рядом» сервер и не может: человека в мире он не знает
 // вовсе (границы клиента, driver.gd), и досягаемость — свойство КЛИЕНТСКОЙ
 // подсказки. Записано здесь, чтобы отсутствие проверки не сочли недосмотром.
-func (m *Match) SetTurnout(deviceID, position string, net *track.CompiledNetwork) error {
+func (m *Match) SetTurnout(deviceID, position string, net *track.CompiledNetwork,
+	throw units.SimTime) error {
 	dev, ok := net.Devices[deviceID]
 	if !ok {
 		return &protocol.Refusal{Reason: protocol.ReasonUnknownTurnout, ResourceID: deviceID,
@@ -132,8 +156,104 @@ func (m *Match) SetTurnout(deviceID, position string, net *track.CompiledNetwork
 	if m.Turnouts == nil {
 		m.Turnouts = map[string]string{}
 	}
-	m.Turnouts[deviceID] = position
+	at, known := m.Turnouts[deviceID]
+	if !known {
+		at = TurnoutStraight
+	}
+	cur, moving := m.TurnoutMoves[deviceID]
+	if moving {
+		// ОСТРЯК УЖЕ ИДЁТ. Повтор той же цели — ничего: он туда и идёт.
+		if cur.To == position {
+			return nil
+		}
+		// ЦЕЛЬ СМЕНИЛАСЬ НА ХОДУ — остряк разворачивается ОТТУДА, ГДЕ ОН СЕЙЧАС.
+		// Оставшееся время равно пройденному: сколько прошёл, столько и
+		// возвращаться. Отказывать нечему — в жизни привод так и работает, а
+		// отказ «стрелка в переводе» заставил бы игрока ждать неизвестно чего.
+		m.TurnoutMoves[deviceID] = TurnoutMove{
+			From: cur.To,
+			To:   position,
+			Left: cur.Full - cur.Left,
+			Full: cur.Full,
+		}
+		return nil
+	}
+	if at == position {
+		return nil
+	}
+	// ПЕРЕВОД ИДЁТ ВРЕМЯ, А НЕ СЛУЧАЕТСЯ В ТИК (слово владельца 2026-08-16:
+	// «стрелка, когда переключается, это не должна делать резко»). Нулевое или
+	// неизвестное время означает, что механизм не объявил его: тогда остряк
+	// встаёт сразу — так же, как было до, и это видно числом, а не молчанием.
+	if throw <= 0 {
+		m.Turnouts[deviceID] = position
+		return nil
+	}
+	if m.TurnoutMoves == nil {
+		m.TurnoutMoves = map[string]TurnoutMove{}
+	}
+	m.TurnoutMoves[deviceID] = TurnoutMove{From: at, To: position, Left: throw, Full: throw}
 	return nil
+}
+
+// TurnoutMove — перевод, ИДУЩИЙ ПРЯМО СЕЙЧАС.
+//
+// # Почему перевод стал процессом
+//
+// Слово владельца 2026-08-16: «стрелка, когда переключается, это не должна
+// делать резко, как сейчас». До того команда меняла положение в тот же тик, и
+// остряк прыгал на 152 мм за кадр.
+//
+// Процесс живёт В ПАРТИИ, а не в показе. Соблазн был обратный — сгладить
+// картинку на клиенте, как сглажено движение машины (t5h). Но у машины клиент
+// сглаживает ПРИСЛАННОЕ положение между снапшотами, а здесь пришлось бы
+// придумать состояние, которого на сервере нет: пока остряк идёт, по стрелке
+// НЕЛЬЗЯ ЕХАТЬ, и знать об этом обязана физика, а не картинка.
+type TurnoutMove struct {
+	// From и To — откуда и куда идёт остряк.
+	From string
+	To   string
+	// Left — сколько ещё идти, Full — сколько всего. Обе нужны: по их отношению
+	// считается доля перевода, и хранить долю вместо остатка значило бы
+	// пересчитывать её на каждом тике из неё же самой.
+	Left units.SimTime
+	Full units.SimTime
+}
+
+// Progress — доля пройденного пути остряка, от 0 (только тронулся) до 1.
+func (mv TurnoutMove) Progress() float64 {
+	if mv.Full <= 0 {
+		return 1
+	}
+	if mv.Left <= 0 {
+		return 1
+	}
+	return 1 - float64(mv.Left)/float64(mv.Full)
+}
+
+// AdvanceTurnouts — двигает остряки, которые сейчас идут.
+//
+// Зовётся движком в той же фазе, что и физика машин: перевод — часть партии, и
+// идти он обязан по тому же модельному времени, а не по кадрам клиента.
+//
+// Дошедший до конца перевод ЗАПИСЫВАЕТ ПОЛОЖЕНИЕ и исчезает: запись о переводе
+// живёт ровно столько, сколько идёт остряк.
+func (m *Match) AdvanceTurnouts(dt units.SimTime) {
+	if dt <= 0 || len(m.TurnoutMoves) == 0 {
+		return
+	}
+	for id, mv := range m.TurnoutMoves {
+		mv.Left -= dt
+		if mv.Left > 0 {
+			m.TurnoutMoves[id] = mv
+			continue
+		}
+		if m.Turnouts == nil {
+			m.Turnouts = map[string]string{}
+		}
+		m.Turnouts[id] = mv.To
+		delete(m.TurnoutMoves, id)
+	}
 }
 
 // AheadTurnout — ближайшая стрелка ПО ХОДУ машины.
@@ -183,6 +303,22 @@ type AheadTurnout struct {
 // Развилка без устройства (в порту сходятся три ребра) обход прекращает: такой
 // карты валидатор не пропустит, но обход не полагается на то, что его позвали
 // после валидатора.
+//
+// # УСТРОЙСТВО СПРАШИВАЕТСЯ У ПОРТА, А НЕ У ЕДИНСТВЕННОГО СОСЕДА
+//
+// Здесь стоял обратный порядок: сначала singleNeighbour, и только у найденного
+// соседа спрашивалось, не проход ли он. Порядок был неверен, и цена ему —
+// молчащий пульт на пошёрстном подходе (ClearAhead-3ph3).
+//
+// У ОСТРИЯ СТРЕЛКИ В ПОРТУ ВСЕГДА ТРИ РЕБРА: подход и оба прохода. Требование
+// единственности их не пропускало, и машина, идущая к острию — то есть ровно
+// так, как игрок въезжает на станцию, — впереди стрелки не видела вовсе. Тест
+// этого не ловил: он вёл машину ПРОТИВОШЁРСТНО, со стороны крестовины, где в
+// порту два ребра.
+//
+// Довод «три ребра — развилка без устройства» верен только там, где устройства
+// нет. Порт с устройством спрашивается первым, единственность остаётся правилом
+// для порта БЕЗ него.
 func (m Match) NextTurnout(net *track.CompiledNetwork, u Unit) *AheadTurnout {
 	mo, ok := m.MotionOf(u.ID)
 	if !ok {
@@ -229,13 +365,20 @@ func (m Match) NextTurnout(net *track.CompiledNetwork, u Unit) *AheadTurnout {
 		dist = endS
 		port = el.From
 	}
+	// НА ЧЬЁМ ПРОХОДЕ МЫ СТОИМ. Пусто, если не на проходе. Своё же устройство
+	// «впереди» не называется: машина, стоящая на стрелке и идущая к её острию,
+	// получила бы расстояние до того, на чём она уже лежит.
+	own := passages[el.ID]
 	for range 8 {
+		// Порт спрашивается ПЕРВЫМ — разбор в шапке. У острия стрелки соседей
+		// двое, и требование единственности прячет ровно ту стрелку, к которой
+		// машина и едет.
+		if dev, isDevice := deviceAtPort(net, passages, port, el.ID); isDevice && dev != own {
+			return &AheadTurnout{Turnout: dev, DistanceM: dist.Meters()}
+		}
 		next, ok := singleNeighbour(net, port, el.ID)
 		if !ok {
 			return nil // упор, край карты или развилка без устройства
-		}
-		if dev, isPassage := passages[next.ID]; isPassage {
-			return &AheadTurnout{Turnout: dev, DistanceM: dist.Meters()}
 		}
 		dist += next.LengthS
 		// Вошли началом — идём к его концу, и наоборот.
@@ -247,6 +390,25 @@ func (m Match) NextTurnout(net *track.CompiledNetwork, u Unit) *AheadTurnout {
 		el = next
 	}
 	return nil
+}
+
+// deviceAtPort — устройство, чей проход подходит к порту. Пусто, если порт
+// обычный.
+//
+// Спрашивается ДО единственности соседа, и порядок этих двух вопросов — весь
+// смысл функции (разбор — в шапке NextTurnout). Двух устройств в одном порту
+// быть не может: проходы устройства сходятся в его же порт, а порт принадлежит
+// одному узлу.
+func deviceAtPort(net *track.CompiledNetwork, passages map[string]string, port, exclude string) (string, bool) {
+	for id, e := range net.Elements {
+		if id == exclude || (e.From != port && e.To != port) {
+			continue
+		}
+		if dev, ok := passages[id]; ok {
+			return dev, true
+		}
+	}
+	return "", false
 }
 
 // singleNeighbour — единственный сосед по порту, кроме исключённого элемента.

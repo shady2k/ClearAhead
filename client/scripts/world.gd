@@ -138,13 +138,6 @@ const HOUSE_COLORS := [
 ]
 
 const BUFFER_STOP_LENGTH_RATIO := 0.33
-## Крыло галочки крестовины. Восемь метров годились СХЕМЕ СВЕРХУ, где галочка
-## была единственным способом показать особенность; на виде с оси она стала
-## красной полосой во весь кадр. Число уменьшено до порядка настоящего крыла
-## крестовины — это по-прежнему решение художника, но теперь оно хотя бы не
-## спорит с масштабом того, поверх чего лежит.
-const FROG_WING_M := 1.4
-const FROG_HALF_W_M := 0.07
 
 ## Корневые поля, которые клиент умеет читать. Список нужен не для порядка:
 ## поле `trackside` переименовали в `structures` (3637504), клиент остался на
@@ -325,6 +318,9 @@ var _bounds: WorldBounds = null
 var _driver: Driver = null
 ## Приводы стрелок в кадре: id стрелки -> SwitchStand. Строится вместе с путём.
 var _stands := {}
+## Подвижные участки пути: элемент прохода -> {span, rail, head}. По ним остряк
+## переставляется при переводе стрелки, не трогая остальной путь.
+var _blades := {}
 ## Положение стрелок по последнему снапшоту: id -> словарь провода.
 var _turnouts := {}
 ## Ближайшая стрелка ПО ХОДУ машины, которой управляет игрок: {turnout, distance}
@@ -1366,10 +1362,109 @@ func _show_turnouts() -> void:
 		# приезжают снапшотом. Вывести сторону клиент не может ниоткуда — это
 		# геометрия станции, и считает её сервер.
 		if (_stands[id] as SwitchStand).show_position(
-				String(sw.get("position", "")), String(sw.get("hand", ""))):
+				String(sw.get("position", "")), String(sw.get("hand", "")),
+				_toward_diverging(sw)):
 			turned += 1
 	stats["turnouts_known"] = _turnouts.size()
 	stats["turnouts_turned"] = turned
+	_move_blades()
+
+
+## _move_blades — переставить остряки по последнему снапшоту.
+##
+## # Почему это здесь, а не в перестройке пути
+##
+## Пересобирается ОДИН МЕШ — сам остряк той ветви, что тронулась. Перестроить
+## путь целиком было бы правильно по смыслу и невозможно по времени: станция
+## строится сотнями миллисекунд, а стрелку переводят посреди игры.
+##
+## До 2026-08-16 пересобирались два меша ПРОХОДА (тело рельса и накат): остряк
+## был подвижным участком нитки, и подвинуть его значило перестроить нитку. Стало
+## дешевле ровно потому, что стало правильнее: рамный рельс больше не ездит.
+##
+## # Прижат тот остряк, по чьей ветви стоит стрелка
+##
+## Ровно это правило и есть весь перевод: у стрелки, стоящей прямо, прижат
+## остряк прямого прохода, а остряк бокового отведён.
+##
+## # ПЕРЕВОД ИДЁТ, И ЭТО ПРИЕЗЖАЕТ СНАПШОТОМ
+##
+## Пока остряк идёт, положения нет вовсе (сервер отдаёт пусто), зато названы
+## цель и доля пройденного. Отвод считается по ним: остряк цели закрывается, а
+## остряк, от которого уходят, — открывается. Ни доли, ни времени клиент не
+## выдумывает и не сглаживает: перевод стал состоянием партии, а не приёмом
+## показа (слово владельца 2026-08-16, разбор — у match.TurnoutMove).
+##
+## НЕИЗВЕСТНОЕ положение остряка не двигает: перевод, показанный наугад, врал бы
+## про то, куда поедет машина.
+func _move_blades() -> void:
+	var moved := 0
+	for eid in _blades:
+		var rec: Dictionary = _blades[eid]
+		var blade: TrackBuild.Blade = rec["blade"]
+		if not _turnouts.has(blade.owner):
+			continue
+		var sw := _turnouts[blade.owner] as Dictionary
+		var want_open := _blade_open_share(sw, blade.branch)
+		if want_open < 0.0 or not blade.set_open(want_open):
+			continue
+		var mi := rec["node"] as MeshInstance3D
+		if mi != null:
+			mi.mesh = TrackView.frog_rail_mesh(blade)
+		var head := rec["head"] as MeshInstance3D
+		if head != null:
+			head.mesh = TrackView.frog_railhead_mesh(blade)
+		var fillet := rec["fillet"] as MeshInstance3D
+		if fillet != null:
+			fillet.mesh = TrackView.frog_rail_fillet_mesh(blade)
+		moved += 1
+	if moved > 0:
+		stats["blades_moved"] = int(stats.get("blades_moved", 0)) + moved
+
+
+## _toward_diverging — насколько стрелка ушла к боковому пути, от 0 до 1.
+##
+## Спрашивает ТЯГА привода: её длина меняется ровно на ход остряка, и меняется
+## она вместе с ним, а не скачком в конце. Отрицательное — «сервер не сказал».
+##
+## Отдельно от _blade_open_share, потому что это другой вопрос: там «насколько
+## отведён остряк ЭТОЙ ветви», здесь «где вся стрелка целиком».
+func _toward_diverging(sw: Dictionary) -> float:
+	if bool(sw.get("moving", false)):
+		var to := String(sw.get("to", ""))
+		var p := clampf(float(sw.get("progress", 0.0)), 0.0, 1.0)
+		if to == LiveChannel.TURNOUT_DIVERGING:
+			return p
+		if to == LiveChannel.TURNOUT_STRAIGHT:
+			return 1.0 - p
+		return -1.0
+	var pos := String(sw.get("position", ""))
+	if pos == LiveChannel.TURNOUT_DIVERGING:
+		return 1.0
+	if pos == LiveChannel.TURNOUT_STRAIGHT:
+		return 0.0
+	return -1.0
+
+
+## _blade_open_share — насколько отведён остряк этой ветви, от 0 до 1.
+##
+## Отрицательное значит «сервер не сказал»: ни положения, ни перевода, — и тогда
+## остряк не двигают вовсе.
+##
+## ПОКА ПЕРЕВОД ИДЁТ, доля считается от ЦЕЛИ: остряк, к которому переводят,
+## закрывается (1 − доля), остряк, от которого уходят, открывается (доля). Обе
+## величины присланы; клиент их только складывает.
+func _blade_open_share(sw: Dictionary, branch: String) -> float:
+	if bool(sw.get("moving", false)):
+		var to := String(sw.get("to", ""))
+		if to != LiveChannel.TURNOUT_STRAIGHT and to != LiveChannel.TURNOUT_DIVERGING:
+			return -1.0
+		var p := clampf(float(sw.get("progress", 0.0)), 0.0, 1.0)
+		return 1.0 - p if branch == to else p
+	var pos := String(sw.get("position", ""))
+	if pos != LiveChannel.TURNOUT_STRAIGHT and pos != LiveChannel.TURNOUT_DIVERGING:
+		return -1.0
+	return 0.0 if pos == branch else 1.0
 
 
 ## _turnout_target — КАКУЮ стрелку показывает пульт и переводит клавиша.
@@ -1436,7 +1531,12 @@ func _throw_turnout() -> void:
 	var t := _turnout_target()
 	if t.is_empty() or channel == null:
 		return
+	# ОТ ЧЕГО СЧИТАТЬ ПРОТИВОПОЛОЖНОЕ, когда остряк уже идёт: от ЦЕЛИ, а не от
+	# положения. Положения в переводе нет вовсе, и отказ «положение неизвестно»
+	# на нажатие посреди перевода был бы отказом за то, что игрок передумал.
 	var now := String(t.get("position", ""))
+	if bool(t.get("moving", false)):
+		now = String(t.get("to", ""))
 	if now != LiveChannel.TURNOUT_STRAIGHT and now != LiveChannel.TURNOUT_DIVERGING:
 		# Положение неизвестно — противоположного у него нет. Молчать нельзя:
 		# игрок нажал клавишу, и она обязана либо сработать, либо объясниться.
@@ -1925,6 +2025,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# было родиться.
 	var rail_mat := TrackView.rail_material()
 	var railhead_mat := TrackView.railhead_material()
+	# ФАСКА — переход от наката к ржавчине: у настоящего рельса край головки
+	# стёрт, но не отполирован. Разбор и числа — у TrackView.RAILHEAD_FILLET.
+	var fillet_mat := TrackView.railfillet_material()
 	var thread_mat := TrackView.flat_material(Color(0.90, 0.91, 0.95), TrackView.PRIO_RAIL, true)
 	var threads: Array[PackedVector3Array] = []
 	var rail_bodies := 0
@@ -1945,6 +2048,12 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 				hmi.material_override = railhead_mat
 				rails_node.add_child(hmi)
 				railheads += 1
+			var fmi := MeshInstance3D.new()
+			fmi.name = "%s@fillet" % sp.element_id
+			fmi.mesh = TrackView.rail_fillet_mesh(sp)
+			if fmi.mesh != null:
+				fmi.material_override = fillet_mat
+				rails_node.add_child(fmi)
 			continue
 		threads.append_array(sp.threads())
 	if not threads.is_empty():
@@ -1958,6 +2067,53 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	st["railheads_drawn"] = railheads
 	st["rail_threads_drawn"] = threads.size()
 	st["rail_spans_drawn"] = spans.size()
+
+	# 4а. ОСТРЯКИ — СВОИ ТЕЛА ВНУТРИ КОЛЕИ, а не подвижные участки ниток.
+	#
+	# Прежде остряк был отрезком нитки прохода, который показ отводил в сторону.
+	# Это означало, что рамного рельса не существует вовсе: его объём занимал
+	# прижатый остряк и уезжал вместе с переводом, а на освободившемся месте
+	# оставалась наружная нитка соседнего прохода — она лежала там просто потому,
+	# что проходы выходят из одной точки одним курсом.
+	#
+	# Узлы ЗАПОМИНАЮТСЯ вместе с деталью: перевод пересобирает один меш, а не
+	# путь целиком — станция строится сотнями миллисекунд, а стрелку переводят
+	# посреди игры.
+	var bl := TrackBuild.blades(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
+	var blade_list: Array[TrackBuild.Blade] = bl["list"]
+	var blade_parts := {}
+	for b_raw in blade_list:
+		var blade: TrackBuild.Blade = b_raw
+		var bmi := MeshInstance3D.new()
+		bmi.name = "%s@blade" % blade.element_id
+		bmi.mesh = TrackView.frog_rail_mesh(blade)
+		if bmi.mesh == null:
+			continue
+		bmi.material_override = rail_mat
+		rails_node.add_child(bmi)
+		# У ОСТРЯКА НАКАТ ЕСТЬ: по нему колесо идёт на свой путь. Меш переставляется
+		# вместе с телом — отвод меняет и его.
+		var bhi := MeshInstance3D.new()
+		bhi.name = "%s@blade_head" % blade.element_id
+		bhi.mesh = TrackView.frog_railhead_mesh(blade)
+		if bhi.mesh != null:
+			bhi.material_override = railhead_mat
+			rails_node.add_child(bhi)
+		var bfi := MeshInstance3D.new()
+		bfi.name = "%s@blade_fillet" % blade.element_id
+		bfi.mesh = TrackView.frog_rail_fillet_mesh(blade)
+		if bfi.mesh != null:
+			bfi.material_override = fillet_mat
+			rails_node.add_child(bfi)
+		blade_parts[blade.element_id] = {
+			"blade": blade, "node": bmi, "head": bhi, "fillet": bfi}
+	st["blades_drawn"] = blade_parts.size()
+	st["blades_skipped"] = bl["skipped"]
+	# Живые остряки подменяются ЦЕЛИКОМ и только на боевом пути — тот же довод и
+	# то же условие, что у приводов ниже: перестройка версии строит путь в
+	# стороне, и её узлы живыми не становятся до commit().
+	if parent == null:
+		_blades = blade_parts
 
 	# 5. Элементы, не покрытые НИ ОДНИМ прогоном, — нитью. Ни колеи, ни шпал, ни
 	#    ширины у них нет, и взять их у соседа запрещено: «размер неизвестен»
@@ -1980,17 +2136,118 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		bare_drawn += 1
 	st["bare_lines_drawn"] = bare_drawn
 
-	# 6. Крестовины — галочкой по обеим присланным касательным.
-	var fr := TrackBuild.frogs(network, by_id)
-	var frogs: Array[TrackBuild.Frog] = fr["list"]
-	var frog_mi := MeshInstance3D.new()
-	frog_mi.name = "Frogs"
-	frog_mi.mesh = TrackView.frog_mesh(frogs, FROG_WING_M, FROG_HALF_W_M)
-	if frog_mi.mesh != null:
-		frog_mi.material_override = TrackView.flat_material(Color(0.96, 0.28, 0.28), TrackView.PRIO_FROG, true)
-		node.add_child(frog_mi)
-	st["frogs_drawn"] = frogs.size()
-	st["frogs_skipped"] = fr["skipped"]
+	# 6. КРЕСТОВИНА ТЕЛОМ, А НЕ МЕТКОЙ.
+	#
+	# Здесь стояла ГАЛОЧКА — две плоские неосвещаемые полосы 1.4 × 0.14 м цвета
+	# (0.96, 0.28, 0.28), выложенные из теоретической точки по обеим касательным.
+	# Приём СХЕМЫ СВЕРХУ, разрешённый контрактом прямо: «длина галочки — штрих
+	# для читаемости, ничем не измеряется на месте». Крыло уже урезали однажды с
+	# 8 м до 1.4 м, когда оно стало «красной полосой во весь кадр».
+	#
+	# Урезание не лечило сути: мир перестал быть схемой, и в виде от первого лица
+	# штрих для читаемости — это красное пятно на шпалах. Владелец спросил «что за
+	# красное пятно?» и на ответ показал снимок настоящей крестовины со словами
+	# «делаем вот так» (ClearAhead-byoq).
+	#
+	# Теперь крестовина — НИТКИ: усовики и контррельсы приезжают геометрией
+	# (turnout_rails), сердечник остаётся пересечением самих ниток прохода.
+	# Точка крестовины из контракта НЕ УХОДИТ — она канонический адрес, — она
+	# просто перестала быть тем, что рисуют.
+	var fr := TrackBuild.frog_rails(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
+	var frog_rails: Array[TrackBuild.FrogRail] = fr["list"]
+	var frog_node := Node3D.new()
+	frog_node.name = "FrogRails"
+	node.add_child(frog_node)
+	var frog_drawn := 0
+	# ГРАНИ СЕРДЕЧНИКА КОПЯТСЯ ПО ВЛАДЕЛЬЦУ: тело отливки лежит МЕЖДУ двумя
+	# гранями одной стрелки, и построить его по одной записи нельзя.
+	var castings := {}
+	for fr_raw in frog_rails:
+		var rail: TrackBuild.FrogRail = fr_raw
+		if rail.kind == TrackBuild.FROG_CASTING:
+			if not castings.has(rail.owner):
+				castings[rail.owner] = []
+			(castings[rail.owner] as Array).append(rail)
+			continue
+		var mi := MeshInstance3D.new()
+		mi.name = "%s@%s" % [rail.element_id, rail.kind]
+		mi.mesh = TrackView.frog_rail_mesh(rail)
+		if mi.mesh == null:
+			continue
+		mi.material_override = rail_mat
+		frog_node.add_child(mi)
+		frog_drawn += 1
+		# НАКАТ ХОДОВОЙ НИТКИ. Пусто у контррельса — по нему колесо не катится, и
+		# блестеть ему не с чего.
+		var rhi := MeshInstance3D.new()
+		rhi.name = "%s@%s_head" % [rail.element_id, rail.kind]
+		rhi.mesh = TrackView.frog_railhead_mesh(rail)
+		if rhi.mesh != null:
+			rhi.material_override = railhead_mat
+			frog_node.add_child(rhi)
+		var rfi := MeshInstance3D.new()
+		rfi.name = "%s@%s_fillet" % [rail.element_id, rail.kind]
+		rfi.mesh = TrackView.frog_rail_fillet_mesh(rail)
+		if rfi.mesh != null:
+			rfi.material_override = fillet_mat
+			frog_node.add_child(rfi)
+	var cast_drawn := 0
+	for owner_id in castings:
+		var pair: Array = castings[owner_id]
+		if pair.size() != 2:
+			# Одна грань без пары — не отливка, а половина её. Пропускается
+			# молча: так выглядит ответ сервера, не знающего сердечника.
+			continue
+		var cmi := MeshInstance3D.new()
+		cmi.name = "%s@casting" % owner_id
+		cmi.mesh = TrackView.frog_casting_mesh(pair[0], pair[1])
+		if cmi.mesh == null:
+			continue
+		cmi.material_override = rail_mat
+		frog_node.add_child(cmi)
+		cast_drawn += 1
+		# ПЛОЩАДКА СЕРДЕЧНИКА — накатом: по ней колесо переходит с усовика на
+		# отливку, и она полируется так же, как головка рельса.
+		var chi := MeshInstance3D.new()
+		chi.name = "%s@casting_head" % owner_id
+		chi.mesh = TrackView.frog_casting_head_mesh(pair[0], pair[1])
+		if chi.mesh != null:
+			chi.material_override = railhead_mat
+			frog_node.add_child(chi)
+		var cfi := MeshInstance3D.new()
+		cfi.name = "%s@casting_fillet" % owner_id
+		cfi.mesh = TrackView.frog_casting_fillet_mesh(pair[0], pair[1])
+		if cfi.mesh != null:
+			cfi.material_override = fillet_mat
+			frog_node.add_child(cfi)
+	st["frog_castings_drawn"] = cast_drawn
+	st["frog_rails_drawn"] = frog_drawn
+	st["frog_rails_skipped"] = fr["skipped"]
+	# ГАБАРИТ ОДНОЙ КРЕСТОВИНЫ — для наводки кадра (frame=frog). Считается ЗДЕСЬ,
+	# а не у камеры: нитки уже построены, и второй проход по тем же точкам дал бы
+	# второй ответ на вопрос «где крестовина». Пустой габарит значит «крестовин не
+	# приехало», и кадр об этом скажет вслух.
+	#
+	# ОДНОЙ, а не всех: у двух крестовин ST_A общий габарит — 66 м, то есть вся
+	# горловина, а спрашивают у этого кадра про желоб в 46 мм. Берётся первая по
+	# каноническому порядку владельцев — тому же, в котором их отдаёт сервер.
+	var fowner := ""
+	for fr_raw in frog_rails:
+		var rail: TrackBuild.FrogRail = fr_raw
+		if fowner == "" or rail.owner < fowner:
+			fowner = rail.owner
+	var fbox := Rect2()
+	var fbox_any := false
+	for fr_raw in frog_rails:
+		var rail: TrackBuild.FrogRail = fr_raw
+		if rail.owner != fowner:
+			continue
+		for p_raw in rail.axis:
+			var p: TrackGeom.AxisPoint = p_raw
+			var cell := Rect2(Vector2(p.x, p.y), Vector2.ZERO)
+			fbox = cell if not fbox_any else fbox.merge(cell)
+			fbox_any = true
+	st["frog_box"] = fbox
 
 	# 7. Стрелка — ОДНО устройство, а не две независимые ветви.
 	#
@@ -3112,9 +3369,22 @@ func _frame_bbox(bbox: Rect2, elements: Array[TrackGeom.Element]) -> Rect2:
 				_fail("габарит «состав»: в партии нет ни одной поставленной единицы")
 				return bbox
 			return sb
+		"frog":
+			# КРЕСТОВИНА ВБЛИЗИ. Заведено 2026-08-16: жалоба владельца «крестовина
+			# выглядит плохо, там каша» проверялась нечем — обзорный кадр наводится
+			# на сеть целиком, и желоб в 46 мм в нём мельче пикселя, а зонд стрелки
+			# стоит у привода и смотрит вдоль пути, то есть мимо.
+			#
+			# Габарит — по ниткам крестовины, посчитанным при сборке. Своей
+			# арифметики у наводки нет: она берёт то, что нарисовано.
+			var fb: Rect2 = stats.get("frog_box", Rect2())
+			if fb.size == Vector2.ZERO:
+				_fail("габарит «крестовина»: ниток крестовины не приехало — наводиться не на что")
+				return bbox
+			return fb
 		"network":
 			return bbox
-	_fail("габарит «%s» неизвестен — знаю network, throat, terrain, stock" % frame)
+	_fail("габарит «%s» неизвестен — знаю network, throat, terrain, stock, frog" % frame)
 	return bbox
 
 
@@ -3398,7 +3668,7 @@ func _hud_text() -> String:
 			stats.get("rail_threads_drawn", 0), stats.get("rail_spans_drawn", 0)])
 		l.append("  платформ %d (плитой %d), упоров %d, крестовин %d, стрелок %d" % [
 			stats.get("platforms_drawn", 0), stats.get("platform_slabs_drawn", 0),
-			stats.get("buffer_stops_drawn", 0), stats.get("frogs_drawn", 0), stats.get("devices", 0)])
+			stats.get("buffer_stops_drawn", 0), stats.get("frog_rails_drawn", 0), stats.get("devices", 0)])
 		# Брусья ОТДЕЛЬНОЙ СТРОКОЙ от шпал, и это не оформление: они разного
 		# происхождения (устройство против прогона), и слитое число снова скрыло бы
 		# стрелку без единого бруса — ровно так дефект и жил (ClearAhead-7kv).
@@ -3539,7 +3809,7 @@ func _hud_text() -> String:
 		l.append("[color=#ffc060]сооружение пропущено — %s[/color]" % s)
 	for s in (stats.get("buffer_stops_skipped", []) as Array):
 		l.append("[color=#ffc060]упор пропущен — %s[/color]" % s)
-	for s in (stats.get("frogs_skipped", []) as Array):
+	for s in (stats.get("frog_rails_skipped", []) as Array):
 		l.append("[color=#ffc060]особенность пропущена — %s[/color]" % s)
 	for s in (stats.get("unknown_fields", []) as Array):
 		l.append("[color=#ffc060]прислано, но клиент такого поля не знает — %s[/color]" % s)
@@ -3585,10 +3855,14 @@ func _print_report() -> void:
 			"timbers_drawn", "timber_grids", "timbers_skipped",
 			"sleepers_skipped", "rail_bodies_drawn", "railheads_drawn",
 			"rail_threads_drawn", "rail_spans_drawn",
+			# ОСТРЯКИ: сколько проходов подвижны и сколько раз они переставлялись.
+			# Второе число — доказательство, что перевод стрелки доехал до рельсов,
+			# а не остановился на указателе.
+			"blades_drawn", "blades_moved", "frog_castings_drawn",
 			"trees_drawn", "trees_conifer", "trees_broadleaf", "bushes_drawn",
 			"grass_drawn", "grass_plants", "grass_plant_ms",
 			"grass_chunks", "grass_chunks_kept", "ballast_mask_cells",
-			"platforms_drawn", "platforms_skipped", "frogs_drawn", "frogs_skipped",
+			"platforms_drawn", "platforms_skipped", "frog_rails_drawn", "frog_rails_skipped",
 			"devices", "device_lines", "unknown_fields",
 			"chunks_requested", "chunks_got", "chunks_absent", "chunks_orphaned", "chunks_by_level",
 			"lod_nodes", "lod_anchors", "lod_linked",

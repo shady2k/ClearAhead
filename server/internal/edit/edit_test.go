@@ -109,7 +109,7 @@ func testBaseMap() *mapfmt.Map {
 				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
 				// Брусья обязательны у типа, на который ссылается стрелка: фикстуры
 				// правок стрелки содержат, и без блока карта не проходит вход.
-				Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20},
+				Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086},
 			}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUN, Name: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
@@ -154,7 +154,7 @@ func parallelBase() *mapfmt.Map {
 		},
 		Construction: &mapfmt.Construction{
 			DefaultType: eIDTYPE,
-			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}}},
+			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUNEA, Name: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: eIDEA, From: 0, To: 40, Direction: "forward"}}},
 				{ID: eIDRUNEB, Name: "RUN_EB", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: eIDEB, From: 0, To: 40, Direction: "forward"}}},
@@ -1225,7 +1225,7 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 		},
 		Construction: &mapfmt.Construction{
 			DefaultType: eIDTYPE,
-			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}}},
+			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUN56, Name: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: eIDE5, From: 0, To: 100, Direction: "forward"},

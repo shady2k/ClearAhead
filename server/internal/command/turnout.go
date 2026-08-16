@@ -1,8 +1,10 @@
 package command
 
 import (
+	"github.com/shady2k/ClearAhead/server/internal/content"
 	"github.com/shady2k/ClearAhead/server/internal/match"
 	"github.com/shady2k/ClearAhead/server/internal/track"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // SetTurnout — перевести остряк стрелки.
@@ -21,10 +23,16 @@ type SetTurnout struct {
 	// загрузки, и общий указатель на неё — разделяемая константа, а не
 	// разделяемое изменяемое состояние.
 	//
-	// НАБОРА КОНТЕНТА ЗДЕСЬ НЕТ, хотя занятость и зависит от длины машины: с
-	// приходом отрезка пути (ClearAhead-7n0v) длина уже учтена в самом отрезке,
-	// и спрашивать её у паспорта второй раз незачем.
 	Net *track.CompiledNetwork
+	// Set — набор контента. Появился здесь 2026-08-16 вместе с переводом во
+	// времени: сколько идёт остряк — свойство РОДА МЕХАНИЗМА, а роды объявлены
+	// файлами тел в наборе.
+	//
+	// Прежде набора тут не было, и запись об этом стоит сохранить целиком:
+	// «занятость зависит от длины машины, но с приходом отрезка пути длина уже
+	// учтена в самом отрезке, и спрашивать её у паспорта второй раз незачем».
+	// Довод верен и сегодня — набор приехал за другим.
+	Set *content.Set
 }
 
 // Name — имя правки для журнала и логов.
@@ -37,5 +45,26 @@ func (SetTurnout) Name() string { return "turnout.set" }
 // где состояние. Иначе вторая дорога к тому же полю — замыкание маршрута,
 // которое придёт с централизацией, — прошла бы мимо проверки занятости.
 func (c SetTurnout) Apply(m *match.Match) error {
-	return m.SetTurnout(c.Turnout, c.Position, c.Net)
+	return m.SetTurnout(c.Turnout, c.Position, c.Net, c.throwTime())
+}
+
+// throwTime — сколько идёт остряк у механизма ЭТОЙ стрелки.
+//
+// Считается ЗДЕСЬ, а не в партии: род механизма записан в сети, время рода — в
+// наборе, и партия не знает ни того ни другого. Ноль означает «время взять
+// неоткуда» — набора нет, устройства нет, механизм не объявлен, — и тогда
+// остряк встаёт сразу, как было до появления перевода во времени.
+func (c SetTurnout) throwTime() units.SimTime {
+	if c.Set == nil || c.Net == nil {
+		return 0
+	}
+	dev, ok := c.Net.Devices[c.Turnout]
+	if !ok {
+		return 0
+	}
+	secs, ok := c.Set.DriveThrow(dev.Drive)
+	if !ok || secs <= 0 {
+		return 0
+	}
+	return units.SimTime(secs * float64(units.Second))
 }

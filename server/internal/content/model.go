@@ -136,6 +136,14 @@ const (
 	StatePosition = "position"
 	// StateHand — в какую сторону уходит боковой путь: left | right.
 	StateHand = "hand"
+	// MeasureReach — ДЛИНА ПЕРЕВОДНОЙ ТЯГИ: от станины привода до дальнего
+	// остряка, метры. Величина, а не состояние: число, а не строка.
+	MeasureReach = "reach"
+	// MinThrowSeconds и MaxThrowSeconds — границы времени перевода. Отвергают
+	// заведомо невозможное: перевод за сотую долю секунды — это прыжок, за
+	// минуту — не механизм, а поломка.
+	MinThrowSeconds = 0.3
+	MaxThrowSeconds = 60.0
 	// StateSide — с какой стороны от оси пути стоит само устройство:
 	// left | right. Им разворачиваются части, обращённые К ПУТИ, — номерная
 	// табличка и рабочая тяга.
@@ -147,8 +155,12 @@ const (
 
 var (
 	pivotStates = map[string]bool{StatePosition: true, StateHand: true, StateSide: true}
-	labelStates = map[string]bool{StateName: true}
-	colourRe    = regexp.MustCompile(`^#[0-9a-f]{6}$`)
+	// Величины, которые мир присылает ЧИСЛОМ. Растяжимая часть вправе спросить
+	// только их: имя, которого мир не знает, — это часть, которая никогда не
+	// получит своего размера, и отказ на входе честнее пустого места в кадре.
+	stretchMeasures = map[string]bool{MeasureReach: true}
+	labelStates     = map[string]bool{StateName: true}
+	colourRe        = regexp.MustCompile(`^#[0-9a-f]{6}$`)
 )
 
 // Model — описание тела предмета.
@@ -179,10 +191,36 @@ type Model struct {
 	// ЗДЕСЬ, А НЕ В КЛИЕНТЕ, по тому же доводу, что и всё остальное в этом файле:
 	// до 2026-08-15 обе строки были зашиты в turnout_panel.gd, и второй клиент
 	// назвал бы то же устройство иначе.
-	Title  string `json:"title"`
-	Axes   string `json:"axes"`
-	Units  string `json:"units"`
-	Angles string `json:"angles"`
+	Title string `json:"title"`
+	// ThrowSeconds — СКОЛЬКО ИДЁТ ОСТРЯК при переводе этим механизмом, секунды
+	// модельного времени.
+	//
+	// # Почему число механизма живёт в файле тела
+	//
+	// Потому что это свойство РОДА МЕХАНИЗМА, а файл тела и есть единственная
+	// запись о роде: он же объявляет device и title. Завести перечень «род →
+	// время» рядом значило бы третью сущность в согласии с двумя другими —
+	// ровно то, от чего отказались, когда убирали Devices.
+	//
+	// Это НЕ размер тела: время перевода читает физика партии, а не показ.
+	// Соседство с примитивами тут кажется случайным, но альтернатива хуже: у
+	// рода механизма нет другого дома, а карта повторяла бы одно число у каждой
+	// стрелки и рано или поздно разошлась бы сама с собой.
+	//
+	// ЧИСЛА ПРЕДВАРИТЕЛЬНЫЕ, и первая же пара оказалась вдвое великоватой:
+	// владелец сказал «стрелка очень медленно переключается» (2026-08-16) про
+	// 4 с у ручного и 2.5 с у электрического. Порядок был выбран на глаз, и на
+	// глаз же поправлен: ручной перевод — одно резкое движение рычага, около
+	// секунды; электропривод ведёт остряк размеренно, около двух.
+	//
+	// РУЧНОЙ БЫСТРЕЕ ЭЛЕКТРИЧЕСКОГО, и это не описка: рукой дёргают, привод
+	// доводит. Прежняя пара утверждала обратное и была неверна вдвойне.
+	//
+	// Норм за этими числами нет. Появится источник — поменяются вместе с ним.
+	ThrowSeconds float64 `json:"throw_seconds"`
+	Axes         string  `json:"axes"`
+	Units        string  `json:"units"`
+	Angles       string  `json:"angles"`
 	// Materials — палитра модели. Ссылка по имени, а не цвет у каждой части:
 	// одна краска на десяти деталях правится один раз, и десять деталей не
 	// расходятся в оттенке.
@@ -223,6 +261,7 @@ type Part struct {
 	Mark      *Mark      `json:"mark,omitempty"`
 	Label     *Label     `json:"label,omitempty"`
 	Pivot     *Pivot     `json:"pivot,omitempty"`
+	Stretch   *Stretch   `json:"stretch,omitempty"`
 	Parts     []Part     `json:"parts,omitempty"`
 }
 
@@ -238,18 +277,51 @@ type Pivot struct {
 	States map[string]float64 `json:"states"`
 }
 
-// Mark — ЗНАК НА ЩИТКЕ: замкнутый многоугольник в долях щитка.
+// Stretch — РАСТЯЖИМОСТЬ части: её размер вдоль оси берётся из ВЕЛИЧИНЫ МИРА.
 //
-// Многоугольником, а не картинкой, по той же причине, по которой тело —
+// # Зачем нужна вторая связь с миром, если есть pivot
+//
+// Pivot ПОВОРАЧИВАЕТ по состоянию-строке. Этого хватало, пока всё подвижное у
+// привода вращалось: балансир, указатель, стрела. Не хватило на ПЕРЕВОДНОЙ
+// ТЯГЕ — стержне от станины до остряка.
+//
+// Длина тяги не свойство тела: она есть расстояние от станины до остряка, а
+// вынос станины считает сервер по габариту бруса и типу пути. Впиши в модель
+// любую константу — и на карте с другой колеёй или другим выносом тяга окажется
+// в воздухе либо в рельсе. Ровно это и было до 2026-08-16: у ручного привода
+// тяги не было вовсе, у электрического она была длиной 0.6 м при расстоянии до
+// нитки 1.115 м (ClearAhead-bsjq, слово владельца: «сам девайс стоит, но он не
+// прикреплён к рельсу»).
+//
+// # Растяжимая часть авторится ЕДИНИЧНОЙ
+//
+// Размер вдоль оси у неё — ровно 1, и мир умножает его на присланную величину.
+// Иначе пришлось бы объявлять ещё и авторский размер, чтобы делить на него, —
+// то есть держать в файле число, которое ничего не значит само по себе.
+type Stretch struct {
+	Axis string `json:"axis"`
+	// By — ЧТО спрашивать у мира: имя ВЕЛИЧИНЫ (Measure*). Величина — число, в
+	// отличие от состояния (Pivot.By), которое строка.
+	By string `json:"by"`
+}
+
+// Mark — ЗНАК НА ЩИТКЕ: замкнутые многоугольники в долях щитка.
+//
+// Многоугольниками, а не картинкой, по той же причине, по которой тело —
 // примитивами: картинку пришлось бы нарисовать, а её у нас нет, и вдобавок она
 // была бы растром с собственным разрешением. Доли щитка переживают любой размер
 // и читаются любым рендером.
 //
+// НЕСКОЛЬКО КОНТУРОВ, а не один (2026-08-16). Знак стрелочного указателя — не
+// одна фигура: на неосвещаемой флюгарке это ДВА чёрных шеврона друг за другом
+// (снимки владельца). Одним замкнутым контуром такое описывается только через
+// перемычку между галками, то есть рисованием того, чего на щитке нет.
+//
 // Начало координат — левый нижний угол щитка, если смотреть на его лицо.
 type Mark struct {
-	Polygon   [][2]float64 `json:"polygon"`
-	Material  string       `json:"material"`
-	BothSides bool         `json:"both_sides"`
+	Polygons  [][][2]float64 `json:"polygons"`
+	Material  string         `json:"material"`
+	BothSides bool           `json:"both_sides"`
 }
 
 // Label — НАДПИСЬ НА ЩИТКЕ. Текст не в модели: он приходит из мира по имени
@@ -292,6 +364,11 @@ func ParseModel(name string, raw []byte) (*Model, error) {
 	if !mapfmt.KnownDrive(m.Device) {
 		return nil, fmt.Errorf("content: модель %s: род механизма %q неизвестен; знаю %v",
 			name, m.Device, mapfmt.Drives)
+	}
+	if !(m.ThrowSeconds >= MinThrowSeconds && m.ThrowSeconds <= MaxThrowSeconds) {
+		return nil, fmt.Errorf("content: модель %s: время перевода %v с вне [%v, %v] — "+
+			"мгновенный перевод это прыжок остряка, а минутный не механизм",
+			name, m.ThrowSeconds, MinThrowSeconds, MaxThrowSeconds)
 	}
 	if m.Title == "" {
 		return nil, fmt.Errorf("content: модель %s: не названо имя устройства (title) — "+
@@ -441,6 +518,15 @@ func (m Model) checkPart(model, path string, p Part) error {
 			return fmt.Errorf("%s: кегль надписи %v вне (0, 1] долей высоты щитка", where, p.Label.Height)
 		}
 	}
+	if p.Stretch != nil {
+		if err := checkAxis(where, p.Stretch.Axis); err != nil {
+			return err
+		}
+		if !stretchMeasures[p.Stretch.By] {
+			return fmt.Errorf("%s: растяжимость по величине %q, которой мир не присылает; знаю %q",
+				where, p.Stretch.By, MeasureReach)
+		}
+	}
 	if p.Pivot != nil {
 		if err := checkAxis(where, p.Pivot.Axis); err != nil {
 			return err
@@ -470,13 +556,18 @@ func (m Model) checkPart(model, path string, p Part) error {
 }
 
 func (m Model) checkMark(where string, k Mark) error {
-	if len(k.Polygon) < 3 {
-		return fmt.Errorf("%s: знак из %d точек — многоугольника не выходит", where, len(k.Polygon))
+	if len(k.Polygons) == 0 {
+		return fmt.Errorf("%s: знак без единого контура — рисовать нечего", where)
 	}
-	for i, pt := range k.Polygon {
-		for j, v := range pt {
-			if math.IsNaN(v) || v < 0 || v > 1 {
-				return fmt.Errorf("%s: точка знака %d[%d] = %v вне [0, 1] долей щитка", where, i, j, v)
+	for c, poly := range k.Polygons {
+		if len(poly) < 3 {
+			return fmt.Errorf("%s: контур %d знака из %d точек — многоугольника не выходит", where, c, len(poly))
+		}
+		for i, pt := range poly {
+			for j, v := range pt {
+				if math.IsNaN(v) || v < 0 || v > 1 {
+					return fmt.Errorf("%s: точка знака %d.%d[%d] = %v вне [0, 1] долей щитка", where, c, i, j, v)
+				}
 			}
 		}
 	}
@@ -544,4 +635,18 @@ func (s *Set) loadModels() error {
 func (s *Set) ModelOf(kind string) (*Model, bool) {
 	m, ok := s.models[kind]
 	return m, ok
+}
+
+// DriveThrow — сколько идёт остряк у механизма этого рода, секунды.
+//
+// Спрашивают КОМАНДА перевода и никто больше: физике нужно число, а не тело.
+// Отсутствие рода — не ошибка набора, а вопрос о механизме, которого в нём нет,
+// и отвечать на него подстановкой нельзя: стрелка с выдуманным временем
+// перевода переводилась бы не так, как объявлено.
+func (s *Set) DriveThrow(kind string) (float64, bool) {
+	m, ok := s.models[kind]
+	if !ok {
+		return 0, false
+	}
+	return m.ThrowSeconds, true
 }

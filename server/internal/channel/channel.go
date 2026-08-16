@@ -303,6 +303,7 @@ func (h *Handler) setTurnout(ctx context.Context, req protocol.TurnoutRequest) (
 		Turnout:  req.Turnout(),
 		Position: req.Position(),
 		Net:      h.net,
+		Set:      h.set,
 	})
 	select {
 	case err := <-done:
@@ -312,10 +313,29 @@ func (h *Handler) setTurnout(ctx context.Context, req protocol.TurnoutRequest) (
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
-	// Ответ — ПОЛОЖЕНИЕ, КОТОРОЕ ВСТАЛО, а не эхо запроса: то же правило, что у
-	// кабины. Клиент показывает щелчок немедленно и сверяется с этим ответом.
+	// Ответ — ПОЛОЖЕНИЕ, КУДА ОСТРЯК ИДЁТ, а не эхо запроса и не то, что стоит
+	// сейчас.
+	//
+	// До 2026-08-16 это было «положение, которое встало»: перевод случался в тот
+	// же тик, и разницы между «встало» и «идёт» не существовало. Перевод стал
+	// процессом, и стоящего положения в ответе больше нет вовсе — стрелка в
+	// переводе не стоит нигде. Вернуть пустое значило бы ответить «никуда» на
+	// команду, которая принята и исполняется.
+	//
+	// Правило при этом ТО ЖЕ: ответ говорит о состоянии мира, а не повторяет
+	// просьбу. Совпадение с просьбой здесь — следствие того, что просьбу
+	// приняли; при развороте на ходу ответ назовёт новую цель, а не прежнюю.
 	snap := h.e.Snapshot()
-	return turnoutResult{Turnout: req.Turnout(), Position: snap.Match.TurnoutAt(req.Turnout())}, nil
+	return turnoutResult{Turnout: req.Turnout(), Position: turnoutGoal(snap.Match, req.Turnout())}, nil
+}
+
+// turnoutGoal — куда остряк идёт или где стоит. Одно слово о стрелке для того,
+// кто спросил её состояние сразу после команды.
+func turnoutGoal(m match.Match, id string) string {
+	if mv, ok := m.TurnoutMoves[id]; ok && mv.Left > 0 {
+		return mv.To
+	}
+	return m.TurnoutAt(id)
 }
 
 // turnoutResult — ответ на команду перевода стрелки.

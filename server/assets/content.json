@@ -6,13 +6,28 @@
       "file": "vl80.glb",
       "media_type": "model/gltf-binary",
       "source_hash": "sha256-aa84b78c2cfbb9eca7551fe3a03e14c5fac66d7da2c97a4082f82c0ca9cdda26",
-      "drop_nodes": ["vl80tk1.002_10", "vl80tk1.003_11"],
+      "drop_nodes": [
+        "vl80tk1.002_10",
+        "vl80tk1.003_11"
+      ],
       "anchor": "rail_top_gauge_center",
       "scale": 1.0286,
-      "translation": [0, 0, 8.451],
+      "translation": [
+        0,
+        0,
+        8.451
+      ],
       "cabs": [
-        [0, 1.726, 6.89],
-        [0, 1.726, -23.197]
+        [
+          0,
+          1.726,
+          6.89
+        ],
+        [
+          0,
+          1.726,
+          -23.197
+        ]
       ],
       "attribution": {
         "title": "Electric Freight Locomotive",
@@ -27,10 +42,14 @@
       "name": "switch_stand_manual",
       "file": "switch_stand_manual.model.json",
       "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-ce9bbeb32aecdf352a1d9580f94140f1a2990f11bc48c57e7745a7ebe212c93d",
+      "source_hash": "sha256-ab158455aa7a03a34ea0d18e9d0d2325dd9bca74a46c40460f4e07157b7e6997",
       "anchor": "tie_top",
       "scale": 1.0,
-      "translation": [0, 0, 0],
+      "translation": [
+        0,
+        0,
+        0
+      ],
       "attribution": {
         "title": "Ручной переводной механизм со стрелочным указателем",
         "author": "ClearAhead",
@@ -43,10 +62,14 @@
       "name": "switch_stand_electric",
       "file": "switch_stand_electric.model.json",
       "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-131189d32931a260d7ea02acf3ce0d3a2038ad0743b98c91c71c44f2295fb25e",
+      "source_hash": "sha256-0b0284adc043c00d05bff0c8ae01e548985c343322743d4bb622d3c2e4b74cdf",
       "anchor": "tie_top",
       "scale": 1.0,
-      "translation": [0, 0, 0],
+      "translation": [
+        0,
+        0,
+        0
+      ],
       "attribution": {
         "title": "Электропривод стрелки со стрелочным указателем",
         "author": "ClearAhead",
@@ -65,7 +88,11 @@
       "height": 5.4,
       "mass": 192,
       "max_speed": 110,
-      "resistance": { "a": 1.9, "b": 0.01, "c": 0.0003 },
+      "resistance": {
+        "a": 1.9,
+        "b": 0.01,
+        "c": 0.0003
+      },
       "brake": {
         "shoes": "cast_iron",
         "braked_axles": 8,
@@ -97,27 +124,47 @@
         "keys": {
           "traction": {
             "name": "контроллер тяги",
-            "up": ["W", "2"],
-            "down": ["S", "1"]
+            "up": [
+              "W",
+              "2"
+            ],
+            "down": [
+              "S",
+              "1"
+            ]
           },
           "reverser": {
             "name": "реверсор (при нулевой тяге)",
-            "up": ["R"],
-            "down": ["shift+R"]
+            "up": [
+              "R"
+            ],
+            "down": [
+              "shift+R"
+            ]
           },
           "handle": {
             "name": "кран машиниста № 395 по сектору",
-            "up": ["D"],
-            "down": ["A"]
+            "up": [
+              "D"
+            ],
+            "down": [
+              "A"
+            ]
           },
           "independent": {
             "name": "кран вспомогательного тормоза",
-            "up": ["X"],
-            "down": ["Z"]
+            "up": [
+              "X"
+            ],
+            "down": [
+              "Z"
+            ]
           },
           "release": {
             "name": "экстренная остановка",
-            "up": ["0"]
+            "up": [
+              "0"
+            ]
           }
         }
       },

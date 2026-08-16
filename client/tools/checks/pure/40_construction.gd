@@ -129,22 +129,77 @@ func run() -> void:
 	# ДЛИНА БРУСА РАСТЁТ К ХВОСТУ И НЕ ПРЕВОСХОДИТ КОМПЛЕКТА. Это и есть то
 	# единственное, чем брус отличается от шпалы, и проверять его надо не тем
 	# кодом, который его считает: здесь сверяется ПОРЯДОК длин, а не сами длины.
+	#
+	# ИСКЛЮЧЕНИЕ — БРУСЬЯ ПОД ПРИВОДОМ, и оно не поблажка. С 2026-08-16 станина
+	# стоит НА решётке, а не за её концом (до того — на откосе призмы, ящиком в
+	# воздухе), и брусья под ней специально длиннее соседних. Монотонности там
+	# нет и быть не может: длина подскакивает у станины и падает сразу за ней.
+	# Проверяется поэтому монотонность ОСТАЛЬНОЙ решётки плюс отдельное
+	# утверждение — что подскок ровно один и он у привода.
+	var drives := TrackBuild.drives(network, by_id)
+	var drive_u := {}
+	for d_raw in (drives["list"] as Array):
+		var d: TrackBuild.TurnoutDrive = d_raw
+		drive_u[d.owner] = d
 	for g_raw in (tb["grids"] as Array):
 		var g: Dictionary = g_raw
 		var own: Array[TrackBuild.Sleeper] = []
 		for t in timbers:
 			if t.run_id == String(g["owner"]):
 				own.append(t)
+		# Брусья привода: те, что длиннее обоих соседей. Ищутся ПО ДЛИНАМ, а не по
+		# адресу привода: проверка обязана увидеть подскок сама, иначе она
+		# проверяла бы своё же предположение о том, где он.
+		var bump := {}
+		for n in range(1, own.size() - 1):
+			if own[n].length_m > own[n - 1].length_m + 1e-9 and own[n].length_m > own[n + 1].length_m + 1e-9:
+				bump[n] = true
 		var falls := 0
 		for n in range(1, own.size()):
 			# Не строгое возрастание: у длиннейших брусьев комплект упирается в
-			# предел, и дальше длина стоит. Падать она не вправе никогда.
+			# предел, и дальше длина стоит. Падать она не вправе никогда — кроме
+			# ступеньки вниз сразу за подскоком у привода.
+			if bump.has(n) or bump.has(n - 1) or bump.has(n - 2):
+				continue
 			if own[n].length_m < own[n - 1].length_m - 1e-9:
 				falls += 1
 		var tt: Dictionary = types.get(String(g["type"]), {}) as Dictionary
 		_ok("решётка %s: длина бруса не убывает к хвосту" % String(g["owner"]).substr(0, 8),
 			falls == 0, "брусьев %d, длина %.2f…%.2f м, падений %d" % [
 				own.size(), float(g["length_min"]), float(g["length_max"]), falls])
+		# ПРИВОД СТОИТ НА БРУСЬЯХ. Замер, ради которого правило заведено: брус в
+		# сечении привода был 2.757 м (полудлина 1.378) при выносе станины 1.875 и
+		# полуширине призмы 1.75 — ящик висел на откосе. Проверяется то, что видно:
+		# край длинного бруса ушёл в сторону станины дальше самой станины.
+		var owner_id := String(g["owner"])
+		if drive_u.has(owner_id) and not bump.is_empty():
+			var d: TrackBuild.TurnoutDrive = drive_u[owner_id]
+			# Сырые записи решётки, а не разобранные брусья: у Sleeper поза уже
+			# СДВИНУТА на смещение центра, и вычесть его обратно значило бы завести
+			# у проверки свою арифметику вместо присланных чисел.
+			var raw: Array = _raw_timbers(network, owner_id)
+			var side := signf(d.offset_m)
+			var carried := 0
+			var near_drive := 0
+			for n in bump:
+				if n >= raw.size():
+					continue
+				var tb_one: Dictionary = raw[n] as Dictionary
+				var u := float(tb_one.get("u", 0.0))
+				var off := float(tb_one.get("offset", 0.0))
+				var len_m := float(tb_one.get("length", 0.0))
+				if absf(u - d.pose.u) <= 1.0:
+					near_drive += 1
+				# Край бруса со стороны станины: центр плюс половина длины туда же.
+				if (off + side * len_m * 0.5) * side >= absf(d.offset_m):
+					carried += 1
+			_ok("решётка %s: длинные брусья стоят у привода" % owner_id.substr(0, 8),
+				near_drive == bump.size(),
+				"подскоков %d, из них у привода %d" % [bump.size(), near_drive])
+			_ok("решётка %s: станина опирается на брус, а не висит за его концом" % owner_id.substr(0, 8),
+				carried == bump.size(),
+				"вынос станины %.3f м, брусьев под ней %d из %d" % [
+					absf(d.offset_m), carried, bump.size()])
 		# УПОР В КОМПЛЕКТ (length_max) ЗДЕСЬ НЕ ПРОВЕРЯЕТСЯ, и это решение, а не
 		# пропуск: числа комплекта в проводе нет — предел применяет сервер, а
 		# клиенту для рисования он не нужен. Проверка «не длиннее комплекта» на
@@ -340,3 +395,15 @@ func _span_of(network: Dictionary, p: TrackBuild.PlatformStrip) -> Dictionary:
 			if String(sp.get("element", "")) == p.element_id:
 				return sp
 	return {}
+
+## _raw_timbers — брусья решётки как их прислал сервер, в присланном порядке.
+##
+## Нужны там, где проверяется ГЕОМЕТРИЯ бруса: у разобранного Sleeper поза уже
+## сдвинута на смещение центра, и восстанавливать его вычитанием значило бы
+## завести у проверки собственную арифметику вместо присланных чисел.
+func _raw_timbers(network: Dictionary, owner_id: String) -> Array:
+	for g_raw in (network.get("turnout_grids", []) as Array):
+		var g: Dictionary = g_raw as Dictionary
+		if String(g.get("owner", "")) == owner_id:
+			return g.get("timbers", []) as Array
+	return []

@@ -31,7 +31,11 @@ func timberTypes(lengthMax float64) map[string]mapfmt.TrackType {
 func sw1Grid(t *testing.T, lengthMax float64) *RenderTurnoutGrid {
 	t.Helper()
 	els := frogEls(mustChain(t, primStraight(t, 33.5)), mustChain(t, primArc(t, 300, -0.1107)))
-	g, err := turnoutGrid(els, timberTypes(lengthMax), frogConstruction(), sw1Right())
+	// Решётка БЕЗ ПРИВОДА: этот помощник проверяет правило длины как таковое, а
+	// удлинение под станину — своим тестом. Передай сюда привод, и оба правила
+	// мерились бы одним числом.
+	g, err := turnoutGrid(els, timberTypes(lengthMax), frogConstruction(), sw1Right(),
+		RenderTurnoutDrive{}, false)
 	if err != nil {
 		t.Fatalf("решётка стрелки: %v", err)
 	}
@@ -135,7 +139,7 @@ func TestTimberLengthStopsAtSetLimit(t *testing.T) {
 // возвращать её нельзя.
 func TestTimberGridRefusesTypeWithoutTimber(t *testing.T) {
 	els := frogEls(mustChain(t, primStraight(t, 33.5)), mustChain(t, primArc(t, 300, -0.1107)))
-	_, err := turnoutGrid(els, frogTypes(), frogConstruction(), sw1Right())
+	_, err := turnoutGrid(els, frogTypes(), frogConstruction(), sw1Right(), RenderTurnoutDrive{}, false)
 	if err == nil {
 		t.Fatal("тип без блока timber принят — стрелка осталась бы без решётки молча")
 	}
@@ -167,3 +171,62 @@ func TestTimberGridOnShippedMap(t *testing.T) {
 
 // geom импортируется ради фикстур примитивов, общих с крестовиной.
 var _ = geom.Chain{}
+
+// TestTimbersCarryTheDrive — ПРИВОД СТОИТ НА БРУСЬЯХ, А НЕ ЗА ИХ КОНЦОМ.
+//
+// Замер, ради которого правило заведено (ST_A, 2026-08-16): брус в сечении
+// привода был 2.757 м — полудлина 1.378, — станина отнесена на 1.875, полуширина
+// балласта 1.75. Ящик стоял на откосе призмы, ни на что не опираясь; владелец
+// нашёл это глазами на кадре.
+//
+// Проверяется СЛЕДСТВИЕ, которое видно: край бруса со стороны станины дальше
+// самой станины, и только у брусьев в окне вокруг неё — иначе под приводом
+// вырос бы помост во всю длину перевода.
+func TestTimbersCarryTheDrive(t *testing.T) {
+	m := seedmap.Station()
+	_, rg, err := Compile(m)
+	if err != nil {
+		t.Fatalf("компиляция: %v", err)
+	}
+	drives := map[string]RenderTurnoutDrive{}
+	for _, d := range rg.TurnoutDrives {
+		drives[d.Owner] = d
+	}
+	if len(drives) == 0 {
+		t.Fatal("приводов не посчитано — проверять нечего")
+	}
+	for _, g := range rg.TurnoutGrids {
+		d, ok := drives[g.Owner]
+		if !ok {
+			continue
+		}
+		// Сторона станины: знак выноса. Край бруса с этой стороны — центр плюс
+		// половина длины в ту же сторону.
+		side := math.Copysign(1, d.Offset)
+		under, wide := 0, 0
+		for _, tb := range g.Timbers {
+			edge := (tb.Offset + side*tb.Length/2) * side // насколько ушёл от оси в сторону станины
+			near := math.Abs(tb.U-d.U) <= DriveTimberWindow
+			if near {
+				under++
+				if edge < math.Abs(d.Offset) {
+					t.Fatalf("стрелка %s: брус на u=%.2f уходит к станине на %.3f м, а станина на %.3f м — она за концом бруса",
+						g.Owner, tb.U, edge, math.Abs(d.Offset))
+				}
+			}
+			if edge > math.Abs(d.Offset) {
+				wide++
+			}
+		}
+		if under < 2 {
+			t.Fatalf("стрелка %s: под приводом %d бруса — станина повиснет между ними", g.Owner, under)
+		}
+		// ОКНО, А НЕ ПОМОСТ: длинные брусья только под приводом. Число берётся из
+		// шага решётки — сколько брусьев попадает в окно, столько и вправе быть
+		// длинными.
+		if wide > under {
+			t.Fatalf("стрелка %s: длинных брусьев %d при %d в окне привода — помост вместо опоры",
+				g.Owner, wide, under)
+		}
+	}
+}

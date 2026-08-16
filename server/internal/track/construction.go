@@ -40,7 +40,14 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 			ID:    t.ID,
 			Name:  t.Name,
 			Gauge: t.Gauge,
-			Rail:  RenderRail{Height: t.Rail.Height, HeadWidth: t.Rail.HeadWidth},
+			Rail: RenderRail{
+				Height:    t.Rail.Height,
+				HeadWidth: t.Rail.HeadWidth,
+				// СЕЧЕНИЕ КОПИРУЕТСЯ, А НЕ ОТДАЁТСЯ ССЫЛКОЙ на срез карты: контракт
+				// живёт дольше разбора, и общий массив дал бы двум сторонам одну
+				// память.
+				Section: railSection(t.Rail.Section),
+			},
 			Sleeper: RenderSleeper{
 				Pitch:  t.Sleeper.Pitch,
 				Length: t.Sleeper.Length,
@@ -89,4 +96,20 @@ func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 		rg.ConstructionRuns = append(rg.ConstructionRuns, rr)
 	}
 	return nil
+}
+
+// railSection — сечение рельса в провод.
+//
+// Пары чисел, а не структуры с именами полей: у сечения дюжина вершин, и на
+// проводе таблица пар и читается, и весит меньше. Оси и датумы объявлены один
+// раз — у mapfmt.TrackRail.Section, и здесь не повторяются.
+func railSection(src []mapfmt.SectionPoint) [][2]float64 {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([][2]float64, len(src))
+	for i, p := range src {
+		out[i] = [2]float64{p.X(), p.Y()}
+	}
+	return out
 }

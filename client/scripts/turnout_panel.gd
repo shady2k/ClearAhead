@@ -129,7 +129,13 @@ func _draw() -> void:
 	# осталось, — иначе она наезжает на слово, а слово на строку, и первый же
 	# снимок показывает две надписи одна поверх другой (так и вышло).
 	var word_y := h - pad - px(22.0)
+	# СХЕМА ПОКАЗЫВАЕТ ТУ ВЕТВЬ, К КОТОРОЙ ИДЁТ ОСТРЯК. Пока перевод идёт,
+	# положения нет, и схема по нему нарисовала бы обе ветви мёртвыми — то есть
+	# стрелку, по которой нельзя никуда. Ехать по ней и правда нельзя, но
+	# спрашивают пульт не об этом, а о том, куда она встанет.
 	var pos := String(target.get("position", ""))
+	if bool(target.get("moving", false)):
+		pos = String(target.get("to", ""))
 	_draw_fork(Rect2(pad, pad + px(44.0), w - pad * 2, word_y - pad - px(58.0)),
 		pos, String(target.get("hand", "")))
 	_text(Vector2(pad, word_y), _position_word(pos), C_TEXT, int(px(14.0)))
@@ -197,6 +203,19 @@ func _draw_fork(r: Rect2, pos: String, hand: String) -> void:
 ## Неизвестное положение НЕ ПЕРЕВОДИТСЯ в «наверное, прямо»: сервер прислал то,
 ## чего клиент не знает, и назвать это прямым было бы враньём про остряк.
 func _position_word(pos: String) -> String:
+	# ПЕРЕВОД — ОТДЕЛЬНОЕ СЛОВО, а не «положение неизвестно». Пока остряк идёт,
+	# положения нет вовсе (сервер отдаёт пусто), и назвать это неизвестностью
+	# значило бы объявить поломкой то, что игрок сам только что и сделал.
+	if bool(target.get("moving", false)):
+		var to := String(target.get("to", ""))
+		var p := int(round(clampf(float(target.get("progress", 0.0)), 0.0, 1.0) * 100.0))
+		match to:
+			LiveChannel.TURNOUT_STRAIGHT:
+				return "переводится на прямой путь — %d %%" % p
+			LiveChannel.TURNOUT_DIVERGING:
+				return "переводится на боковой путь — %d %%" % p
+			_:
+				return "переводится — %d %%" % p
 	match pos:
 		LiveChannel.TURNOUT_STRAIGHT:
 			return "стоит по прямому пути"

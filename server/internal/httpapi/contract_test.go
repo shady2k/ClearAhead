@@ -35,28 +35,84 @@ import (
 // ответ, и различитель заводится ЗАРАНЕЕ — поле в персистентных данных дешевле
 // всего добавить вслепую и дороже всего мигрировать (разбор в mapfmt.KindRail).
 type wireNetwork struct {
-	Region             string             `json:"region"`
-	Revision           int                `json:"revision"`
-	Elements           []wireElement      `json:"elements"`
-	Structures         []wireStructure    `json:"structures"`
-	TrackTypes         []wireTrackType    `json:"track_types"`
-	ConstructionRuns   []wireRun          `json:"construction_runs"`
-	TurnoutGrids       []wireTurnoutGrid  `json:"turnout_grids"`
-	TurnoutDrives      []wireTurnoutDrive `json:"turnout_drives"`
-	Features           []wireFeature      `json:"features"`
-	PlacementAlgorithm string             `json:"placement_algorithm"`
+	Region             string               `json:"region"`
+	Revision           int                  `json:"revision"`
+	Elements           []wireElement        `json:"elements"`
+	Structures         []wireStructure      `json:"structures"`
+	TrackTypes         []wireTrackType      `json:"track_types"`
+	ConstructionRuns   []wireRun            `json:"construction_runs"`
+	TurnoutGrids       []wireTurnoutGrid    `json:"turnout_grids"`
+	TurnoutDrives      []wireTurnoutDrive   `json:"turnout_drives"`
+	TurnoutBlades      []wireTurnoutBlade   `json:"turnout_blades"`
+	TurnoutRails       []wireTurnoutRail    `json:"turnout_rails"`
+	TurnoutRailGaps    []wireTurnoutRailGap `json:"turnout_rail_gaps"`
+	Features           []wireFeature        `json:"features"`
+	PlacementAlgorithm string               `json:"placement_algorithm"`
+}
+
+// wireTurnoutRail — нитка крестовины: усовик или контррельс. Смысл каждого
+// числа объявлен один раз — у track.RenderTurnoutRail.
+type wireTurnoutRail struct {
+	Owner   string  `json:"owner"`
+	Element string  `json:"element"`
+	Kind    string  `json:"kind"`
+	From    float64 `json:"from"`
+	To      float64 `json:"to"`
+	Face    float64 `json:"face"`
+	EndFace float64 `json:"end_face"`
+	Flare   float64 `json:"flare"`
+	Grow    float64 `json:"grow"`
+}
+
+// wireTurnoutBlade — остряк одного прохода: на какой нитке лежит, докуда
+// подвижен и на сколько отходит. Смысл каждого числа объявлен один раз — у
+// track.RenderTurnoutBlade, и здесь не повторяется.
+type wireTurnoutBlade struct {
+	Owner   string               `json:"owner"`
+	Passage string               `json:"passage"`
+	Branch  string               `json:"branch"`
+	Offset  float64              `json:"offset"`
+	Length  float64              `json:"length"`
+	Throw   float64              `json:"throw"`
+	Grow    float64              `json:"grow"`
+	Section []wireSectionStation `json:"section"`
+}
+
+// wireSectionStation — сечение детали на расстоянии u от её начала. Смысл полей
+// объявлен один раз — у track.RenderSectionStation.
+type wireSectionStation struct {
+	U         float64 `json:"u"`
+	HeadWidth float64 `json:"head_width"`
+	Sink      float64 `json:"sink"`
+	RideWidth float64 `json:"ride_width"`
+}
+
+// wireTurnoutRailGap — участок прохода, на котором его нитки нет: место занял
+// остряк с рамным рельсом либо сердечник крестовины. Смысл полей объявлен один
+// раз — у track.RenderTurnoutRailGap.
+type wireTurnoutRailGap struct {
+	Owner   string  `json:"owner"`
+	Element string  `json:"element"`
+	Kind    string  `json:"kind"`
+	Offset  float64 `json:"offset"`
+	From    float64 `json:"from"`
+	To      float64 `json:"to"`
 }
 
 // wireTurnoutDrive — переводной механизм устройства: где станина с указателем и
 // табличкой и какого она вида. Адресуется как брус — по прямому проходу, — и
 // отметки z не несёт: её берут у элемента адреса.
 type wireTurnoutDrive struct {
-	Owner   string  `json:"owner"`
-	Name    string  `json:"name"`
-	Drive   string  `json:"drive"`
-	Element string  `json:"element"`
-	U       float64 `json:"u"`
-	Offset  float64 `json:"offset"`
+	// Длина переводной тяги в двух положениях стрелки: смысл — у
+	// track.RenderTurnoutDrive.
+	ReachStraight  float64 `json:"reach_straight"`
+	ReachDiverging float64 `json:"reach_diverging"`
+	Owner          string  `json:"owner"`
+	Name           string  `json:"name"`
+	Drive          string  `json:"drive"`
+	Element        string  `json:"element"`
+	U              float64 `json:"u"`
+	Offset         float64 `json:"offset"`
 }
 
 // wireTurnoutGrid — решётка устройства: уровень 3 спеки §4, приехавший вместе с
@@ -98,6 +154,10 @@ type wireTrackType struct {
 type wireRail struct {
 	Height    float64 `json:"height"`
 	HeadWidth float64 `json:"head_width"`
+	// Section — сечение рельса парами (x, y). Зеркалится как есть: контракт
+	// проверяет ФОРМУ ответа, и смысл осей объявлен там, где он один, — у
+	// mapfmt.TrackRail.Section.
+	Section [][2]float64 `json:"section"`
 }
 
 type wireSleeper struct {
