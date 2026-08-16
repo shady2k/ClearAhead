@@ -103,8 +103,24 @@ func validateTurnoutType(t TurnoutType) error {
 	if !(sw.Throw >= MinBladeThrow && sw.Throw <= MaxBladeThrow) {
 		return bad("switch.throw", sw.Throw, MinBladeThrow, MaxBladeThrow)
 	}
-	// Крестовинный комплект проверяется тем же кодом, что и раньше: правила у
-	// него не изменились, изменился только владелец.
+	// ОСТРЯКОВЫЙ РЕЛЬС проверяется теми же правилами, что и путевой: сечение
+	// есть сечение, и второго набора порогов для него заводить не за что.
+	if !(t.BladeRail.Height >= MinRailHeight && t.BladeRail.Height <= MaxRailHeight) {
+		return bad("blade_rail.height", t.BladeRail.Height, MinRailHeight, MaxRailHeight)
+	}
+	if !(t.BladeRail.HeadWidth >= MinRailHeadWidth && t.BladeRail.HeadWidth <= MaxRailHeadWidth) {
+		return bad("blade_rail.head_width", t.BladeRail.HeadWidth, MinRailHeadWidth, MaxRailHeadWidth)
+	}
+	if err := checkRailSectionOf("тип устройства "+where+", blade_rail", t.BladeRail); err != nil {
+		return fmt.Errorf("mapfmt: %w", err)
+	}
+	// ОСТРЯК НЕ ВЫШЕ РАМНОГО РЕЛЬСА. Он лежит на стрелочной подушке толщиной в
+	// разность высот, и профиль выше путевого означал бы подушку отрицательной
+	// толщины — то есть остряк, утопленный в брус.
+	//
+	// Сравнить с путевым рельсом здесь не с чем: тип пути у стрелки свой и
+	// приходит из другого места. Проверка живёт там, где видны оба
+	// (checkBladeRailFitsTrack).
 	return validateTrackFrog(where, t.FrogSet)
 }
 

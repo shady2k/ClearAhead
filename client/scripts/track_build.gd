@@ -1334,7 +1334,9 @@ static func blades(network: Dictionary, by_id: Dictionary,
 		max_seg_m: float, max_ang_rad: float) -> Dictionary:
 	var out: Array[Blade] = []
 	var skipped: Array[String] = []
-	var types := types_by_id(network)
+	# ТИПЫ ПУТИ ЗДЕСЬ БОЛЬШЕ НЕ НУЖНЫ: у остряка свой рельс, и он приезжает в
+	# самой записи остряка. До 2026-08-16 профиль брали у типа пути прохода —
+	# то есть строили остряк из путевого Р65.
 	for b_raw in (network.get("turnout_blades", []) as Array):
 		var b: Dictionary = b_raw as Dictionary
 		var eid := String(b.get("passage", ""))
@@ -1383,14 +1385,18 @@ static func blades(network: Dictionary, by_id: Dictionary,
 			blade.sec_sink.append(float(st.get("sink", 0.0)))
 			blade.sec_ride.append(float(st.get("ride_width", 0.0)))
 		blade._lay_faces()
-		var dev_type := String(el.role.get("type", ""))
-		if types.has(dev_type):
-			_fill_rail_metal(blade, types[dev_type] as Dictionary)
+		# ПРОФИЛЬ ОСТРЯКА ПРИСЛАН ОТДЕЛЬНО, и это не тот рельс, что у пути.
+		#
+		# Остряки катают из острякового ОР65: ниже Р65 на 40 мм, подошва усечена,
+		# головка вынесена в сторону рамного рельса. До 2026-08-16 клиент брал
+		# рельс ТИПА ПУТИ и сужал его целиком — получался маленький симметричный
+		# профиль, которому в перевод не встать.
+		_fill_rail_metal(blade, b)
 		# ОСТРОЖКА ПОСЛЕ МЕТАЛЛА: доля сечения считается от присланной ширины
 		# головки, и до её прихода делить было бы не на что.
 		blade._lay_taper()
 		if not blade.ready():
-			skipped.append("остряк на %s: рельс не описан типом %s" % [eid, dev_type])
+			skipped.append("остряк на %s: остряковый рельс не описан" % eid)
 			continue
 		out.append(blade)
 	return {"list": out, "skipped": skipped}

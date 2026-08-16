@@ -107,10 +107,11 @@ const dupTurnoutTypeID = "01a3185c-5099-7242-8242-000099424242"
 
 func dupTurnoutType() TurnoutType {
 	return TurnoutType{
-		ID:     dupTurnoutTypeID,
-		Name:   "проект для разбора повторов",
-		Frog:   "1/9",
-		Switch: TurnoutSwitch{BladeLengthStraight: 6.5, BladeLengthDiverging: 6.515, Throw: 0.152},
+		ID:        dupTurnoutTypeID,
+		Name:      "проект для разбора повторов",
+		Frog:      "1/9",
+		Switch:    TurnoutSwitch{BladeLengthStraight: 6.5, BladeLengthDiverging: 6.515, Throw: 0.152},
+		BladeRail: TrackRail{Height: 0.140, HeadWidth: 0.07733},
 		FrogSet: TrackFrog{
 			Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00,
 			CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086,

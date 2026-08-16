@@ -1112,53 +1112,99 @@
       "offset": 0.76,
       "length": 6.515,
       "throw": 0.152,
-      "grow": -1.0,
+      "grow": 1.0,
+      "rail": {
+        "height": 0.14,
+        "head_width": 0.07733,
+        "section": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -0.035
+          ],
+          [
+            0.01933,
+            -0.045
+          ],
+          [
+            0.01933,
+            -0.125
+          ],
+          [
+            -0.03667,
+            -0.132
+          ],
+          [
+            -0.03667,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.132
+          ],
+          [
+            0.07733,
+            -0.125
+          ],
+          [
+            0.07733,
+            0.0
+          ]
+        ]
+      },
       "section": [
         {
           "u": 0.0,
-          "head_width": 0.006,
+          "head_width": 0.0061864,
           "sink": 0.025,
           "ride_width": 0.0
         },
         {
           "u": 0.5,
-          "head_width": 0.012,
+          "head_width": 0.0123728,
           "sink": 0.018,
           "ride_width": 0.0
         },
         {
           "u": 1.0,
-          "head_width": 0.02,
+          "head_width": 0.02062133333333333,
           "sink": 0.01,
           "ride_width": 0.0
         },
         {
           "u": 1.5,
-          "head_width": 0.03,
+          "head_width": 0.030932,
           "sink": 0.004,
           "ride_width": 0.0
         },
         {
           "u": 2.0,
-          "head_width": 0.042,
+          "head_width": 0.0433048,
           "sink": 0.0,
           "ride_width": 0.01166666666666666
         },
         {
           "u": 3.0,
-          "head_width": 0.051,
+          "head_width": 0.0525844,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 4.0,
-          "head_width": 0.06,
+          "head_width": 0.061864,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 6.0,
-          "head_width": 0.075,
+          "head_width": 0.07733,
           "sink": 0.0,
           "ride_width": 0.035
         }
@@ -1171,53 +1217,99 @@
       "offset": -0.76,
       "length": 6.5,
       "throw": 0.152,
-      "grow": 1.0,
+      "grow": -1.0,
+      "rail": {
+        "height": 0.14,
+        "head_width": 0.07733,
+        "section": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -0.035
+          ],
+          [
+            0.01933,
+            -0.045
+          ],
+          [
+            0.01933,
+            -0.125
+          ],
+          [
+            -0.03667,
+            -0.132
+          ],
+          [
+            -0.03667,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.132
+          ],
+          [
+            0.07733,
+            -0.125
+          ],
+          [
+            0.07733,
+            0.0
+          ]
+        ]
+      },
       "section": [
         {
           "u": 0.0,
-          "head_width": 0.006,
+          "head_width": 0.0061864,
           "sink": 0.025,
           "ride_width": 0.0
         },
         {
           "u": 0.5,
-          "head_width": 0.012,
+          "head_width": 0.0123728,
           "sink": 0.018,
           "ride_width": 0.0
         },
         {
           "u": 1.0,
-          "head_width": 0.02,
+          "head_width": 0.02062133333333333,
           "sink": 0.01,
           "ride_width": 0.0
         },
         {
           "u": 1.5,
-          "head_width": 0.03,
+          "head_width": 0.030932,
           "sink": 0.004,
           "ride_width": 0.0
         },
         {
           "u": 2.0,
-          "head_width": 0.042,
+          "head_width": 0.0433048,
           "sink": 0.0,
           "ride_width": 0.01166666666666666
         },
         {
           "u": 3.0,
-          "head_width": 0.051,
+          "head_width": 0.0525844,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 4.0,
-          "head_width": 0.06,
+          "head_width": 0.061864,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 6.0,
-          "head_width": 0.075,
+          "head_width": 0.07733,
           "sink": 0.0,
           "ride_width": 0.035
         }
@@ -1230,53 +1322,99 @@
       "offset": 0.76,
       "length": 6.515,
       "throw": 0.152,
-      "grow": -1.0,
+      "grow": 1.0,
+      "rail": {
+        "height": 0.14,
+        "head_width": 0.07733,
+        "section": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -0.035
+          ],
+          [
+            0.01933,
+            -0.045
+          ],
+          [
+            0.01933,
+            -0.125
+          ],
+          [
+            -0.03667,
+            -0.132
+          ],
+          [
+            -0.03667,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.132
+          ],
+          [
+            0.07733,
+            -0.125
+          ],
+          [
+            0.07733,
+            0.0
+          ]
+        ]
+      },
       "section": [
         {
           "u": 0.0,
-          "head_width": 0.006,
+          "head_width": 0.0061864,
           "sink": 0.025,
           "ride_width": 0.0
         },
         {
           "u": 0.5,
-          "head_width": 0.012,
+          "head_width": 0.0123728,
           "sink": 0.018,
           "ride_width": 0.0
         },
         {
           "u": 1.0,
-          "head_width": 0.02,
+          "head_width": 0.02062133333333333,
           "sink": 0.01,
           "ride_width": 0.0
         },
         {
           "u": 1.5,
-          "head_width": 0.03,
+          "head_width": 0.030932,
           "sink": 0.004,
           "ride_width": 0.0
         },
         {
           "u": 2.0,
-          "head_width": 0.042,
+          "head_width": 0.0433048,
           "sink": 0.0,
           "ride_width": 0.01166666666666666
         },
         {
           "u": 3.0,
-          "head_width": 0.051,
+          "head_width": 0.0525844,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 4.0,
-          "head_width": 0.06,
+          "head_width": 0.061864,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 6.0,
-          "head_width": 0.075,
+          "head_width": 0.07733,
           "sink": 0.0,
           "ride_width": 0.035
         }
@@ -1289,53 +1427,99 @@
       "offset": -0.76,
       "length": 6.5,
       "throw": 0.152,
-      "grow": 1.0,
+      "grow": -1.0,
+      "rail": {
+        "height": 0.14,
+        "head_width": 0.07733,
+        "section": [
+          [
+            0.0,
+            0.0
+          ],
+          [
+            0.0,
+            -0.035
+          ],
+          [
+            0.01933,
+            -0.045
+          ],
+          [
+            0.01933,
+            -0.125
+          ],
+          [
+            -0.03667,
+            -0.132
+          ],
+          [
+            -0.03667,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.14
+          ],
+          [
+            0.09533,
+            -0.132
+          ],
+          [
+            0.07733,
+            -0.125
+          ],
+          [
+            0.07733,
+            0.0
+          ]
+        ]
+      },
       "section": [
         {
           "u": 0.0,
-          "head_width": 0.006,
+          "head_width": 0.0061864,
           "sink": 0.025,
           "ride_width": 0.0
         },
         {
           "u": 0.5,
-          "head_width": 0.012,
+          "head_width": 0.0123728,
           "sink": 0.018,
           "ride_width": 0.0
         },
         {
           "u": 1.0,
-          "head_width": 0.02,
+          "head_width": 0.02062133333333333,
           "sink": 0.01,
           "ride_width": 0.0
         },
         {
           "u": 1.5,
-          "head_width": 0.03,
+          "head_width": 0.030932,
           "sink": 0.004,
           "ride_width": 0.0
         },
         {
           "u": 2.0,
-          "head_width": 0.042,
+          "head_width": 0.0433048,
           "sink": 0.0,
           "ride_width": 0.01166666666666666
         },
         {
           "u": 3.0,
-          "head_width": 0.051,
+          "head_width": 0.0525844,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 4.0,
-          "head_width": 0.06,
+          "head_width": 0.061864,
           "sink": 0.0,
           "ride_width": 0.035
         },
         {
           "u": 6.0,
-          "head_width": 0.075,
+          "head_width": 0.07733,
           "sink": 0.0,
           "ride_width": 0.035
         }

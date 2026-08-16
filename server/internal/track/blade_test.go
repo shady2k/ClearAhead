@@ -85,13 +85,25 @@ func TestBladeIsNotLongerThanItsPassage(t *testing.T) {
 	}
 }
 
-// TestBladeGrowsTowardTheAxis — ТЕЛО ОСТРЯКА РАСТЁТ ВНУТРЬ КОЛЕИ.
+// TestBladeGrowsOutwardLikeAnyRail — ТЕЛО ОСТРЯКА РАСТЁТ НАРУЖУ.
 //
-// Утверждение об устройстве, а не о знаке: остряк лежит внутри колеи и
-// прижимается к неподвижному рамному рельсу гранью. Расти наружу ему некуда —
-// там сам рамный рельс, и до 2026-08-16 он именно туда и рос: прижатый остряк
-// занимал ровно объём рамного рельса, а значит рамного рельса не существовало.
-func TestBladeGrowsTowardTheAxis(t *testing.T) {
+// # Здесь стояло обратное требование, и оно было ошибкой
+//
+// Тест требовал роста ВНУТРЬ КОЛЕИ с доводом «расти наружу некуда, там сам
+// рамный рельс». Довод был верен для той модели и неверен по существу: остряк
+// строился масштабированием путевого Р65, а такой профиль правда некуда
+// поставить. Замер: проникновение в рамный рельс доходило до 52 мм при росте к
+// оси и до 100 мм при росте наружу — НИ ОДНА постоянная сторона не годилась.
+//
+// Неверна была не сторона, а профиль. Остряк катают из острякового ОР65: он
+// ниже Р65 на 40 мм и лежит на стрелочной подушке ровно в эту толщину, поэтому
+// подошвы расходятся ПО ВЫСОТЕ, а не в плане. Тогда телу можно расти наружу —
+// как у всякого рельса, у которого рабочая грань смотрит внутрь колеи, а металл
+// уходит в другую сторону.
+//
+// Следствие проверяется отдельно (сборка): в корне тело остряка целиком
+// укладывается в тело закорневой нитки, и это стык, а не прыжок.
+func TestBladeGrowsOutwardLikeAnyRail(t *testing.T) {
 	m := seedmap.Station()
 	_, rg, err := Compile(m)
 	if err != nil {
@@ -101,8 +113,8 @@ func TestBladeGrowsTowardTheAxis(t *testing.T) {
 		if math.Abs(math.Abs(b.Grow)-1) > 1e-9 {
 			t.Fatalf("стрелка %s, ветвь %s: сторона роста %+.4f, ожидается ±1", b.Owner, b.Branch, b.Grow)
 		}
-		if math.Signbit(b.Grow) == math.Signbit(b.Offset) {
-			t.Fatalf("стрелка %s, ветвь %s: остряк на %+.4f растёт в %+.0f — наружу, в рамный рельс",
+		if math.Signbit(b.Grow) != math.Signbit(b.Offset) {
+			t.Fatalf("стрелка %s, ветвь %s: остряк на %+.4f растёт в %+.0f — внутрь колеи, а рельс растёт наружу",
 				b.Owner, b.Branch, b.Offset, b.Grow)
 		}
 	}
@@ -177,8 +189,8 @@ func TestSideBranchHasNoRailsAlongTheBlade(t *testing.T) {
 // другой головкой обязан получить другую таблицу, иначе допущение просто
 // переехало бы вместе с числами.
 func TestBladeSectionScalesWithHeadWidth(t *testing.T) {
-	base := mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: 0.075}}
-	wide := mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: 0.150}}
+	base := mapfmt.TrackRail{HeadWidth: 0.075}
+	wide := mapfmt.TrackRail{HeadWidth: 0.150}
 
 	got := bladeSection(base)
 	if len(got) != len(bladeTaperModel) {
@@ -216,7 +228,7 @@ func TestBladeSectionScalesWithHeadWidth(t *testing.T) {
 // рамному рельсу. Полоса, начатая с нуля, означала бы, что колесо катится по
 // миллиметровому клину.
 func TestBladeRideStartsAfterToe(t *testing.T) {
-	got := bladeSection(mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: 0.075}})
+	got := bladeSection(mapfmt.TrackRail{HeadWidth: 0.075})
 	for _, s := range got {
 		switch {
 		case s.U <= BladeRideFrom && s.RideWidth != 0:
@@ -246,7 +258,7 @@ func TestBladeRideStartsAfterToe(t *testing.T) {
 // вправе. Правка таблицы, нарушившая норму, обязана уронить сборку здесь.
 func TestBladeIsLevelWhereHeadReachesNorm(t *testing.T) {
 	const maxSink = 0.002
-	got := bladeSection(mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: 0.075}})
+	got := bladeSection(mapfmt.TrackRail{HeadWidth: 0.075})
 	full := got[len(got)-1].HeadWidth
 	var checked int
 	for _, s := range got {
@@ -270,7 +282,7 @@ func TestBladeIsLevelWhereHeadReachesNorm(t *testing.T) {
 // доказательство там, где допущение уже снято.
 func TestBladeNormHoldsForAnyHeadWidth(t *testing.T) {
 	for _, head := range []float64{0.070, 0.075, 0.150} {
-		got := bladeSection(mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: head}})
+		got := bladeSection(mapfmt.TrackRail{HeadWidth: head})
 		full := got[len(got)-1].HeadWidth
 		for _, s := range got {
 			if s.HeadWidth/full >= BladeLevelHeadShare && s.Sink > 0.002 {

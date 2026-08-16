@@ -68,13 +68,16 @@ type wireTurnoutRail struct {
 // подвижен и на сколько отходит. Смысл каждого числа объявлен один раз — у
 // track.RenderTurnoutBlade, и здесь не повторяется.
 type wireTurnoutBlade struct {
-	Owner   string               `json:"owner"`
-	Passage string               `json:"passage"`
-	Branch  string               `json:"branch"`
-	Offset  float64              `json:"offset"`
-	Length  float64              `json:"length"`
-	Throw   float64              `json:"throw"`
-	Grow    float64              `json:"grow"`
+	Owner   string  `json:"owner"`
+	Passage string  `json:"passage"`
+	Branch  string  `json:"branch"`
+	Offset  float64 `json:"offset"`
+	Length  float64 `json:"length"`
+	Throw   float64 `json:"throw"`
+	Grow    float64 `json:"grow"`
+	// Rail — ПРОФИЛЬ ОСТРЯКОВОГО РЕЛЬСА: у остряка он свой (ОР65), не равный
+	// рельсу пути. Смысл — у track.RenderTurnoutBlade.Rail.
+	Rail    wireRail             `json:"rail"`
 	Section []wireSectionStation `json:"section"`
 }
 

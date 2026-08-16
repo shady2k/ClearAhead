@@ -439,6 +439,16 @@ func (m *Map) checkPlatformSizes(prefix string) error {
 // Ни одна из них НЕ ЧИНИТСЯ подстановкой: карта, где автор ошибся в сечении,
 // обязана получить отказ, а не правдоподобный рельс.
 func checkRailSection(t *TrackType) error {
+	return checkRailSectionOf(Labeled(t.Name, t.ID), t.Rail)
+}
+
+// checkRailSectionOf — та же проверка для ЛЮБОГО рельса, не только путевого.
+//
+// Вынесено 2026-08-16, когда у остряка появился свой профиль ОР65: сечение есть
+// сечение, и второго набора правил для него заводить не за что. Разбор правил —
+// в шапке checkRailSection.
+func checkRailSectionOf(where string, rail TrackRail) error {
+	t := &TrackType{Name: where, Rail: rail}
 	s := t.Rail.Section
 	// СЕЧЕНИЕ НЕОБЯЗАТЕЛЬНО, и это не то умолчание, которое проект запрещает.
 	//

@@ -20,6 +20,21 @@ import (
 // construction.default_type. В проводе ссылка всегда явная — клиент скрытого
 // умолчания не применяет никогда (спека §4). Блок отсутствует — рецепта нет,
 // в проводе пустые массивы.
+// renderRail переносит профиль рельса в провод.
+//
+// Заведена, когда у остряка появился свой профиль ОР65: путевой рельс и
+// остряковый описываются одним и тем же, и два места, копирующие их порознь,
+// разошлись бы при первой правке формы.
+func renderRail(r mapfmt.TrackRail) RenderRail {
+	return RenderRail{
+		Height:    r.Height,
+		HeadWidth: r.HeadWidth,
+		// СЕЧЕНИЕ КОПИРУЕТСЯ, А НЕ ОТДАЁТСЯ ССЫЛКОЙ на срез карты: контракт живёт
+		// дольше разбора, и общий массив дал бы двум сторонам одну память.
+		Section: railSection(r.Section),
+	}
+}
+
 func fillConstruction(m *mapfmt.Map, rg *RenderGeometry) error {
 	c := m.Construction
 	if c == nil {

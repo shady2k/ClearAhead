@@ -153,8 +153,8 @@ const (
 // обрезан по длине прохода (blade.go), и обрезанная таблица означала бы, что в
 // корне он остался острогана — то есть обрезка длины молча меняла бы форму. Клиент
 // берёт таблицу целиком и читает её на своём отрезке.
-func bladeSection(tt mapfmt.TrackType) []RenderSectionStation {
-	head := tt.Rail.HeadWidth
+func bladeSection(rail mapfmt.TrackRail) []RenderSectionStation {
+	head := rail.HeadWidth
 	out := make([]RenderSectionStation, 0, len(bladeTaperModel))
 	for _, s := range bladeTaperModel {
 		out = append(out, RenderSectionStation{

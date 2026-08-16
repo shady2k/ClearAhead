@@ -102,6 +102,7 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 		if b.Owner != owner || b.Length <= 0 {
 			continue
 		}
+		bladeNear, bladeFar := railSpan(b.Rail)
 		// Остряк ПРИЖАТ: в этом положении его рабочая грань совпадает с гранью
 		// рамного рельса, и именно оно проверяется. Отведённый остряк смыкания в
 		// острие не имеет по устройству, и требовать его значило бы объявить
@@ -116,16 +117,19 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 			ToU:      b.Length,
 			FaceFrom: b.Offset,
 			FaceTo:   b.Offset,
-			// Сторона роста ПРИСЛАНА: остряк растёт К ОСИ, против знака выноса,
-			// и именно здесь его тело расходится с ниткой за корнем.
+			// Сторона роста ПРИСЛАНА: с 2026-08-16 остряк растёт НАРУЖУ, как
+			// всякий рельс, — разбор в blade.go.
 			Grow: b.Grow,
-			Near: near,
-			Far:  far,
-			Head: head,
+			// ПРОФИЛЬ СВОЙ, ОСТРЯКОВЫЙ. Остряк катают из ОР65, и мерить его тело
+			// путевым Р65 значило бы проверять форму, которой клиент не строит:
+			// у ОР65 подошва уже на 17 мм и высота меньше на 40.
+			Near: bladeNear,
+			Far:  bladeFar,
+			Head: b.Rail.HeadWidth,
 			// Строжка: в острие сечение уже в разы. Доли берутся из той же
 			// таблицы, что уехала на провод, — второго её чтения не заводится.
-			ScaleFrom: bladeScaleAt(b.Section, 0, far),
-			ScaleTo:   bladeScaleAt(b.Section, b.Length, far),
+			ScaleFrom: bladeScaleAt(b.Section, 0, bladeFar),
+			ScaleTo:   bladeScaleAt(b.Section, b.Length, bladeFar),
 		})
 	}
 
