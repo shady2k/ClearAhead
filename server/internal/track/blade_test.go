@@ -232,3 +232,49 @@ func TestBladeRideStartsAfterToe(t *testing.T) {
 		}
 	}
 }
+
+// НОРМА: где головка остряка достигла 50 мм, понижения быть не должно.
+//
+// Единственное требование к строжке, взятое у нормы, а не объявленное нами.
+// Русская эксплуатационная практика проверяет не координату вдоль остряка, а
+// СЕЧЕНИЕ: понижение остряка против рамного рельса на 2 мм и более при ширине
+// головки поверху 50 мм и более — уже неисправность.
+//
+// Тест сторожит именно МОДЕЛЬ, а не данные карты: числа u в bladeTaperModel
+// объявлены приближением и вправе меняться, а это соотношение меняться не
+// вправе. Правка таблицы, нарушившая норму, обязана уронить сборку здесь.
+func TestBladeIsLevelWhereHeadReachesNorm(t *testing.T) {
+	const maxSink = 0.002
+	got := bladeSection(mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: 0.075}})
+	full := got[len(got)-1].HeadWidth
+	var checked int
+	for _, s := range got {
+		if s.HeadWidth/full < BladeLevelHeadShare {
+			continue
+		}
+		checked++
+		if s.Sink > maxSink {
+			t.Fatalf("на %.2f м головка %.0f %% полной, а понижение %.4f м — норма разрешает %.4f",
+				s.U, 100*s.HeadWidth/full, s.Sink, maxSink)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("ни одна станция не дошла до нормируемой ширины головки — норма не проверена ничем")
+	}
+}
+
+// Норма проверяется НА ЛЮБОМ ТИПЕ, а не только на затравочном.
+//
+// Хранить норму долей и проверять на одной ширине головки значило бы держать
+// доказательство там, где допущение уже снято.
+func TestBladeNormHoldsForAnyHeadWidth(t *testing.T) {
+	for _, head := range []float64{0.070, 0.075, 0.150} {
+		got := bladeSection(mapfmt.TrackType{Rail: mapfmt.TrackRail{HeadWidth: head}})
+		full := got[len(got)-1].HeadWidth
+		for _, s := range got {
+			if s.HeadWidth/full >= BladeLevelHeadShare && s.Sink > 0.002 {
+				t.Fatalf("головка %.3f: на %.2f м доля %.2f, понижение %.4f", head, s.U, s.HeadWidth/full, s.Sink)
+			}
+		}
+	}
+}
