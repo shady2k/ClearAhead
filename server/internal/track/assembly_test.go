@@ -180,8 +180,19 @@ func TestSeedTurnoutRootMatesButOuterThreadDoesNot(t *testing.T) {
 		}
 	}
 
-	// НАРУЖНАЯ НИТКА — единственное, что осталось. Ровно одно несмыкание: больше
-	// значило бы новую поломку, меньше — что проверка ослепла.
+	// НАРУЖНАЯ НИТКА — единственное, что осталось, и осталось по УСТРОЙСТВУ
+	// МОДЕЛИ, а не по геометрии.
+	//
+	// У настоящего перевода наружная нить бокового пути не начинается: она
+	// ОТСЛАИВАЕТСЯ от рамного рельса. Начиная с 2026-08-16 так же и у нас —
+	// разрыв кончается там, где нитки разошлись на ширину головки, и нитка
+	// начинается ВПЛОТНУЮ к рамному рельсу. Проверка этого не видит: она считает
+	// объединение металла ТОЛЬКО ПО СВОЕМУ ЭЛЕМЕНТУ, а рамный рельс лежит на
+	// соседнем проходе.
+	//
+	// То есть отказ здесь — известная и названная слепота правила, и тест
+	// сторожит именно её: пока металла становится ровно столько же, сколько
+	// нужно, и ровно там, где нужно.
 	if len(breaks) != 1 || breaks[0].Kind != BreakOpen {
 		t.Fatalf("ожидалось ровно одно несмыкание вида open, получено %d: %+v", len(breaks), breaks)
 	}
@@ -190,14 +201,15 @@ func TestSeedTurnoutRootMatesButOuterThreadDoesNot(t *testing.T) {
 		t.Fatalf("несомкнута не наружная нитка бокового прохода, а %s", open.Port.Part)
 	}
 
-	// Зазор сверяется С САМОЙ ГЕОМЕТРИЕЙ: у бокового прохода начальный угол
-	// остряка и две дуги разного радиуса, и всякая замкнутая формула была бы
-	// третьим описанием той же кривой.
+	// НИТКА НАЧИНАЕТСЯ ВПЛОТНУЮ К РАМНОМУ РЕЛЬСУ. Утверждение положительное и
+	// проверяет то, ради чего разрыв и переставлен: на её начале расстояние до
+	// одноимённой нитки прямого прохода равно ширине головки, то есть рельсы
+	// стоят касаясь. До правки нитка возникала в 0.227 м — в воздухе.
 	dv := els[owner+mapfmt.PassageDiverging]
 	st := els[owner+mapfmt.PassageStraight]
-	du, err := units.MetersToDistance(bladeRootU)
+	du, err := units.MetersToDistance(open.Port.U)
 	if err != nil {
-		t.Fatalf("координата корня: %v", err)
+		t.Fatalf("координата начала нитки: %v", err)
 	}
 	pd, err := dv.Plan.PoseAt(dv.Start.Plan, du)
 	if err != nil {
@@ -207,8 +219,17 @@ func TestSeedTurnoutRootMatesButOuterThreadDoesNot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("поза прямого: %v", err)
 	}
-	wantGap := math.Hypot(pd.X-ps.X, pd.Y-ps.Y)
-	if math.Abs(open.Distance-wantGap) > 2e-3 {
-		t.Fatalf("зазор %.4f м, а оси проходов на %.3f м расходятся на %.4f", open.Distance, bladeRootU, wantGap)
+	nd := [2]float64{-math.Sin(pd.Heading), math.Cos(pd.Heading)}
+	ns := [2]float64{-math.Sin(ps.Heading), math.Cos(ps.Heading)}
+	off := -m.Construction.Types[0].Gauge / 2
+	head := m.Construction.Types[0].Rail.HeadWidth
+	gap := math.Hypot((pd.X+nd[0]*off)-(ps.X+ns[0]*off), (pd.Y+nd[1]*off)-(ps.Y+ns[1]*off))
+	if math.Abs(gap-head) > 1e-3 {
+		t.Fatalf("нитка начинается в %.4f м от рамного рельса, а обязана касаться его — ширина головки %.4f",
+			gap, head)
+	}
+	if open.Port.U >= bladeRootU {
+		t.Fatalf("наружная нитка начинается на %.3f м, то есть не раньше корня остряка %.3f — отслаивания нет",
+			open.Port.U, bladeRootU)
 	}
 }
