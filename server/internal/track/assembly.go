@@ -87,6 +87,32 @@ const (
 // проверяется необъявленное, а необъявленного зазора не бывает.
 const RunningFaceTol = 0.001
 
+// MinMetalOverlap — какая доля поперечного сечения обязана быть общей у двух
+// сомкнувшихся деталей.
+//
+// # Зачем этого мало — совпадения граней
+//
+// Совпадение рабочих граней проверяет, что колесо не провалится: гребень ведёт
+// по грани, и грань продолжается. Но ТЕЛО может при этом прыгнуть вбок на всю
+// свою ширину — рабочая грань у остряка и у нитки за его корнем одна, а растут
+// они в РАЗНЫЕ стороны: остряк внутрь колеи, нитка наружу. Замер на SW1: грани
+// сходятся точно (расстояние 0), а сечения перекрываются на 50 % — до шва металл
+// на [0.647, 0.797], после на [0.722, 0.872].
+//
+// В кадре это и есть «рельсы идут разными сегментами, которые не соединены».
+//
+// # Почему 0.9, а не 1.0
+//
+// Единица потребовала бы тождественных сечений, а законная смена сечения на шве
+// существует: остряк в корне уже вышел на полное, но накладка или переход марки
+// вправе дать иной профиль. Девять десятых оставляют место такому переходу и не
+// оставляют — прыжку на ширину головки.
+//
+// Число взято у проверки 44_mesh_shell.gd, которая мерила ровно это по
+// треугольникам: порог переезжает вместе с самим вопросом, чтобы две стороны не
+// начали требовать разного.
+const MinMetalOverlap = 0.9
+
 // Part — деталь сборки: протяжка вдоль интервала элемента.
 //
 // FaceFrom/FaceTo — вынос РАБОЧЕЙ ГРАНИ по левой нормали на концах интервала.
@@ -94,10 +120,11 @@ const RunningFaceTol = 0.001
 // колесо, и сравнивать оси значило бы объявить смычку у двух рельсов разной
 // ширины головки.
 //
-// Сечения здесь ещё нет. Оно приезжает следующим шагом (ClearAhead-ax7m.2,
-// строжка остряка): нынешняя проверка спрашивает про положение грани, и для
-// этого вопроса сечение не нужно. Заводить поле, которым никто не пользуется,
-// значило бы обещать выраженность, которой нет.
+// Grow, Near/Far и ScaleFrom/ScaleTo описывают ТЕЛО детали поперёк пути —
+// ровно столько, сколько нужно, чтобы спросить «продолжает ли металл металл».
+// Полного многоугольника здесь нет намеренно: вопрос о смычке решается
+// ЗАНЯТЫМ ОТРЕЗКОМ, а высота и форма шейки на него не влияют. Возить сюда весь
+// профиль значило бы обещать проверку, которой нет.
 type Part struct {
 	ID       string
 	Kind     string
@@ -107,6 +134,16 @@ type Part struct {
 	ToU      float64
 	FaceFrom float64
 	FaceTo   float64
+	// Grow — в какую сторону от рабочей грани растёт тело: +1 или −1 по левой
+	// нормали элемента. У нитки наружу от оси, у остряка внутрь колеи — и именно
+	// в этой разнице сидит прыжок тела на шве корня.
+	Grow float64
+	// Near, Far — пределы сечения от рабочей грани В СТОРОНУ РОСТА, метры.
+	// Near обычно отрицателен: подошва выступает и назад, за рабочую грань.
+	Near, Far float64
+	// ScaleFrom, ScaleTo — во сколько раз сечение уже полного на концах детали.
+	// Единица у обычного рельса; у остряка меньше — он острогана (blade_section.go).
+	ScaleFrom, ScaleTo float64
 }
 
 // Port — конец детали. ВЫВОДИТСЯ, а не задаётся.
@@ -122,6 +159,10 @@ type Port struct {
 	U       float64
 	// X, Y, Z — точка РАБОЧЕЙ ГРАНИ в координатах региона.
 	X, Y, Z float64
+	// MetalFrom, MetalTo — отрезок, занятый телом детали, в выносе по левой
+	// нормали элемента. Считается из грани, стороны роста и сечения; автором не
+	// задаётся, как и всё остальное в порту.
+	MetalFrom, MetalTo float64
 	// Interior — порт лежит ВНУТРИ элемента, а не на его конце.
 	//
 	// Различие несёт всю силу проверки. Порт на конце элемента законно бывает
@@ -153,12 +194,27 @@ type Gap struct {
 // Возвращается перечнем, а не первым найденным: перечень несмыканий — это и
 // есть список работ, а отказ по первому скрыл бы остальные до следующего
 // запуска.
+// Виды несмыкания. Различие не для отчёта: у них РАЗНЫЕ причины и разные
+// починки, и одно слово на оба заставляло бы разбирать каждое заново.
+const (
+	// BreakOpen — детали нет вовсе: рабочей грани не к чему примкнуть. Так
+	// выглядит нитка, начинающаяся ниоткуда.
+	BreakOpen = "open"
+	// BreakStep — грани сошлись, а ТЕЛА разошлись: детали растут в разные
+	// стороны от общей грани. Так выглядит корень остряка.
+	BreakStep = "step"
+)
+
 type Break struct {
+	// Kind — open | step, см. константы выше.
+	Kind string
 	Port Port
 	// Nearest — ближайший чужой порт и расстояние до него. Пустой Part значит,
 	// что чужих портов нет вовсе.
 	Nearest  Port
 	Distance float64
+	// Overlap — доля общего сечения у смежных тел. Осмысленна при BreakStep.
+	Overlap float64
 }
 
 // Assembly — детали одного устройства и объявленные разрывы.
@@ -252,9 +308,15 @@ func derivePorts(a Assembly, els map[string]Element) ([]Port, error) {
 			if err != nil {
 				return nil, fmt.Errorf("track: сборка %s: деталь %s, конец %s: %w", a.Owner, p.ID, end, err)
 			}
+			scale := p.ScaleFrom
+			if end == PortAtEnd {
+				scale = p.ScaleTo
+			}
+			lo, hi := metalSpan(face, p.Grow, p.Near, p.Far, scale)
 			out = append(out, Port{
 				Part: p.ID, Kind: p.Kind, End: end, Element: p.Element, U: u,
 				X: x, Y: y, Z: z,
+				MetalFrom: lo, MetalTo: hi,
 				// Допуск сравнения с концом элемента — тот же миллиметр: u приходит
 				// из счёта, и «ровно ноль» здесь означало бы сравнение float64 байт
 				// в байт, что проект уже терял.
@@ -285,7 +347,46 @@ func facePoint(el Element, u, face float64) (x, y, z float64, err error) {
 	return plan.X + nx*face, plan.Y + ny*face, el.Start.Z + rise, nil
 }
 
-// findBreaks ищет внутренние порты, которым не к чему примкнуть.
+// metalSpan — отрезок, занятый телом, в выносе по левой нормали.
+//
+// Сечение отмеряется ОТ РАБОЧЕЙ ГРАНИ в сторону роста и масштабируется долей
+// строжки. Масштаб множит оба предела, а не один: острогана вся деталь, и
+// сужение одной головки при полной подошве дало бы у рамного рельса второй
+// профиль с подошвой в 150 мм (тот же довод, что у клиента до переезда).
+func metalSpan(face, grow, near, far, scale float64) (lo, hi float64) {
+	if scale <= 0 {
+		scale = 1
+	}
+	if grow == 0 {
+		grow = 1
+	}
+	a := face + grow*near*scale
+	b := face + grow*far*scale
+	return math.Min(a, b), math.Max(a, b)
+}
+
+// overlapShare — какая доля УЖЕ ИЗ ДВУХ отрезков у них общая.
+//
+// Именно меньшего, а не суммы и не большего: накладка шире рельса законно
+// закрывает стык целиком, и деление на сумму объявило бы это дефектом. Вопрос
+// стоит так: «продолжено ли то, что было», а не «совпали ли обводы».
+func overlapShare(aLo, aHi, bLo, bHi float64) float64 {
+	common := math.Min(aHi, bHi) - math.Max(aLo, bLo)
+	if common <= 0 {
+		return 0
+	}
+	narrow := math.Min(aHi-aLo, bHi-bLo)
+	if narrow <= 0 {
+		return 0
+	}
+	return common / narrow
+}
+
+// findBreaks ищет внутренние порты, у которых металл не продолжен.
+//
+// Два вопроса подряд, и второй имеет смысл только после первого: сперва есть ли
+// чему примыкать (грань), затем продолжено ли тело (сечение). Обратный порядок
+// сравнивал бы сечения у деталей, стоящих в метре друг от друга.
 func findBreaks(ports []Port, gaps []Gap) []Break {
 	var out []Break
 	for i, p := range ports {
@@ -305,14 +406,19 @@ func findBreaks(ports []Port, gaps []Gap) []Break {
 				best, bestD = j, d
 			}
 		}
-		if best >= 0 && bestD <= RunningFaceTol {
+		if best < 0 {
+			out = append(out, Break{Kind: BreakOpen, Port: p, Distance: bestD})
 			continue
 		}
-		b := Break{Port: p, Distance: bestD}
-		if best >= 0 {
-			b.Nearest = ports[best]
+		near := ports[best]
+		if bestD > RunningFaceTol {
+			out = append(out, Break{Kind: BreakOpen, Port: p, Nearest: near, Distance: bestD})
+			continue
 		}
-		out = append(out, b)
+		share := overlapShare(p.MetalFrom, p.MetalTo, near.MetalFrom, near.MetalTo)
+		if share < MinMetalOverlap {
+			out = append(out, Break{Kind: BreakStep, Port: p, Nearest: near, Distance: bestD, Overlap: share})
+		}
 	}
 	return out
 }
@@ -345,14 +451,22 @@ func breaksError(owner string, breaks []Break) error {
 	})
 	msg := fmt.Sprintf("track: сборка %s: несомкнутых портов %d", owner, len(breaks))
 	for _, b := range breaks {
-		if b.Nearest.Part == "" {
+		switch {
+		case b.Nearest.Part == "":
 			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: примыкать не к чему — других портов нет",
 				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U)
-			continue
+		case b.Kind == BreakStep:
+			// Отказ называет ОБА отрезка, а не только долю: доля говорит «плохо», а
+			// отрезки — куда именно уехало тело, и по ним видно, что грань та же.
+			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: грань сошлась с %s[%s], а тело прыгнуло — [%.3f, %.3f] против [%.3f, %.3f], общего %.0f %% (нужно %.0f %%)",
+				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U, b.Nearest.Part, b.Nearest.End,
+				b.Port.MetalFrom, b.Port.MetalTo, b.Nearest.MetalFrom, b.Nearest.MetalTo,
+				b.Overlap*100, MinMetalOverlap*100)
+		default:
+			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: ближайший металл %s[%s] в %.4f м (допуск %.4f)",
+				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U,
+				b.Nearest.Part, b.Nearest.End, b.Distance, RunningFaceTol)
 		}
-		msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: ближайший металл %s[%s] в %.4f м (допуск %.4f)",
-			b.Port.Part, b.Port.End, b.Port.Element, b.Port.U,
-			b.Nearest.Part, b.Nearest.End, b.Distance, RunningFaceTol)
 	}
 	return fmt.Errorf("%s", msg)
 }

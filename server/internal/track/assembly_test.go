@@ -30,13 +30,27 @@ func straightElement(t *testing.T) (map[string]Element, float64) {
 	return nil, 0
 }
 
+// railPart — рукотворная нитка с НАСТОЯЩИМ телом.
+//
+// Сечение затравки: от −0.0375 до +0.1125 от рабочей грани, то есть 0.15 м.
+// Без тела вопрос «продолжен ли металл» задавать не о чем, и вырожденная деталь
+// в тесте прятала бы именно то, что проверяется.
+func railPart(id string, from, to, face float64) Part {
+	return Part{
+		ID: id, Kind: PartRail, Owner: "T", Element: "E",
+		FromU: from, ToU: to, FaceFrom: face, FaceTo: face,
+		Grow: math.Copysign(1, face), Near: -0.0375, Far: 0.1125,
+		ScaleFrom: 1, ScaleTo: 1,
+	}
+}
+
 func TestMatingPartsValidate(t *testing.T) {
 	els, length := straightElement(t)
 	a := Assembly{
 		Owner: "T",
 		Parts: []Part{
-			{ID: "a", Kind: PartRail, Owner: "T", Element: "E", FromU: 0, ToU: 10, FaceFrom: 0.76, FaceTo: 0.76},
-			{ID: "b", Kind: PartRail, Owner: "T", Element: "E", FromU: 10, ToU: length, FaceFrom: 0.76, FaceTo: 0.76},
+			railPart("a", 0, 10, 0.76),
+			railPart("b", 10, length, 0.76),
 		},
 	}
 	if _, err := Validate(a, els); err != nil {
@@ -52,8 +66,8 @@ func TestSidewaysJumpRefused(t *testing.T) {
 	a := Assembly{
 		Owner: "T",
 		Parts: []Part{
-			{ID: "a", Kind: PartRail, Owner: "T", Element: "E", FromU: 0, ToU: 10, FaceFrom: 0.76, FaceTo: 0.76},
-			{ID: "b", Kind: PartRail, Owner: "T", Element: "E", FromU: 10, ToU: length, FaceFrom: 0.875, FaceTo: 0.875},
+			railPart("a", 0, 10, 0.76),
+			railPart("b", 10, length, 0.875),
 		},
 	}
 	_, err := Validate(a, els)
@@ -72,8 +86,8 @@ func TestDeclaredGapPasses(t *testing.T) {
 	a := Assembly{
 		Owner: "T",
 		Parts: []Part{
-			{ID: "a", Kind: PartRail, Owner: "T", Element: "E", FromU: 0, ToU: 10, FaceFrom: 0.76, FaceTo: 0.76},
-			{ID: "b", Kind: PartRail, Owner: "T", Element: "E", FromU: 12, ToU: length, FaceFrom: 0.76, FaceTo: 0.76},
+			railPart("a", 0, 10, 0.76),
+			railPart("b", 12, length, 0.76),
 		},
 		Gaps: []Gap{{Kind: "insulated", Element: "E", Face: 0.76, From: 10, To: 12, Why: "изолирующий стык"}},
 	}
@@ -88,8 +102,7 @@ func TestElementEndPortMayBeFree(t *testing.T) {
 	els, length := straightElement(t)
 	a := Assembly{
 		Owner: "T",
-		Parts: []Part{{ID: "a", Kind: PartRail, Owner: "T", Element: "E",
-			FromU: 0, ToU: length, FaceFrom: 0.76, FaceTo: 0.76}},
+		Parts: []Part{railPart("a", 0, length, 0.76)},
 	}
 	if _, err := Validate(a, els); err != nil {
 		t.Fatalf("деталь во всю длину элемента обязана пройти: %v", err)
@@ -128,30 +141,55 @@ func TestSeedTurnoutAssemblyIsBroken(t *testing.T) {
 	}
 	t.Logf("несомкнутых портов у %s: %d", owner, len(breaks))
 	for _, b := range breaks {
-		t.Logf("  %-52s [%s] u=%7.3f -> %-52s в %.4f м",
-			b.Port.Part, b.Port.End, b.Port.U, b.Nearest.Part, b.Distance)
+		t.Logf("  %-8s %-52s [%s] u=%7.3f -> %-52s в %.4f м, общего %.0f %%",
+			b.Kind, b.Port.Part, b.Port.End, b.Port.U, b.Nearest.Part, b.Distance, b.Overlap*100)
 	}
 
-	// Корень остряка: наружная нитка бокового прохода возобновляется на 8.3 м.
+	// КОРЕНЬ ОСТРЯКА ЛОМАЕТСЯ С ДВУХ СТОРОН, и виды несмыкания у них разные.
+	// Проверяются обе: до 2026-08-16 вторую видел только Godot, а первую не видел
+	// никто.
 	const bladeRootU = 8.3
-	var found *Break
-	for i := range breaks {
-		b := &breaks[i]
-		if b.Port.End == PortAtStart && math.Abs(b.Port.U-bladeRootU) < 1e-6 &&
-			strings.Contains(b.Port.Part, "diverging") {
-			if found == nil || b.Distance < found.Distance {
-				found = b
+	at := func(kind string, pred func(Break) bool) *Break {
+		for i := range breaks {
+			b := &breaks[i]
+			if b.Kind == kind && math.Abs(b.Port.U-bladeRootU) < 1e-6 && pred(*b) {
+				return b
 			}
 		}
+		return nil
 	}
-	if found == nil {
-		t.Fatal("несмыкание на корне остряка не найдено — проверка смотрит не туда")
-	}
+
+	// НАРУЖНАЯ нитка бокового: примыкать не к чему вовсе.
+	//
 	// Замер, а не круглое число. Расстояние ПРОСТРАНСТВЕННОЕ, и потому больше
 	// поперечного расхождения граней (0.1145 м): у дуги и хорды на одном u концы
 	// разнесены ещё и вдоль пути. Независимо посчитано codex — 0.11643 м.
-	const wantGap = 0.1166
-	if math.Abs(found.Distance-wantGap) > 5e-4 {
-		t.Fatalf("зазор на корне остряка %.4f м, ожидался %.4f м", found.Distance, wantGap)
+	open := at(BreakOpen, func(b Break) bool {
+		return strings.Contains(b.Port.Part, "diverging") && strings.Contains(b.Port.Part, "-0.760")
+	})
+	if open == nil {
+		t.Fatal("обрыв наружной нитки бокового прохода не найден — проверка смотрит не туда")
+	}
+	if math.Abs(open.Distance-0.1166) > 5e-4 {
+		t.Fatalf("зазор на корне остряка %.4f м, ожидался 0.1166 м", open.Distance)
+	}
+
+	// ВНУТРЕННЯЯ нитка: грань сошлась ТОЧНО, а тело прыгнуло. Остряк растёт к оси,
+	// нитка за корнем наружу, и общей у них остаётся ровно головка.
+	//
+	// Пятьдесят процентов — не оценка: сечение затравки идёт от −0.0375 до
+	// +0.1125 от рабочей грани, то есть 0.15 м; общими оказываются 0.075 м.
+	// Ровно это же число выдаёт проверка мешей 44_mesh_shell.gd, резавшая
+	// треугольники плоскостью, — и в том, что оба способа сошлись, весь смысл
+	// переезда.
+	step := at(BreakStep, func(b Break) bool { return strings.Contains(b.Port.Part, PartBlade) })
+	if step == nil {
+		t.Fatal("прыжок тела на корне остряка не найден — сечение до проверки не доехало")
+	}
+	if step.Distance > RunningFaceTol {
+		t.Fatalf("грань обязана была сойтись точно, разошлась на %.4f м", step.Distance)
+	}
+	if math.Abs(step.Overlap-0.5) > 1e-3 {
+		t.Fatalf("общего сечения %.1f %%, ожидалось 50 %%", step.Overlap*100)
 	}
 }

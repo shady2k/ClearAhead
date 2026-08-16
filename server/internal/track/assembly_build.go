@@ -2,6 +2,7 @@ package track
 
 import (
 	"fmt"
+	"math"
 	"sort"
 )
 
@@ -12,10 +13,16 @@ import (
 // доказывала бы смыкание у ВТОРОЙ модели, а поехала бы первая: это в точности та
 // болезнь, ради которой файл заведён, только этажом выше.
 //
-// Отсюда же граница шага (ClearAhead-ax7m.1): здесь ещё нет ни сечений, ни
-// состояний стрелки, ни зависящих от положения обязательств. Есть один вопрос —
-// «есть ли у внутреннего порта к чему примкнуть» — и он на нынешних данных
-// отвечается положением рабочей грани, без сечения и без меша.
+// Вопросов теперь два, и оба отвечаются арифметикой, без единого треугольника:
+// «есть ли внутреннему порту к чему примкнуть» (положение рабочей грани) и
+// «продолжено ли ТЕЛО» (занятый поперечный отрезок). Второй появился, как только
+// переменное сечение переехало на сервер (ClearAhead-ax7m.2): до того форму
+// остряка выбирал клиент, и спрашивать про неё здесь было не у кого.
+//
+// Чего здесь по-прежнему НЕТ: состояний стрелки и зависящих от положения
+// обязательств. Проверяется ПРИЖАТЫЙ остряк — то положение, в котором он и есть
+// путь под колесом. У отведённого смыкания в острие нет по устройству, и
+// требовать его значило бы объявить дефектом сам перевод.
 
 // AssembleTurnout собирает детали одного устройства из рецепта отрисовки.
 //
@@ -27,10 +34,15 @@ import (
 func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (Assembly, error) {
 	a := Assembly{Owner: owner}
 
-	half, err := turnoutHalfGauge(rg, owner)
+	tt, err := turnoutTrackType(rg, owner)
 	if err != nil {
 		return Assembly{}, err
 	}
+	if tt.Gauge <= 0 {
+		return Assembly{}, fmt.Errorf("track: сборка %s: у типа %s колея %v", owner, tt.ID, tt.Gauge)
+	}
+	half := tt.Gauge / 2
+	near, far := railSpan(tt.Rail)
 
 	// Проходы берутся у ЭЛЕМЕНТОВ по их роли, а не собираются из суффиксов имени:
 	// роль — единственная запись о том, чей это проход, и второй сборки имён
@@ -71,6 +83,14 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 					ToU:      iv[1],
 					FaceFrom: side,
 					FaceTo:   side,
+					// Нитка растёт ОТ ОСИ НАРУЖУ: рабочая грань смотрит внутрь
+					// колеи, там едет колесо, и тело уходит в другую сторону.
+					// Знак выноса и есть эта сторона — второго правила не нужно.
+					Grow:      math.Copysign(1, side),
+					Near:      near,
+					Far:       far,
+					ScaleFrom: 1,
+					ScaleTo:   1,
 				})
 			}
 		}
@@ -94,6 +114,15 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 			ToU:      b.Length,
 			FaceFrom: b.Offset,
 			FaceTo:   b.Offset,
+			// Сторона роста ПРИСЛАНА: остряк растёт К ОСИ, против знака выноса,
+			// и именно здесь его тело расходится с ниткой за корнем.
+			Grow: b.Grow,
+			Near: near,
+			Far:  far,
+			// Строжка: в острие сечение уже в разы. Доли берутся из той же
+			// таблицы, что уехала на провод, — второго её чтения не заводится.
+			ScaleFrom: bladeScaleAt(b.Section, 0, far),
+			ScaleTo:   bladeScaleAt(b.Section, b.Length, far),
 		})
 	}
 
@@ -109,14 +138,19 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 			kind = PartFrogCasting
 		}
 		a.Parts = append(a.Parts, Part{
-			ID:       fmt.Sprintf("%s|%s|%d", r.Element, kind, i),
-			Kind:     kind,
-			Owner:    owner,
-			Element:  r.Element,
-			FromU:    r.From,
-			ToU:      r.To,
-			FaceFrom: r.Face,
-			FaceTo:   r.EndFace,
+			ID:        fmt.Sprintf("%s|%s|%d", r.Element, kind, i),
+			Kind:      kind,
+			Owner:     owner,
+			Element:   r.Element,
+			FromU:     r.From,
+			ToU:       r.To,
+			FaceFrom:  r.Face,
+			FaceTo:    r.EndFace,
+			Grow:      r.Grow,
+			Near:      near,
+			Far:       far,
+			ScaleFrom: 1,
+			ScaleTo:   1,
 		})
 	}
 
@@ -124,12 +158,12 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 	return a, nil
 }
 
-// turnoutHalfGauge — полуколея устройства, взятая у ТИПА ПУТИ его прохода.
+// turnoutTrackType — тип пути устройства, взятый у роли его прохода.
 //
-// Оттуда же, откуда её берёт клиент, и это требование, а не удобство: два
+// Оттуда же, откуда его берёт клиент, и это требование, а не удобство: два
 // разных ответа на «какая здесь колея» развели бы проверку и то, что она
 // проверяет.
-func turnoutHalfGauge(rg *RenderGeometry, owner string) (float64, error) {
+func turnoutTrackType(rg *RenderGeometry, owner string) (RenderTrackType, error) {
 	var typeID string
 	for _, e := range rg.Elements {
 		if e.Role != nil && e.Role.Turnout == owner {
@@ -138,17 +172,35 @@ func turnoutHalfGauge(rg *RenderGeometry, owner string) (float64, error) {
 		}
 	}
 	if typeID == "" {
-		return 0, fmt.Errorf("track: сборка %s: у проходов устройства не назван тип пути", owner)
+		return RenderTrackType{}, fmt.Errorf("track: сборка %s: у проходов устройства не назван тип пути", owner)
 	}
 	for _, t := range rg.TrackTypes {
 		if t.ID == typeID {
-			if t.Gauge <= 0 {
-				return 0, fmt.Errorf("track: сборка %s: у типа %s колея %v", owner, typeID, t.Gauge)
-			}
-			return t.Gauge / 2, nil
+			return t, nil
 		}
 	}
-	return 0, fmt.Errorf("track: сборка %s: тип пути %s не найден среди отдаваемых", owner, typeID)
+	return RenderTrackType{}, fmt.Errorf("track: сборка %s: тип пути %s не найден среди отдаваемых", owner, typeID)
+}
+
+// railSpan — пределы сечения рельса от рабочей грани наружу.
+//
+// Берётся ПРИСЛАННОЕ сечение, а не выводится из ширины головки: головка ставит
+// грань на место, но подошва шире её вдвое, и тело, отмеренное головкой, было бы
+// вдвое ýже настоящего — а вопрос о смычке решается именно телом.
+//
+// Сечения нет — работает ОБЪЯВЛЕННОЕ упрощение контракта: прямоугольник
+// head_width от грани наружу. То же умолчание, что у клиента, и названо оно тем
+// же словом: не подстановка, а объявленный прямоугольник.
+func railSpan(r RenderRail) (near, far float64) {
+	if len(r.Section) == 0 {
+		return 0, r.HeadWidth
+	}
+	near, far = r.Section[0][0], r.Section[0][0]
+	for _, pt := range r.Section {
+		near = math.Min(near, pt[0])
+		far = math.Max(far, pt[0])
+	}
+	return near, far
 }
 
 // gapsOn — разрывы одной нитки: того же элемента и того же выноса.
@@ -188,4 +240,48 @@ func aliveSpans(length float64, gaps [][2]float64) [][2]float64 {
 		out = append(out, [2]float64{at, length})
 	}
 	return out
+}
+
+// bladeScaleAt — доля полного сечения остряка на расстоянии u от острия.
+//
+// Читается ТА ЖЕ таблица, что уехала на провод (RenderTurnoutBlade.Section), и
+// теми же двумя правилами — линейно между станциями, постоянно за последней.
+// Второго чтения строжки проект не заводит: разойдясь, они дали бы проверку,
+// доказывающую смычку у формы, которой клиент не строит.
+//
+// Пустая таблица даёт единицу — полное сечение. Это не подстановка: остряк без
+// строжки клиентом не строится вовсе (track_build.gd), и сборка такого
+// устройства проверяет то, чего никто не покажет. Отказ здесь называл бы
+// дефектом отсутствие детали, а её отсутствие — вопрос другой проверки.
+func bladeScaleAt(section []RenderSectionStation, u, fullFar float64) float64 {
+	if len(section) == 0 || fullFar <= 0 {
+		return 1
+	}
+	head := section[len(section)-1].HeadWidth
+	if head <= 0 {
+		return 1
+	}
+	w := section[len(section)-1].HeadWidth
+	switch {
+	case u <= section[0].U:
+		w = section[0].HeadWidth
+	case u >= section[len(section)-1].U:
+		// За последней станцией постоянно: остряк бывает длиннее таблицы.
+	default:
+		for i := 0; i+1 < len(section); i++ {
+			lo, hi := section[i], section[i+1]
+			if u > hi.U {
+				continue
+			}
+			span := hi.U - lo.U
+			if span <= 0 {
+				w = lo.HeadWidth
+				break
+			}
+			t := (u - lo.U) / span
+			w = lo.HeadWidth + (hi.HeadWidth-lo.HeadWidth)*t
+			break
+		}
+	}
+	return w / head
 }
