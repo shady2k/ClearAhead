@@ -263,3 +263,59 @@ func TestOppositeThreadStaysOutOfWindow(t *testing.T) {
 		t.Fatal("нитка с другой стороны колеи не вправе закрывать чужой шов")
 	}
 }
+
+// КОНТРРЕЛЬС НЕ ЗАКРЫВАЕТ ЧУЖОЙ ОБРЫВ.
+//
+// До признака роли (2026-08-16) объединение считалось по ВСЕМУ металлу в окне, и
+// любая деталь спасала разрыв — проверка отвечала «металл есть» на вопрос «есть
+// ли путь под колесом». Контррельс лежит тем же профилем в тех же полутора
+// метрах и колесо не несёт никогда: он ведёт колёсную пару за гребень.
+func TestCheckRailDoesNotRescueABreak(t *testing.T) {
+	els, length := straightElement(t)
+	// Нитка обрывается на 10 м и не возобновляется.
+	broken := railPart("a", 0, 10, 0.76)
+	// Контррельс лежит рядом во всю длину и перекрывает место обрыва телом.
+	guard := railPart("guard", 0, length, 0.76)
+	guard.Kind = PartCheckRail
+
+	_, err := Validate(Assembly{Owner: "T", Parts: []Part{broken, guard}}, els)
+	if err == nil {
+		t.Fatal("контррельс не вправе закрывать обрыв несущей нитки")
+	}
+	if !strings.Contains(err.Error(), "a[end]") {
+		t.Fatalf("отказ обязан указывать на оборвавшуюся нитку; получено: %v", err)
+	}
+}
+
+// У ВЕДУЩЕЙ ДЕТАЛИ СВОИ КОНЦЫ СВОБОДНЫ.
+//
+// Контррельс начинается и кончается посреди пути по устройству: он короткий и
+// лежит против крестовины. Требовать от него продолжения ходовой поверхности
+// значило бы объявить дефектом сам контррельс.
+func TestGuidingPartEndsAreNotAskedForRunningSurface(t *testing.T) {
+	els, length := straightElement(t)
+	rail := railPart("rail", 0, length, 0.76)
+	guard := railPart("guard", 10, 14, -0.70)
+	guard.Kind = PartCheckRail
+
+	if _, err := Validate(Assembly{Owner: "T", Parts: []Part{rail, guard}}, els); err != nil {
+		t.Fatalf("концы контррельса свободны законно: %v", err)
+	}
+}
+
+// Проверенная сборка НАЗЫВАЕТ, что именно доказано.
+//
+// Тест сторожит не список, а сам факт его существования: молчание о недоказанном
+// — та самая болезнь, из-за которой BladeRootJoint существовал словом и не
+// существовал телом.
+func TestValidatedAssemblyNamesWhatItProved(t *testing.T) {
+	els, length := straightElement(t)
+	v, err := Validate(Assembly{Owner: "T", Parts: []Part{railPart("a", 0, length, 0.76)}}, els)
+	if err != nil {
+		t.Fatalf("сборка обязана пройти: %v", err)
+	}
+	proven := v.Proven()
+	if len(proven) != 1 || proven[0] != ObligationRunningSurface {
+		t.Fatalf("доказанным объявлено %v; ожидалось только %s", proven, ObligationRunningSurface)
+	}
+}
