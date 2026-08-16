@@ -189,7 +189,7 @@
           "horizontal": [
             {
               "kind": "straight",
-              "length": 33.5
+              "length": 27.504
             }
           ]
         },
@@ -198,7 +198,16 @@
             {
               "kind": "arc",
               "radius": 300,
-              "angle": -0.1107
+              "angle": -0.0217167
+            },
+            {
+              "kind": "arc",
+              "radius": 200.06,
+              "angle": -0.0650205
+            },
+            {
+              "kind": "straight",
+              "length": 8.0764
             }
           ]
         }
@@ -208,7 +217,7 @@
           "horizontal": [
             {
               "kind": "straight",
-              "length": 33.5
+              "length": 27.504
             }
           ]
         },
@@ -217,7 +226,16 @@
             {
               "kind": "arc",
               "radius": 300,
-              "angle": -0.1107
+              "angle": -0.0217167
+            },
+            {
+              "kind": "arc",
+              "radius": 200.06,
+              "angle": -0.0650205
+            },
+            {
+              "kind": "straight",
+              "length": 8.0764
             }
           ]
         }
@@ -428,7 +446,8 @@
         "switch": {
           "blade_length_straight": 6.5,
           "blade_length_diverging": 6.515,
-          "throw": 0.152
+          "throw": 0.152,
+          "initial_angle": 0.0239211
         },
         "frog_set": {
           "flangeway": 0.046,

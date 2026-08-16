@@ -224,8 +224,13 @@ func TestCompileFrogFixture(t *testing.T) {
 	if len(f.Addresses) != 2 || f.Addresses[1].Element != seedmap.StationSW1+mapfmt.PassageDiverging {
 		t.Fatalf("адреса крестовины %+v", f.Addresses)
 	}
-	if d := math.Abs(f.Addresses[1].U - 30.17); d > 0.05 {
-		t.Fatalf("крестовина SW1 на u=%g, ожидалось 30.17 ± 0.05", f.Addresses[1].U)
+	// 22.0 м — ЭПЮРА проекта 2434, а не подгонка: от острия остряка до
+	// математической точки крестовины по прямому пути выходит 21.98 м, и это
+	// число ВЫВЕДЕНО из эпюры (a = 11.832 до ЦП, b = 19.203 от ЦП, остриё в
+	// 8.301 м перед ЦП), а не взято оттуда. Прежние 30.17 отвечали одной дуге
+	// R=300 на всю длину прохода — форме, которой у перевода 1/9 нет.
+	if d := math.Abs(f.Addresses[1].U - 22.0); d > 0.05 {
+		t.Fatalf("крестовина SW1 на u=%g, ожидалось 22.0 ± 0.05 (эпюра 2434)", f.Addresses[1].U)
 	}
 	if len(rg.Features) != 2 {
 		t.Fatalf("крестовин %d, ожидалось 2 (по одной на стрелку горловины)", len(rg.Features))

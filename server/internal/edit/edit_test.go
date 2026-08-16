@@ -223,7 +223,9 @@ func rightTurnout(t *testing.T) (straight, diverging geom.Chain) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	a, err := geom.Arc(300, -0.1107)
+	// Поворот ЦЕПОЧКИ, а не полный угол марки: начальный угол остряка живёт в
+	// типе устройства и складывается с ним (checkTurnoutTurnAgreement).
+	a, err := geom.Arc(300, -(0.1106572212 - 0.0239211000))
 	if err != nil {
 		t.Fatal(err)
 	}

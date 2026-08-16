@@ -57,8 +57,15 @@ func TestTurnoutBothOrientations(t *testing.T) {
 	}
 }
 
-// TestTurnoutCommonPortDirections — прямой и отклонённый проходы в общем порту
-// смотрят в ОДНУ сторону, а внешнее ребро — в противоположную.
+// TestTurnoutCommonPortDirections — проходы в общем порту смотрят в одну
+// сторону, но НЕ ОДНИМ КУРСОМ, а внешнее ребро — в противоположную.
+//
+// # Что здесь изменилось 2026-08-16 и почему
+//
+// Тест требовал курсы РАВНЫМИ. Требование было ошибкой, и ошибка была не в
+// тесте, а в модели: настоящий боковой проход выходит из острия под начальным
+// углом остряка β0 — им он и отклоняет колесо. Теперь проверяется, что излом
+// РОВНО ТОТ, что объявлен проектом перевода, и подписан рукостью.
 func TestTurnoutCommonPortDirections(t *testing.T) {
 	poses, _, err := Propagate(seedmap.Station())
 	if err != nil {
@@ -68,8 +75,13 @@ func TestTurnoutCommonPortDirections(t *testing.T) {
 	s := poses[Incidence{Port: common, Element: seedmap.StationSW1 + mapfmt.PassageStraight}]
 	d := poses[Incidence{Port: common, Element: seedmap.StationSW1 + mapfmt.PassageDiverging}]
 	e := poses[Incidence{Port: common, Element: seedmap.StationApproach}]
-	if math.Abs(s.Plan.Heading-d.Plan.Heading) > 1e-9 {
-		t.Fatalf("проходы в общем порту смотрят врозь: %.6f против %.6f", s.Plan.Heading, d.Plan.Heading)
+	// Правая стрелка: боковой отклоняется по часовой, курс убывает.
+	want := -seedmap.TurnoutTypeForTest().Switch.InitialAngle
+	if got := d.Plan.Heading - s.Plan.Heading; math.Abs(got-want) > 1e-9 {
+		t.Fatalf("излом бокового прохода %.7f, а проект объявляет %.7f", got, want)
+	}
+	if want == 0 {
+		t.Fatal("проект затравки объявляет нулевой начальный угол — тест ничего не проверяет")
 	}
 	diff := math.Abs(math.Abs(s.Plan.Heading-e.Plan.Heading) - math.Pi)
 	if diff > 1e-9 {

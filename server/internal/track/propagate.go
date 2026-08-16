@@ -53,9 +53,28 @@ type PortPose struct {
 // PortRelation — связь двух концов в одном порту.
 //
 // Flip означает, что направления внутрь элементов различаются на π.
+//
+// HeadingDelta — НА СКОЛЬКО ЕЩЁ поворачивается курс сверх Flip, радианы.
+//
+// # Зачем понадобился излом в порту
+//
+// До 2026-08-16 связь умела только «в одну сторону или в разные», и оба прохода
+// стрелки выходили из общего порта ОДНИМ курсом. Настоящий боковой проход выходит
+// из острия под НАЧАЛЬНЫМ УГЛОМ ОСТРЯКА β0 — этим он и отклоняет колесо.
+//
+// Замер, который это доказал: у Р65 1/9 проекта 2434 β0 = 1°22'14"; две дуги
+// эпюры дают 0.086737 рад, а марка требует 0.110657 — без β0 перевод до своей
+// марки не доходит вовсе. Второе следствие того же нуля: касательные проходы
+// расходятся как u²/2R, и первые 6.7 м два рельса занимают один объём — ровно с
+// этим боролись вырезанием ниток, породившим «рельс из ниоткуда».
+//
+// Излом — ЗАКОННОЕ свойство порта, а не невязка: допуск TolHeading остаётся
+// прежним и ослаблять его нельзя. Невязка есть расхождение ДВУХ ВЫВОДОВ одной
+// позы; здесь же поза объявлена одна и с объявленным изломом.
 type PortRelation struct {
-	To   Incidence
-	Flip bool
+	To           Incidence
+	Flip         bool
+	HeadingDelta float64
 }
 
 // Junctions — отношения между концами, сходящимися в портах.
@@ -200,7 +219,7 @@ func Propagate(m *mapfmt.Map) (map[Incidence]PortPose, map[string]Element, error
 			// отношению. Ориентация здесь утверждена buildJunctions, а не выведена
 			// из порядка обхода.
 			for _, rel := range junc[at] {
-				want := relate(poses[at], rel.Flip)
+				want := relate(poses[at], rel)
 				if err := settle(poses, rel.To, want); err != nil {
 					return nil, nil, err
 				}
@@ -226,11 +245,20 @@ func Propagate(m *mapfmt.Map) (map[Incidence]PortPose, map[string]Element, error
 //
 // При Flip разворачивается и план, и знак уклона: уклон измеряется в направлении
 // Plan, поэтому разворот направления меняет его знак.
-func relate(p PortPose, flip bool) PortPose {
-	if !flip {
-		return p
+// relate — поза соседнего конца по объявленному отношению.
+//
+// Разворот и излом складываются оба в курс, поэтому порядок их применения
+// безразличен, и обратное отношение получается сменой знака у излома (см.
+// link в buildJunctions).
+func relate(p PortPose, rel PortRelation) PortPose {
+	out := p
+	if rel.Flip {
+		out = PortPose{Plan: geom.Reverse(p.Plan), Z: p.Z, Slope: -p.Slope}
 	}
-	return PortPose{Plan: geom.Reverse(p.Plan), Z: p.Z, Slope: -p.Slope}
+	if rel.HeadingDelta != 0 {
+		out.Plan = geom.Normalize(geom.Pose{X: out.Plan.X, Y: out.Plan.Y, Heading: out.Plan.Heading + rel.HeadingDelta})
+	}
+	return out
 }
 
 // buildJunctions утверждает отношения между концами в каждом порту.
@@ -271,10 +299,30 @@ func buildJunctions(m *mapfmt.Map, els map[string]Element) (Junctions, error) {
 		swPorts[t.ID+"."+t.Ports.Diverging] = turnoutPort{t.ID, "diverging"}
 	}
 
+	// НАЧАЛЬНЫЙ УГОЛ ОСТРЯКА берётся у ПРОЕКТА перевода и подписывается рукостью:
+	// у правой стрелки боковой проход отклоняется по часовой (курс убывает), у
+	// левой — против. Знак живёт здесь, а в каталоге лежит модуль: проект 2434
+	// один и тот же для правой и левой стрелки, отличается только зеркалом.
+	initialAngle := map[string]float64{}
+	for _, t := range m.Topology.Turnouts {
+		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		if err != nil {
+			return nil, fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
+		}
+		sign := -1.0
+		if t.Hand == mapfmt.HandLeft {
+			sign = +1.0
+		}
+		initialAngle[t.ID] = sign * dt.Switch.InitialAngle
+	}
+
 	j := Junctions{}
-	link := func(a, b Incidence, flip bool) {
-		j[a] = append(j[a], PortRelation{To: b, Flip: flip})
-		j[b] = append(j[b], PortRelation{To: a, Flip: flip})
+	// Обратное отношение несёт ИЗЛОМ С ОБРАТНЫМ ЗНАКОМ: разворот и излом оба
+	// складываются в курс, и потому коммутируют — из p_b = flip(p_a) + d следует
+	// p_a = flip(p_b) − d.
+	link := func(a, b Incidence, flip bool, delta float64) {
+		j[a] = append(j[a], PortRelation{To: b, Flip: flip, HeadingDelta: delta})
+		j[b] = append(j[b], PortRelation{To: a, Flip: flip, HeadingDelta: -delta})
 	}
 
 	ports := make([]string, 0, len(byPort))
@@ -303,7 +351,7 @@ func buildJunctions(m *mapfmt.Map, els map[string]Element) (Junctions, error) {
 			switch len(external) {
 			case 0, 1:
 			case 2:
-				link(external[0], external[1], true)
+				link(external[0], external[1], true, 0)
 			default:
 				return nil, fmt.Errorf("track: порт %s обслуживает %d рёбер — развилку нужно оформить стрелкой",
 					port, len(external))
@@ -326,14 +374,31 @@ func buildJunctions(m *mapfmt.Map, els map[string]Element) (Junctions, error) {
 				port, tp.turnout, len(passages), want)
 		}
 		if tp.role == "common" {
-			// Оба прохода выходят из остряка в одну сторону.
-			link(passages[0], passages[1], false)
+			// Проходы выходят из острия в одну сторону, но НЕ ОДНИМ КУРСОМ:
+			// боковой отклонён на начальный угол остряка. Излом объявляется
+			// ЗДЕСЬ, потому что это свойство порта, а не траектории: сама
+			// траектория прохода начинается уже отклонённой.
+			link(passages[0], passages[1], false,
+				divergingDelta(passages[1], tp.turnout, initialAngle)-
+					divergingDelta(passages[0], tp.turnout, initialAngle))
 		}
 		for _, p := range passages {
-			link(external[0], p, true)
+			link(external[0], p, true, divergingDelta(p, tp.turnout, initialAngle))
 		}
 	}
 	return j, nil
+}
+
+// divergingDelta — излом курса у бокового прохода и ноль у прямого.
+//
+// Отдельной функцией, а не веткой в двух местах: излом нужен и связи проходов
+// между собой, и связи каждого с внешним ребром, и два написания одного правила
+// разошлись бы знаком при первой же левой стрелке.
+func divergingDelta(in Incidence, turnout string, byTurnout map[string]float64) float64 {
+	if in.Element != turnout+mapfmt.PassageDiverging {
+		return 0
+	}
+	return byTurnout[turnout]
 }
 
 func isPassage(elementID string) bool {

@@ -5,7 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Ось для рукотворных сборок: прямая, чтобы вынос по левой нормали читался
@@ -188,10 +190,28 @@ func TestSeedTurnoutAssemblyIsBroken(t *testing.T) {
 	if open == nil {
 		t.Fatal("обрыв наружной нитки бокового прохода не найден — проверка смотрит не туда")
 	}
-	const arcRadius = 300.0 // дуга бокового прохода затравки
-	wantGap := arcRadius * (1 - math.Cos(bladeRootU/arcRadius))
-	if math.Abs(open.Distance-wantGap) > 1e-3 {
-		t.Fatalf("зазор на корне остряка %.4f м, а расхождение осей на %.3f м даёт %.4f",
+	// Зазор сверяется С САМОЙ ГЕОМЕТРИЕЙ, а не с формулой: у бокового прохода
+	// теперь начальный угол остряка и две дуги разного радиуса (эпюра 2434), и
+	// всякая замкнутая формула здесь была бы третьим описанием той же кривой.
+	// Спрашивается ровно то, что построено: где нитка бокового и где ближайший
+	// металл прямого на том же u.
+	dv := els[owner+mapfmt.PassageDiverging]
+	st := els[owner+mapfmt.PassageStraight]
+	du, err := units.MetersToDistance(bladeRootU)
+	if err != nil {
+		t.Fatalf("координата корня: %v", err)
+	}
+	pd, err := dv.Plan.PoseAt(dv.Start.Plan, du)
+	if err != nil {
+		t.Fatalf("поза бокового: %v", err)
+	}
+	ps, err := st.Plan.PoseAt(st.Start.Plan, du)
+	if err != nil {
+		t.Fatalf("поза прямого: %v", err)
+	}
+	wantGap := math.Hypot(pd.X-ps.X, pd.Y-ps.Y)
+	if math.Abs(open.Distance-wantGap) > 2e-3 {
+		t.Fatalf("зазор на корне остряка %.4f м, а оси проходов на %.3f м расходятся на %.4f",
 			open.Distance, bladeRootU, wantGap)
 	}
 
