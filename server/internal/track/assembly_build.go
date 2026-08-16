@@ -43,6 +43,7 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 	}
 	half := tt.Gauge / 2
 	near, far := railSpan(tt.Rail)
+	head := tt.Rail.HeadWidth
 
 	// Проходы берутся у ЭЛЕМЕНТОВ по их роли, а не собираются из суффиксов имени:
 	// роль — единственная запись о том, чей это проход, и второй сборки имён
@@ -89,6 +90,7 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 					Grow:      math.Copysign(1, side),
 					Near:      near,
 					Far:       far,
+					Head:      head,
 					ScaleFrom: 1,
 					ScaleTo:   1,
 				})
@@ -119,6 +121,7 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 			Grow: b.Grow,
 			Near: near,
 			Far:  far,
+			Head: head,
 			// Строжка: в острие сечение уже в разы. Доли берутся из той же
 			// таблицы, что уехала на провод, — второго её чтения не заводится.
 			ScaleFrom: bladeScaleAt(b.Section, 0, far),
@@ -137,21 +140,8 @@ func AssembleTurnout(rg *RenderGeometry, els map[string]Element, owner string) (
 		case FrogRailCasting:
 			kind = PartFrogCasting
 		}
-		a.Parts = append(a.Parts, Part{
-			ID:        fmt.Sprintf("%s|%s|%d", r.Element, kind, i),
-			Kind:      kind,
-			Owner:     owner,
-			Element:   r.Element,
-			FromU:     r.From,
-			ToU:       r.To,
-			FaceFrom:  r.Face,
-			FaceTo:    r.EndFace,
-			Grow:      r.Grow,
-			Near:      near,
-			Far:       far,
-			ScaleFrom: 1,
-			ScaleTo:   1,
-		})
+		a.Parts = append(a.Parts, flaredParts(fmt.Sprintf("%s|%s|%d", r.Element, kind, i),
+			kind, owner, r, near, far, head)...)
 	}
 
 	sort.Slice(a.Parts, func(i, j int) bool { return a.Parts[i].ID < a.Parts[j].ID })
@@ -284,4 +274,61 @@ func bladeScaleAt(section []RenderSectionStation, u, fullFar float64) float64 {
 		}
 	}
 	return w / head
+}
+
+// flaredParts раскладывает отогнутую нитку на звенья ПОСТОЯННОГО ЗАКОНА ГРАНИ.
+//
+// # Зачем это понадобилось, и чем обошлась прежняя запись
+//
+// Усовик — не рейка рядом с ниткой, а САМА нитка, отведённая наружу перед
+// сердечником и возвращающаяся за ним (frograils.go): концы садятся ровно на
+// нитку (EndFace), середина отстоит на ширину желоба (Face), между ними отгиб.
+// Клиент читает ровно этот кусочно-линейный закон (track_build.gd::_flared).
+//
+// Первая редакция сборки записывала усовик ОДНОЙ деталью с FaceFrom = Face и
+// FaceTo = EndFace, то есть ставила грань отогнутой уже в начале. Проверка
+// сравнивала форму, которой клиент не строит, — нарушая инвариант, объявленный
+// в шапке этого файла. Цена: четыре ложных несмыкания по 69 %, и число выдаёт
+// причину точно — (0.150 − 0.046) / 0.150 = 69.3 %, где 0.046 есть ширина
+// желоба, а 0.150 — ширина сечения.
+//
+// Хуже цены сам класс ошибки: я собирался ОБЪЯВИТЬ эти 69 % законным желобом.
+// Объявление узаконило бы дефект сборщика — ровно то, от чего модель уводит.
+// Настоящий желоб лежит ВНУТРИ усовика, а не на его порту, и объявлять на порту
+// было нечего.
+//
+// Звеньев три, а не одно с законом сечения: Part описывает грань линейно, и три
+// линейных звена выражают кусочно-линейный закон точно. Заводить закон грани
+// станциями стоило бы дороже и понадобится не здесь, а на переводной кривой.
+func flaredParts(id, kind, owner string, r RenderTurnoutRail, near, far, head float64) []Part {
+	seg := func(suffix string, from, to, faceFrom, faceTo float64) Part {
+		return Part{
+			ID: id + suffix, Kind: kind, Owner: owner, Element: r.Element,
+			FromU: from, ToU: to, FaceFrom: faceFrom, FaceTo: faceTo,
+			Grow: r.Grow, Near: near, Far: far, Head: head, ScaleFrom: 1, ScaleTo: 1,
+		}
+	}
+	length := r.To - r.From
+	if r.Flare <= 0 || length <= 0 {
+		// Отгиба нет — нитка прямая во всю длину. Ветка не про вырожденные данные,
+		// а про законный случай: контррельс без отгиба остаётся контррельсом.
+		return []Part{seg("", r.From, r.To, r.Face, r.Face)}
+	}
+	if 2*r.Flare >= length {
+		// ОТГИБЫ СОШЛИСЬ, не дав рабочей части. Полного выноса нитка не набирает,
+		// и звеньев два с общей серединой — то же, что даст клиент: у него d
+		// считается от БЛИЖНЕГО конца, и в середине короткой нитки отгиб просто не
+		// доходит до конца.
+		mid := (r.From + r.To) / 2
+		peak := r.EndFace + (r.Face-r.EndFace)*(length/2)/r.Flare
+		return []Part{
+			seg("|in", r.From, mid, r.EndFace, peak),
+			seg("|out", mid, r.To, peak, r.EndFace),
+		}
+	}
+	return []Part{
+		seg("|in", r.From, r.From+r.Flare, r.EndFace, r.Face),
+		seg("|body", r.From+r.Flare, r.To-r.Flare, r.Face, r.Face),
+		seg("|out", r.To-r.Flare, r.To, r.Face, r.EndFace),
+	}
 }
