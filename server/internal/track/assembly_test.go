@@ -70,12 +70,25 @@ func TestSidewaysJumpRefused(t *testing.T) {
 			railPart("b", 10, length, 0.875),
 		},
 	}
-	_, err := Validate(a, els)
-	if err == nil {
+	if _, err := Validate(a, els); err == nil {
 		t.Fatal("рельс, начинающийся в 0.115 м от предыдущего, обязан получить отказ")
 	}
-	if !strings.Contains(err.Error(), "0.1150") {
-		t.Fatalf("отказ обязан называть расстояние; получено: %v", err)
+	// Проверяется ЧИСЛО, а не текст отказа: слова меняются при первой же правке
+	// формулировки, а доля общего сечения — свойство модели.
+	//
+	// Сечение 0.15 м, сдвиг 0.115 м, значит общими остаются 0.035 м — 23 %.
+	breaks, err := Breaks(a, els)
+	if err != nil {
+		t.Fatalf("разбор несмыканий: %v", err)
+	}
+	var found bool
+	for _, b := range breaks {
+		if b.Kind == BreakStep && math.Abs(b.Overlap-0.035/0.15) < 1e-3 {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("прыжок тела на 0.115 м не найден среди %d несмыканий", len(breaks))
 	}
 }
 
@@ -191,5 +204,57 @@ func TestSeedTurnoutAssemblyIsBroken(t *testing.T) {
 	}
 	if math.Abs(step.Overlap-0.5) > 1e-3 {
 		t.Fatalf("общего сечения %.1f %%, ожидалось 50 %%", step.Overlap*100)
+	}
+}
+
+// НАКЛАДКА ЗАКРЫВАЕТ СТЫК, и проверка обязана это принять.
+//
+// Две детали растут в РАЗНЫЕ стороны от общей грани — та самая форма, что стоит
+// на корне остряка: общего у них ровно головка, 50 %. Третье тело, лежащее по
+// обе стороны шва, делает металл сплошным.
+//
+// Тест заведён вместе с объединением тел и ради него: проверка, сравнивавшая
+// ПАРУ ближайших портов, накладку не зачла бы — её концы лежат не на шве, — то
+// есть отвергла бы верную починку. Такую проверку чинить вслепую невозможно, и
+// это выяснилось бы только при попытке починить.
+func TestFishplateBridgesTheSeam(t *testing.T) {
+	els, length := straightElement(t)
+	toAxis := railPart("a", 0, 10, 0.76)
+	toAxis.Grow = -1 // растёт внутрь колеи, как остряк
+	outward := railPart("b", 10, length, 0.76)
+
+	// Без накладки шов — прыжок тела.
+	bare := Assembly{Owner: "T", Parts: []Part{toAxis, outward}}
+	if _, err := Validate(bare, els); err == nil {
+		t.Fatal("тела, растущие в разные стороны, обязаны получить отказ")
+	}
+
+	// Накладка: короткое тело по обе стороны шва, перекрывающее оба сечения.
+	plate := Part{
+		ID: "plate", Kind: PartRail, Owner: "T", Element: "E",
+		FromU: 9.6, ToU: 10.4, FaceFrom: 0.76, FaceTo: 0.76,
+		Grow: 1, Near: -0.1125, Far: 0.1125, ScaleFrom: 1, ScaleTo: 1,
+	}
+	bridged := Assembly{Owner: "T", Parts: []Part{toAxis, outward, plate}}
+	if _, err := Validate(bridged, els); err != nil {
+		t.Fatalf("накладка обязана закрыть шов: %v", err)
+	}
+}
+
+// Тело соседней нитки в окно НЕ ПОПАДАЕТ.
+//
+// Без окна «металл до шва» оказался бы полутора метрами шириной, перекрытие
+// вышло бы стопроцентным всегда, и проверка зеленела бы всегда. Довод записан
+// не здесь: на него первой наступила проверка мешей.
+func TestOppositeThreadStaysOutOfWindow(t *testing.T) {
+	els, length := straightElement(t)
+	toAxis := railPart("a", 0, 10, 0.76)
+	toAxis.Grow = -1
+	parts := []Part{toAxis, railPart("b", 10, length, 0.76)}
+	// Соседняя нитка колеи во всю длину — она не должна ничего чинить.
+	parts = append(parts, railPart("other", 0, length, -0.76))
+
+	if _, err := Validate(Assembly{Owner: "T", Parts: parts}, els); err == nil {
+		t.Fatal("нитка с другой стороны колеи не вправе закрывать чужой шов")
 	}
 }

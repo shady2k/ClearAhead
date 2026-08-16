@@ -40,9 +40,21 @@ import (
 // Поэтому здесь наоборот:
 //
 //	порт ВЫВОДИТСЯ из границы детали — автор его не пишет;
-//	смычка ДОКАЗЫВАЕТСЯ расстоянием между портами — автор её не утверждает;
+//	смычка ДОКАЗЫВАЕТСЯ непрерывностью металла — автор её не утверждает;
 //	объявляется только НАМЕРЕНИЕ разорвать (желоб, изолирующий стык), потому что
 //	намерение из геометрии не выводится ничем.
+//
+// # Вопрос задаётся о МЕСТЕ, а не о паре деталей
+//
+// Первая редакция спрашивала «примкнул ли этот порт к ближайшему чужому». Это
+// отвергало бы верную починку: стык вправе быть закрыт ТРЕТЬИМ телом — накладки
+// в корне остряка ровно таковы, — а их концы лежат не на шве, и парная проверка
+// их не зачла бы. Хуже того, у самой накладки концы оказывались бы «внутренними
+// и несомкнутыми», то есть починка порождала бы два новых дефекта.
+//
+// Поэтому вопрос стоит о СТАНЦИИ: сравнивается весь металл элемента чуть до и
+// чуть после неё. Чем он держится — смычкой двух деталей или перекрытием
+// третьей, — проверке безразлично, и это правильно: колесу тоже.
 //
 // # Почему ValidatedAssembly непрозрачна
 //
@@ -263,7 +275,7 @@ func Validate(a Assembly, els map[string]Element) (*ValidatedAssembly, error) {
 	if err != nil {
 		return nil, err
 	}
-	breaks := findBreaks(ports, a.Gaps)
+	breaks := findBreaks(a.Parts, ports, a.Gaps)
 	if len(breaks) > 0 {
 		return nil, breaksError(a.Owner, breaks)
 	}
@@ -281,7 +293,7 @@ func Breaks(a Assembly, els map[string]Element) ([]Break, error) {
 	if err != nil {
 		return nil, err
 	}
-	return findBreaks(ports, a.Gaps), nil
+	return findBreaks(a.Parts, ports, a.Gaps), nil
 }
 
 // derivePorts выводит по два порта на деталь. Порядок канонический: детали по
@@ -365,17 +377,97 @@ func metalSpan(face, grow, near, far, scale float64) (lo, hi float64) {
 	return math.Min(a, b), math.Max(a, b)
 }
 
-// overlapShare — какая доля УЖЕ ИЗ ДВУХ отрезков у них общая.
+// span — отрезок, занятый металлом поперёк пути.
+type span struct{ lo, hi float64 }
+
+// metalAt — отрезок тела детали в станции u.
+//
+// Грань и доля строжки меняются вдоль детали линейно — так же, как их читает
+// клиент между станциями сечения. Второго правила интерполяции проект не держит.
+func (p Part) metalAt(u float64) span {
+	t := 0.0
+	if l := p.ToU - p.FromU; l > 0 {
+		t = math.Min(math.Max((u-p.FromU)/l, 0), 1)
+	}
+	face := p.FaceFrom + (p.FaceTo-p.FaceFrom)*t
+	scale := p.ScaleFrom + (p.ScaleTo-p.ScaleFrom)*t
+	lo, hi := metalSpan(face, p.Grow, p.Near, p.Far, scale)
+	return span{lo, hi}
+}
+
+// metalUnionAt — ВЕСЬ металл элемента в станции u, попавший в окно вокруг грани.
+//
+// # Почему объединение, а не одна деталь
+//
+// Стык вправе быть закрыт ТРЕТЬИМ телом. Накладки в корне остряка — ровно такой
+// случай: их концы лежат не на шве, а по обе стороны от него, и проверка,
+// сравнивающая пару деталей, отвергла бы верную починку. Спрашивать надо не
+// «продолжает ли эта деталь ту», а «продолжен ли МЕТАЛЛ».
+//
+// # Почему окно
+//
+// Без него в отрезок попадает и нитка с другой стороны колеи, «металл до шва»
+// оказывается полутора метрами шириной, перекрытие выходит стопроцентным всегда
+// и проверка зеленеет всегда. Довод найден не здесь: его записала проверка
+// мешей, наступив на это первой.
+//
+// # Почему только СВОЙ элемент
+//
+// Тела соседнего прохода лежат в его собственной системе выносов, и свести их в
+// одну плоскость значило бы завести проекцию — то есть приближение — там, где
+// сейчас точная арифметика. Межэлементную непрерывность проверяет другой вопрос,
+// заданный раньше: расстояние между рабочими гранями (BreakOpen). Разделение
+// названо здесь, чтобы не выглядеть недосмотром.
+func metalUnionAt(parts []Part, element string, u, face, window float64) []span {
+	var out []span
+	for _, p := range parts {
+		if p.Element != element || u < p.FromU || u > p.ToU {
+			continue
+		}
+		s := p.metalAt(u)
+		if s.hi < face-window || s.lo > face+window {
+			continue
+		}
+		out = append(out, s)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].lo < out[j].lo })
+	// Слияние касающихся: два тела, лежащие вплотную, есть сплошной металл, и
+	// считать их порознь значило бы объявить дефектом ровно ту починку, ради
+	// которой заведено объединение.
+	var merged []span
+	for _, s := range out {
+		if n := len(merged); n > 0 && s.lo <= merged[n-1].hi+RunningFaceTol {
+			merged[n-1].hi = math.Max(merged[n-1].hi, s.hi)
+			continue
+		}
+		merged = append(merged, s)
+	}
+	return merged
+}
+
+func totalLen(ss []span) float64 {
+	var l float64
+	for _, s := range ss {
+		l += s.hi - s.lo
+	}
+	return l
+}
+
+// overlapShare — какая доля УЖЕ ИЗ ДВУХ объединений у них общая.
 //
 // Именно меньшего, а не суммы и не большего: накладка шире рельса законно
 // закрывает стык целиком, и деление на сумму объявило бы это дефектом. Вопрос
 // стоит так: «продолжено ли то, что было», а не «совпали ли обводы».
-func overlapShare(aLo, aHi, bLo, bHi float64) float64 {
-	common := math.Min(aHi, bHi) - math.Max(aLo, bLo)
-	if common <= 0 {
-		return 0
+func overlapShare(before, after []span) float64 {
+	var common float64
+	for _, a := range before {
+		for _, b := range after {
+			if d := math.Min(a.hi, b.hi) - math.Max(a.lo, b.lo); d > 0 {
+				common += d
+			}
+		}
 	}
-	narrow := math.Min(aHi-aLo, bHi-bLo)
+	narrow := math.Min(totalLen(before), totalLen(after))
 	if narrow <= 0 {
 		return 0
 	}
@@ -387,7 +479,7 @@ func overlapShare(aLo, aHi, bLo, bHi float64) float64 {
 // Два вопроса подряд, и второй имеет смысл только после первого: сперва есть ли
 // чему примыкать (грань), затем продолжено ли тело (сечение). Обратный порядок
 // сравнивал бы сечения у деталей, стоящих в метре друг от друга.
-func findBreaks(ports []Port, gaps []Gap) []Break {
+func findBreaks(parts []Part, ports []Port, gaps []Gap) []Break {
 	var out []Break
 	for i, p := range ports {
 		if !p.Interior || coveredByGap(p, gaps) {
@@ -406,18 +498,28 @@ func findBreaks(ports []Port, gaps []Gap) []Break {
 				best, bestD = j, d
 			}
 		}
-		if best < 0 {
-			out = append(out, Break{Kind: BreakOpen, Port: p, Distance: bestD})
+		// ОКНО — две ширины собственного сечения порта, вокруг его середины.
+		// Соседняя нитка колеи отстоит на gauge и в окно не попадает; тело,
+		// уехавшее вбок на свою ширину, ещё попадает — иначе прыжок выглядел бы
+		// пустотой, то есть другим дефектом.
+		mid := (p.MetalFrom + p.MetalTo) / 2
+		window := 2 * (p.MetalTo - p.MetalFrom)
+		before := metalUnionAt(parts, p.Element, p.U-RunningFaceTol, mid, window)
+		after := metalUnionAt(parts, p.Element, p.U+RunningFaceTol, mid, window)
+		if share := overlapShare(before, after); share >= MinMetalOverlap {
 			continue
-		}
-		near := ports[best]
-		if bestD > RunningFaceTol {
-			out = append(out, Break{Kind: BreakOpen, Port: p, Nearest: near, Distance: bestD})
-			continue
-		}
-		share := overlapShare(p.MetalFrom, p.MetalTo, near.MetalFrom, near.MetalTo)
-		if share < MinMetalOverlap {
-			out = append(out, Break{Kind: BreakStep, Port: p, Nearest: near, Distance: bestD, Overlap: share})
+		} else {
+			b := Break{Kind: BreakStep, Port: p, Distance: bestD, Overlap: share}
+			// Пустая сторона — это ОТСУТСТВИЕ детали, а не прыжок тела: у неё
+			// другая починка (завести деталь, а не сдвинуть её), и звать оба
+			// одним словом значило бы разбирать каждое заново.
+			if len(before) == 0 || len(after) == 0 {
+				b.Kind = BreakOpen
+			}
+			if best >= 0 {
+				b.Nearest = ports[best]
+			}
+			out = append(out, b)
 		}
 	}
 	return out
@@ -457,15 +559,15 @@ func breaksError(owner string, breaks []Break) error {
 				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U)
 		case b.Kind == BreakStep:
 			// Отказ называет ОБА отрезка, а не только долю: доля говорит «плохо», а
-			// отрезки — куда именно уехало тело, и по ним видно, что грань та же.
-			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: грань сошлась с %s[%s], а тело прыгнуло — [%.3f, %.3f] против [%.3f, %.3f], общего %.0f %% (нужно %.0f %%)",
-				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U, b.Nearest.Part, b.Nearest.End,
+			// отрезки — куда именно уехало тело.
+			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: металл не продолжен — до [%.3f, %.3f], после [%.3f, %.3f], общего %.0f %% (нужно %.0f %%)",
+				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U,
 				b.Port.MetalFrom, b.Port.MetalTo, b.Nearest.MetalFrom, b.Nearest.MetalTo,
 				b.Overlap*100, MinMetalOverlap*100)
 		default:
-			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: ближайший металл %s[%s] в %.4f м (допуск %.4f)",
+			msg += fmt.Sprintf("\n  %s[%s] на %s u=%.3f: с одной стороны металла нет вовсе; ближайший порт %s[%s] в %.4f м",
 				b.Port.Part, b.Port.End, b.Port.Element, b.Port.U,
-				b.Nearest.Part, b.Nearest.End, b.Distance, RunningFaceTol)
+				b.Nearest.Part, b.Nearest.End, b.Distance)
 		}
 	}
 	return fmt.Errorf("%s", msg)
