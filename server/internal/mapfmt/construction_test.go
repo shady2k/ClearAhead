@@ -459,9 +459,9 @@ func TestRailWithoutSectionIsValid(t *testing.T) {
 // перевод не менял на путях ничего — игрок жал клавишу, панель меняла слово,
 // мир стоял (ClearAhead-86mb).
 func TestSwitchBlockIsRequiredForTurnouts(t *testing.T) {
-	rejectsConstruction(t, seedmap.Station(withType(func(tt *mapfmt.TrackType) {
-		tt.Switch = nil
-	})), "нет блока switch")
+	rejectsConstruction(t, seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Topology.Turnouts[0].TurnoutType = ""
+	})), "не указан turnout_type")
 }
 
 // TestSwitchRejectsImpossibleBlade — числа остряка проверяются диапазоном и
@@ -474,19 +474,27 @@ func TestSwitchBlockIsRequiredForTurnouts(t *testing.T) {
 func TestSwitchRejectsImpossibleBlade(t *testing.T) {
 	cases := []struct {
 		name    string
-		corrupt func(*mapfmt.TrackType)
+		corrupt func(*mapfmt.TurnoutType)
 		reason  string
 	}{
-		{"остряк короче метра", func(tt *mapfmt.TrackType) { tt.Switch.BladeLength = 0.5 }, "switch.blade_length"},
-		{"остряк длиннее двадцати метров", func(tt *mapfmt.TrackType) { tt.Switch.BladeLength = 25 }, "switch.blade_length"},
-		{"ход остряка ничтожен", func(tt *mapfmt.TrackType) { tt.Switch.Throw = 0.001 }, "switch.throw"},
-		{"ход остряка шире головки втрое", func(tt *mapfmt.TrackType) { tt.Switch.Throw = 0.4 }, "разрывает путь"},
+		{"остряк короче метра", func(dt *mapfmt.TurnoutType) { dt.Switch.BladeLengthStraight = 0.5 }, "blade_length_straight"},
+		{"кривой остряк длиннее двадцати метров", func(dt *mapfmt.TurnoutType) { dt.Switch.BladeLengthDiverging = 25 }, "blade_length_diverging"},
+		{"ход остряка ничтожен", func(dt *mapfmt.TurnoutType) { dt.Switch.Throw = 0.001 }, "switch.throw"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rejectsConstruction(t, seedmap.Station(withType(c.corrupt)), c.reason)
+			rejectsConstruction(t, seedmap.Station(withTurnoutType(c.corrupt)), c.reason)
 		})
 	}
+}
+
+// withTurnoutType — правка ПРОЕКТА перевода в фикстуре.
+//
+// Заведена вместе с каталогом типов устройств: до 2026-08-16 остряк и крестовина
+// правились через withType, то есть через тип ПУТИ, и это было ровно то смешение
+// двух вопросов, ради разделения которого каталог и появился.
+func withTurnoutType(f func(*mapfmt.TurnoutType)) seedmap.Option {
+	return seedmap.Mutate(func(m *mapfmt.Map) { f(&m.Construction.TurnoutTypes[0]) })
 }
 
 // TestFrogBlockIsRequiredForTurnouts — стрелка без крестовины не выходит наружу.
@@ -495,9 +503,9 @@ func TestSwitchRejectsImpossibleBlade(t *testing.T) {
 // него нитки в крестовине просто пересекаются — ни желоба, ни усовика, ни
 // контррельса, то есть место перехода колеса с нитки на нитку не показано ничем.
 func TestFrogBlockIsRequiredForTurnouts(t *testing.T) {
-	rejectsConstruction(t, seedmap.Station(withType(func(tt *mapfmt.TrackType) {
-		tt.Frog = nil
-	})), "нет блока frog")
+	rejectsConstruction(t, seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
+		m.Construction.TurnoutTypes = nil
+	})), "не найден в каталоге")
 }
 
 // TestFrogRejectsImpossibleGeometry — числа крестовины проверяются диапазоном и
@@ -509,18 +517,18 @@ func TestFrogBlockIsRequiredForTurnouts(t *testing.T) {
 func TestFrogRejectsImpossibleGeometry(t *testing.T) {
 	cases := []struct {
 		name    string
-		corrupt func(*mapfmt.TrackType)
+		corrupt func(*mapfmt.TurnoutType)
 		reason  string
 	}{
-		{"желоб ничтожен", func(tt *mapfmt.TrackType) { tt.Frog.Flangeway = 0.001 }, "frog.flangeway"},
-		{"желоб контррельса огромен", func(tt *mapfmt.TrackType) { tt.Frog.CheckFlangeway = 0.5 }, "frog.check_flangeway"},
-		{"усовик длиной с перегон", func(tt *mapfmt.TrackType) { tt.Frog.WingLength = 50 }, "frog.wing_length"},
-		{"отгиб длиннее контррельса", func(tt *mapfmt.TrackType) { tt.Frog.Flare = 1.9 }, "не помещаются"},
-		{"раструб уже желоба", func(tt *mapfmt.TrackType) { tt.Frog.FlareGap = 0.03 }, "не шире желобов"},
+		{"желоб ничтожен", func(dt *mapfmt.TurnoutType) { dt.FrogSet.Flangeway = 0.001 }, "frog_set.flangeway"},
+		{"желоб контррельса огромен", func(dt *mapfmt.TurnoutType) { dt.FrogSet.CheckFlangeway = 0.5 }, "frog_set.check_flangeway"},
+		{"усовик длиной с перегон", func(dt *mapfmt.TurnoutType) { dt.FrogSet.WingLength = 50 }, "frog_set.wing_length"},
+		{"отгиб длиннее контррельса", func(dt *mapfmt.TurnoutType) { dt.FrogSet.Flare = 1.9 }, "не помещаются"},
+		{"раструб уже желоба", func(dt *mapfmt.TurnoutType) { dt.FrogSet.FlareGap = 0.03 }, "не шире рабочего желоба"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			rejectsConstruction(t, seedmap.Station(withType(c.corrupt)), c.reason)
+			rejectsConstruction(t, seedmap.Station(withTurnoutType(c.corrupt)), c.reason)
 		})
 	}
 }

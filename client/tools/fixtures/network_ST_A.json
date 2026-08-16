@@ -1200,7 +1200,7 @@
       "passage": "018bcfe5-680a-7242-8242-00000a424242:diverging",
       "branch": "diverging",
       "offset": 0.76,
-      "length": 8.3,
+      "length": 6.515,
       "throw": 0.152,
       "grow": -1.0,
       "section": [
@@ -1259,7 +1259,7 @@
       "passage": "018bcfe5-680a-7242-8242-00000a424242:straight",
       "branch": "straight",
       "offset": -0.76,
-      "length": 8.3,
+      "length": 6.5,
       "throw": 0.152,
       "grow": 1.0,
       "section": [
@@ -1318,7 +1318,7 @@
       "passage": "018bcfe5-680b-7242-8242-00000b424242:diverging",
       "branch": "diverging",
       "offset": 0.76,
-      "length": 8.3,
+      "length": 6.515,
       "throw": 0.152,
       "grow": -1.0,
       "section": [
@@ -1377,7 +1377,7 @@
       "passage": "018bcfe5-680b-7242-8242-00000b424242:straight",
       "branch": "straight",
       "offset": -0.76,
-      "length": 8.3,
+      "length": 6.5,
       "throw": 0.152,
       "grow": 1.0,
       "section": [
@@ -1573,7 +1573,7 @@
       "kind": "stock",
       "offset": -0.76,
       "from": 0.0,
-      "to": 8.3
+      "to": 6.515
     },
     {
       "owner": "018bcfe5-680a-7242-8242-00000a424242",
@@ -1581,7 +1581,7 @@
       "kind": "stock",
       "offset": 0.76,
       "from": 0.0,
-      "to": 8.3
+      "to": 6.515
     },
     {
       "owner": "018bcfe5-680a-7242-8242-00000a424242",
@@ -1605,7 +1605,7 @@
       "kind": "stock",
       "offset": -0.76,
       "from": 0.0,
-      "to": 8.3
+      "to": 6.515
     },
     {
       "owner": "018bcfe5-680b-7242-8242-00000b424242",
@@ -1613,7 +1613,7 @@
       "kind": "stock",
       "offset": 0.76,
       "from": 0.0,
-      "to": 8.3
+      "to": 6.515
     },
     {
       "owner": "018bcfe5-680b-7242-8242-00000b424242",

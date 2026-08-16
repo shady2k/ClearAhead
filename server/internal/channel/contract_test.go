@@ -768,7 +768,7 @@ func TestTurnoutUnderTrainIsRefused(t *testing.T) {
 		{Element: passage, From: 10 * units.Meter, To: net.Elements[passage].LengthS,
 			Direction: netloc.DirForward},
 		{Element: seedmap.StationMain, From: 0,
-			To: 34*units.Meter + 180*units.Millimeter - (net.Elements[passage].LengthS - 10*units.Meter),
+			To:        34*units.Meter + 180*units.Millimeter - (net.Elements[passage].LengthS - 10*units.Meter),
 			Direction: netloc.DirForward},
 	}
 	if err := span.Connected(net); err != nil {

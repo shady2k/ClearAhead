@@ -93,7 +93,11 @@ func buildTurnoutBlades(m *mapfmt.Map, els map[string]Element, rg *RenderGeometr
 		types[c.Types[i].ID] = c.Types[i]
 	}
 	for _, t := range m.Topology.Turnouts {
-		bs, gaps, err := turnoutBlades(els, types, c, t)
+		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		if err != nil {
+			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
+		}
+		bs, gaps, err := turnoutBlades(els, types, c, t, dt)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
@@ -139,7 +143,7 @@ func sortRailGaps(rg *RenderGeometry) {
 // где кончается остряк, и посчитай их порознь — два ответа на вопрос «где корень»
 // разъехались бы у первой же карты с коротким проходом, где остряк обрезан.
 func turnoutBlades(els map[string]Element, types map[string]mapfmt.TrackType,
-	c *mapfmt.Construction, t mapfmt.Turnout) ([]RenderTurnoutBlade, []RenderTurnoutRailGap, error) {
+	c *mapfmt.Construction, t mapfmt.Turnout, dt mapfmt.TurnoutType) ([]RenderTurnoutBlade, []RenderTurnoutRailGap, error) {
 	typ := t.Type
 	if typ == "" {
 		typ = c.DefaultType
@@ -148,13 +152,10 @@ func turnoutBlades(els map[string]Element, types map[string]mapfmt.TrackType,
 	if !ok {
 		return nil, nil, fmt.Errorf("тип %q не разрешается — колею и остряк взять неоткуда", typ)
 	}
-	if tt.Switch == nil {
-		// Валидатор карты этого не пропускает, но компилятор не полагается на
-		// то, что его позвали после валидатора, — то же правило, что у обхода в
-		// NextTurnout.
-		return nil, nil, fmt.Errorf("у типа %s нет блока switch — остряка нет",
-			mapfmt.Labeled(tt.Name, typ))
-	}
+	// ОСТРЯК БЕРЁТСЯ У ТИПА УСТРОЙСТВА, А КОЛЕЯ — У ТИПА ПУТИ, и это разные
+	// источники по существу: рельс Р65 лежит и в 1/9, и в 1/11, а длина остряка
+	// у них разная. До 2026-08-16 оба числа жили у типа пути, и на карте с двумя
+	// марками обе получали один остряк.
 	half := tt.Gauge / 2
 
 	// Внутренние нитки — те же, что пересекаются в крестовине (§5).
@@ -186,7 +187,12 @@ func turnoutBlades(els map[string]Element, types map[string]mapfmt.TrackType,
 		// проход — от геометрии устройства, и у короткого перевода второе меньше
 		// первого. Обрезка честнее отказа: карта законна, а остряк во всю длину
 		// прохода — это по-прежнему остряк.
-		length := tt.Switch.BladeLength
+		// ДЛИНА СВОЯ У КАЖДОЙ ВЕТВИ: кривой остряк длиннее прямого, потому что
+		// мерится по дуге (у проекта 2434 — 6.515 против 6.500).
+		length := dt.Switch.BladeLengthStraight
+		if p.ID == t.ID+mapfmt.PassageDiverging {
+			length = dt.Switch.BladeLengthDiverging
+		}
 		if l := el.Plan.Length().Meters(); length > l {
 			length = l
 		}
@@ -196,7 +202,7 @@ func turnoutBlades(els map[string]Element, types map[string]mapfmt.TrackType,
 			Branch:  p.Branch,
 			Offset:  offset,
 			Length:  length,
-			Throw:   tt.Switch.Throw,
+			Throw:   dt.Switch.Throw,
 			// Тело растёт К ОСИ — против знака выноса. Остряк лежит ВНУТРИ колеи и
 			// прижимается к рамному рельсу гранью; расти наружу ему некуда, там сам
 			// рамный рельс (разбор — в шапке файла).

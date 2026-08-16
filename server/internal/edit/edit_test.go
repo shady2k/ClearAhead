@@ -99,7 +99,8 @@ func testBaseMap() *mapfmt.Map {
 			},
 		},
 		Construction: &mapfmt.Construction{
-			DefaultType: eIDTYPE,
+			TurnoutTypes: []mapfmt.TurnoutType{seedmap.TurnoutTypeForTest()},
+			DefaultType:  eIDTYPE,
 			Types: []mapfmt.TrackType{{
 				ID:      eIDTYPE,
 				Name:    "TRACK_MAIN_1520",
@@ -109,7 +110,7 @@ func testBaseMap() *mapfmt.Map {
 				Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5},
 				// Брусья обязательны у типа, на который ссылается стрелка: фикстуры
 				// правок стрелки содержат, и без блока карта не проходит вход.
-				Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086},
+				Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20},
 			}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUN, Name: "RUN_E0_E1_E2", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
@@ -153,8 +154,9 @@ func parallelBase() *mapfmt.Map {
 			},
 		},
 		Construction: &mapfmt.Construction{
-			DefaultType: eIDTYPE,
-			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086}}},
+			TurnoutTypes: []mapfmt.TurnoutType{seedmap.TurnoutTypeForTest()},
+			DefaultType:  eIDTYPE,
+			Types:        []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUNEA, Name: "RUN_EA", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: eIDEA, From: 0, To: 40, Direction: "forward"}}},
 				{ID: eIDRUNEB, Name: "RUN_EB", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{{Element: eIDEB, From: 0, To: 40, Direction: "forward"}}},
@@ -431,13 +433,14 @@ func TestSequenceOfEditsValidates(t *testing.T) {
 	// 2. Ответвиться от середины E1.
 	s, d := rightTurnout(t)
 	br, err := sess.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-		Edge:      eIDE1,
-		AtU:       50,
-		Hand:      "right",
-		Drive:     mapfmt.DriveManual,
-		Straight:  s,
-		Diverging: d,
-		Branch:    mustChain(t, 40),
+		Edge:        eIDE1,
+		AtU:         50,
+		Hand:        "right",
+		Drive:       mapfmt.DriveManual,
+		TurnoutType: seedmap.TurnoutTypeForTest().ID,
+		Straight:    s,
+		Diverging:   d,
+		Branch:      mustChain(t, 40),
 	}})
 	if err != nil {
 		t.Fatalf("branch: %v", err)
@@ -502,7 +505,7 @@ func TestFailedApplyLeavesMockupAndWorldUntouched(t *testing.T) {
 		// Платформа за концом элемента.
 		{Op: OpPlace, Place: PlaceIntent{Element: eIDE2, From: 90, To: 150, Side: "right", Offset: 1.745, Width: 3, Height: 0.2, SlabThickness: 0.35}},
 		// Ветвление ровно на конце ребра.
-		{Op: OpBranch, Branch: BranchIntent{Edge: eIDE1, AtU: 100, Hand: "right", Drive: mapfmt.DriveManual}},
+		{Op: OpBranch, Branch: BranchIntent{Edge: eIDE1, AtU: 100, Hand: "right", Drive: mapfmt.DriveManual, TurnoutType: seedmap.TurnoutTypeForTest().ID}},
 		// Продление от стыка (не лист).
 		{Op: OpExtend, Extend: ExtendIntent{Port: eIDN1 + ".P1", Chain: mustChain(t, 10)}},
 		// Продление от порта стрелки.
@@ -616,7 +619,8 @@ func TestEraseTurnoutCascade(t *testing.T) {
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
 		ID: eIDSWX, Name: "SWX", Kind: mapfmt.KindRail, Hand: "right", Drive: mapfmt.DriveManual,
-		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
+		TurnoutType: seedmap.TurnoutTypeForTest().ID,
+		Ports:       mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{eIDSWX: {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
 	m.Topology.Edges = append(m.Topology.Edges,
@@ -686,7 +690,8 @@ func TestEraseTurnoutCapsHangingEnd(t *testing.T) {
 	s, d := rightTurnout(t)
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
 		ID: eIDSWZ, Name: "SWZ", Kind: mapfmt.KindRail, Hand: "right", Drive: mapfmt.DriveElectric,
-		Ports: mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
+		TurnoutType: seedmap.TurnoutTypeForTest().ID,
+		Ports:       mapfmt.TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"},
 	})
 	m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{eIDSWZ: {Straight: toAlignments(t, s), Diverging: toAlignments(t, d)}}
 	m.Topology.Edges = append(m.Topology.Edges,
@@ -949,7 +954,7 @@ func TestCommitRequiresClosure(t *testing.T) {
 
 	s, d := rightTurnout(t)
 	if _, err := sess.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-		Edge: eIDE1, AtU: 50, Hand: "right", Drive: mapfmt.DriveManual, Straight: s, Diverging: d, Branch: mustChain(t, 40),
+		Edge: eIDE1, AtU: 50, Hand: "right", Drive: mapfmt.DriveManual, TurnoutType: seedmap.TurnoutTypeForTest().ID, Straight: s, Diverging: d, Branch: mustChain(t, 40),
 	}}); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
@@ -1002,7 +1007,7 @@ func TestConflictRejectedAtCommit(t *testing.T) {
 	// только на коммите, занятия участка вперёд нет.
 	s, d := rightTurnout(t)
 	if _, err := sB.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-		Edge: extID, AtU: 25, Hand: "right", Drive: mapfmt.DriveManual, Straight: s, Diverging: d, Branch: mustChain(t, 20),
+		Edge: extID, AtU: 25, Hand: "right", Drive: mapfmt.DriveManual, TurnoutType: seedmap.TurnoutTypeForTest().ID, Straight: s, Diverging: d, Branch: mustChain(t, 20),
 	}}); err != nil {
 		t.Fatalf("apply B: %v", err)
 	}
@@ -1224,8 +1229,9 @@ func TestRunsMergeAcrossToToJoint(t *testing.T) {
 			},
 		},
 		Construction: &mapfmt.Construction{
-			DefaultType: eIDTYPE,
-			Types:       []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}, Switch: &mapfmt.TrackSwitch{BladeLength: 8.30, Throw: 0.152}, Frog: &mapfmt.TrackFrog{Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00, CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086}}},
+			TurnoutTypes: []mapfmt.TurnoutType{seedmap.TurnoutTypeForTest()},
+			DefaultType:  eIDTYPE,
+			Types:        []mapfmt.TrackType{{ID: eIDTYPE, Name: "TRACK_MAIN_1520", Gauge: 1.520, Rail: mapfmt.TrackRail{Height: 0.18, HeadWidth: 0.075}, Sleeper: mapfmt.TrackSleeper{Pitch: 0.6, Length: 2.5, Width: 0.28, Height: 0.20}, Ballast: mapfmt.TrackBallast{HalfWidth: 1.75, Depth: 0.30, CribDepth: 0.10, SideSlope: 1.5}, Timber: &mapfmt.TrackTimber{Pitch: 0.50, LengthMax: 5.50, Width: 0.30, Height: 0.20}}},
 			Runs: []mapfmt.ConstructionRun{
 				{ID: eIDRUN56, Name: "RUN_E5_E6", Coordinate: "u", Phase: 0, Spans: []netloc.IntervalU{
 					{Element: eIDE5, From: 0, To: 100, Direction: "forward"},
@@ -1304,13 +1310,14 @@ func TestEditReproducibleWithInjectedSource(t *testing.T) {
 		}
 		s, d := rightTurnout(t)
 		br, err := sess.Apply(Intent{Op: OpBranch, Branch: BranchIntent{
-			Edge:      eIDE1,
-			AtU:       50,
-			Hand:      "right",
-			Drive:     mapfmt.DriveManual,
-			Straight:  s,
-			Diverging: d,
-			Branch:    mustChain(t, 40),
+			Edge:        eIDE1,
+			AtU:         50,
+			Hand:        "right",
+			Drive:       mapfmt.DriveManual,
+			TurnoutType: seedmap.TurnoutTypeForTest().ID,
+			Straight:    s,
+			Diverging:   d,
+			Branch:      mustChain(t, 40),
 		}})
 		if err != nil {
 			t.Fatalf("branch: %v", err)

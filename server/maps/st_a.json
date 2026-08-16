@@ -3,7 +3,7 @@
   "map_id": "ST_A",
   "map_revision": 3,
   "anchors": {
-    "018bcfe5-6806-7242-8242-000006424242.P1": {
+    "018bcfe5-6840-7242-8242-000040424242.P1": {
       "x": 0,
       "y": 0,
       "z": 142,
@@ -13,7 +13,7 @@
   "topology": {
     "nodes": [
       {
-        "id": "018bcfe5-6806-7242-8242-000006424242",
+        "id": "018bcfe5-6840-7242-8242-000040424242",
         "name": "N_BOUNDARY",
         "ports": [
           {
@@ -60,6 +60,7 @@
         "kind": "rail",
         "hand": "right",
         "frog": "1/9",
+        "turnout_type": "018bcfe5-6850-7242-8242-000050424242",
         "drive": "manual",
         "ports": {
           "common": "C",
@@ -73,6 +74,7 @@
         "kind": "rail",
         "hand": "right",
         "frog": "1/9",
+        "turnout_type": "018bcfe5-6850-7242-8242-000050424242",
         "drive": "electric",
         "ports": {
           "common": "C",
@@ -86,7 +88,7 @@
         "id": "018bcfe5-680c-7242-8242-00000c424242",
         "name": "E_APPROACH",
         "kind": "rail",
-        "from": "018bcfe5-6806-7242-8242-000006424242.P1",
+        "from": "018bcfe5-6840-7242-8242-000040424242.P1",
         "to": "018bcfe5-680a-7242-8242-00000a424242.C"
       },
       {
@@ -351,19 +353,6 @@
           "length_max": 5.5,
           "width": 0.3,
           "height": 0.2
-        },
-        "switch": {
-          "blade_length": 8.3,
-          "throw": 0.152
-        },
-        "frog": {
-          "flangeway": 0.046,
-          "check_flangeway": 0.044,
-          "wing_length": 2,
-          "check_length": 4.5,
-          "casting_length": 0.9,
-          "flare": 0.25,
-          "flare_gap": 0.086
         }
       }
     ],
@@ -429,6 +418,27 @@
             "direction": "forward"
           }
         ]
+      }
+    ],
+    "turnout_types": [
+      {
+        "id": "018bcfe5-6850-7242-8242-000050424242",
+        "name": "Р65 1/9 пр. 2434",
+        "frog": "1/9",
+        "switch": {
+          "blade_length_straight": 6.5,
+          "blade_length_diverging": 6.515,
+          "throw": 0.152
+        },
+        "frog_set": {
+          "flangeway": 0.046,
+          "check_flangeway": 0.044,
+          "wing_length": 2,
+          "check_length": 4.5,
+          "casting_length": 0.9,
+          "flare": 0.25,
+          "flare_gap": 0.086
+        }
       }
     ]
   },

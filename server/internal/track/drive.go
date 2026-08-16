@@ -113,7 +113,11 @@ func buildTurnoutDrives(m *mapfmt.Map, els map[string]Element, rg *RenderGeometr
 		types[c.Types[i].ID] = c.Types[i]
 	}
 	for _, t := range m.Topology.Turnouts {
-		d, err := turnoutDrive(els, types, c, t)
+		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		if err != nil {
+			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
+		}
+		d, err := turnoutDrive(els, types, c, t, dt)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
@@ -129,7 +133,7 @@ func buildTurnoutDrives(m *mapfmt.Map, els map[string]Element, rg *RenderGeometr
 
 // turnoutDrive считает привод одной стрелки.
 func turnoutDrive(els map[string]Element, types map[string]mapfmt.TrackType,
-	c *mapfmt.Construction, t mapfmt.Turnout) (*RenderTurnoutDrive, error) {
+	c *mapfmt.Construction, t mapfmt.Turnout, dt mapfmt.TurnoutType) (*RenderTurnoutDrive, error) {
 	typ := t.Type
 	if typ == "" {
 		typ = c.DefaultType
@@ -194,9 +198,10 @@ func turnoutDrive(els map[string]Element, types map[string]mapfmt.TrackType,
 	// проходит под путём и связывает станину с обоими остряками сразу, как на
 	// настоящем переводе. Считается только там, где есть остряк: без блока
 	// switch тяге не до чего тянуться, и нули здесь означают «нет тяги».
-	if tt.Switch != nil {
-		reach(d, offset, tt.Gauge/2, tt.Switch.Throw)
-	}
+	// Ход остряка — свойство ПРОЕКТА перевода, а не типа пути (переезд
+	// 2026-08-16): вынос переводной тяги равен ходу, и брать его у типа пути
+	// значило бы, что у двух марок на одном рельсе тяга одинакова.
+	reach(d, offset, tt.Gauge/2, dt.Switch.Throw)
 	return d, nil
 }
 

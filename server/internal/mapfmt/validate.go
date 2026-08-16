@@ -175,6 +175,11 @@ func (m *Map) checkUniqueIDs() error {
 				return err
 			}
 		}
+		for _, tt := range m.Construction.TurnoutTypes {
+			if err := register("тип устройства", tt.Name, tt.ID); err != nil {
+				return err
+			}
+		}
 	}
 	// Objects — указатель: карта без блока objects законна, и разыменование
 	// здесь уронило бы её до штатной проверки формы.

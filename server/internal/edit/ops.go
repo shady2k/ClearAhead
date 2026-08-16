@@ -292,6 +292,9 @@ func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 	if in.Hand != "left" && in.Hand != "right" {
 		return fmt.Errorf("edit: ветвление: рукость %q, ожидается left или right", in.Hand)
 	}
+	if _, err := m.TurnoutTypeByID(in.TurnoutType); err != nil {
+		return fmt.Errorf("edit: ветвление: %w", err)
+	}
 	if in.Drive != mapfmt.DriveManual && in.Drive != mapfmt.DriveElectric {
 		return fmt.Errorf("edit: ветвление: переводной механизм %q, ожидается %s или %s",
 			in.Drive, mapfmt.DriveManual, mapfmt.DriveElectric)
@@ -350,11 +353,12 @@ func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 	// разрешить ему развилку из рельсов в шоссе, для которой нет ни геометрии,
 	// ни правил.
 	m.Topology.Turnouts = append(m.Topology.Turnouts, mapfmt.Turnout{
-		ID:    swID,
-		Name:  "SW",
-		Kind:  edge.Kind,
-		Hand:  in.Hand,
-		Drive: in.Drive,
+		ID:          swID,
+		Name:        "SW",
+		Kind:        edge.Kind,
+		Hand:        in.Hand,
+		TurnoutType: in.TurnoutType,
+		Drive:       in.Drive,
 		Ports: mapfmt.TurnoutPorts{
 			Common:    "C",
 			Straight:  "S",

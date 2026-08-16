@@ -23,7 +23,16 @@ import (
 // Каждый отказ начинается с префикса «отрисовка: » — модуль называет себя в
 // тексте отказа (см. Validate).
 func (m *Map) validateConstruction() error {
+	// КАТАЛОГ ТИПОВ УСТРОЙСТВ проверяется первым: ссылки стрелок на него не
+	// зависят от блока construction (карта без него тоже обязана получить отказ,
+	// если в ней есть стрелка), и порядок здесь называет эту независимость.
 	const prefix = "отрисовка: "
+	// Каталог называет себя тем же модулем, что и решётка: он часть того же
+	// рецепта конструкции, и отказ, приходящий без имени модуля, читался бы как
+	// пришедший ниоткуда.
+	if err := validateTurnoutTypes(m); err != nil {
+		return fmt.Errorf("%s%w", prefix, err)
+	}
 	// Размеры платформ проверяются до раннего выхода: карта с платформой без
 	// размеров не должна выйти наружу, даже если решётка ещё не авторилась.
 	if err := m.checkPlatformSizes(prefix); err != nil {
@@ -50,6 +59,15 @@ func (m *Map) validateConstruction() error {
 			return fmt.Errorf("%sтип %q объявлен дважды", prefix, t.ID)
 		}
 		types[t.ID] = *t
+	}
+	// БЛОК С ОДНИМ ЛИШЬ КАТАЛОГОМ ЗАКОНЕН, и это не поблажка. default_type
+	// отвечает на вопрос «какой тип ПУТИ подставить run'у, у которого он
+	// опущен»; там, где нет ни типов, ни run'ов, вопроса не существует. Карта,
+	// объявившая проекты переводов и ещё не авторившая решётку, — законное
+	// промежуточное состояние, и требовать от неё умолчания значило бы требовать
+	// ответа на незаданный вопрос.
+	if c.DefaultType == "" && len(c.Types) == 0 && len(c.Runs) == 0 {
+		return nil
 	}
 	if c.DefaultType == "" {
 		return fmt.Errorf("%sdefault_type не задан", prefix)
@@ -83,24 +101,6 @@ func (m *Map) validateConstruction() error {
 		if tt, ok := types[resolved]; ok && tt.Timber == nil {
 			return fmt.Errorf(
 				"%sстрелка %s: у типа %s нет блока timber — под переводом лежат не шпалы, и эпюру брусьев взять неоткуда",
-				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
-		}
-		// ОСТРЯКИ ОБЯЗАТЕЛЬНЫ ПО ТОМУ ЖЕ ДОВОДУ, ЧТО И БРУСЬЯ. Стрелка без
-		// подвижной части — это стрелка, перевод которой не виден на путях
-		// ничем: игрок жмёт клавишу, панель меняет слово, мир стоит. Цена
-		// пропуска измерена не рассуждением — так оно и было до 2026-08-15
-		// (ClearAhead-86mb).
-		if tt, ok := types[resolved]; ok && tt.Switch == nil {
-			return fmt.Errorf(
-				"%sстрелка %s: у типа %s нет блока switch — остряка нет, и перевод стрелки не виден на путях ничем",
-				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
-		}
-		// КРЕСТОВИНА ОБЯЗАТЕЛЬНА ПО ТОМУ ЖЕ ДОВОДУ. Без неё нитки в крестовине
-		// просто пересекаются: ни желоба, ни усовика, ни контррельса — то есть
-		// место, где колесо переходит с нитки на нитку, ничем не показано.
-		if tt, ok := types[resolved]; ok && tt.Frog == nil {
-			return fmt.Errorf(
-				"%sстрелка %s: у типа %s нет блока frog — крестовины нет, нитки в ней просто пересекаются",
 				prefix, Labeled(t.Name, t.ID), Labeled(tt.Name, resolved))
 		}
 	}
@@ -319,70 +319,6 @@ func checkTrackType(prefix string, t *TrackType) error {
 				prefix, Labeled(t.Name, t.ID), tb.LengthMax, t.Sleeper.Length)
 		}
 	}
-	if f := t.Frog; f != nil {
-		if !(f.Flangeway >= MinFlangeway && f.Flangeway <= MaxFlangeway) {
-			return bad("frog.flangeway", f.Flangeway, MinFlangeway, MaxFlangeway)
-		}
-		if !(f.CheckFlangeway >= MinFlangeway && f.CheckFlangeway <= MaxFlangeway) {
-			return bad("frog.check_flangeway", f.CheckFlangeway, MinFlangeway, MaxFlangeway)
-		}
-		if !(f.WingLength >= MinFrogRailLength && f.WingLength <= MaxFrogRailLength) {
-			return bad("frog.wing_length", f.WingLength, MinFrogRailLength, MaxFrogRailLength)
-		}
-		if !(f.CheckLength >= MinFrogRailLength && f.CheckLength <= MaxFrogRailLength) {
-			return bad("frog.check_length", f.CheckLength, MinFrogRailLength, MaxFrogRailLength)
-		}
-		if !(f.CastingLength >= MinFrogRailLength && f.CastingLength <= MaxFrogRailLength) {
-			return bad("frog.casting_length", f.CastingLength, MinFrogRailLength, MaxFrogRailLength)
-		}
-		// СЕРДЕЧНИК КОРОЧЕ УСОВИКА. Усовик обнимает сердечник с двух сторон и по
-		// построению длиннее его; отливка длиннее своих крыльев — это уже не
-		// крестовина, а вставка.
-		if f.CastingLength*2 > f.WingLength {
-			return fmt.Errorf(
-				"%sтип %q: сердечник %g в каждую сторону не помещается в усовик %g — крылья короче отливки",
-				prefix, Labeled(t.Name, t.ID), f.CastingLength, f.WingLength)
-		}
-		if !(f.Flare >= MinFlare && f.Flare <= MaxFlare) {
-			return bad("frog.flare", f.Flare, MinFlare, MaxFlare)
-		}
-		if !(f.FlareGap >= MinFlangeway && f.FlareGap <= MaxFlangeway) {
-			return bad("frog.flare_gap", f.FlareGap, MinFlangeway, MaxFlangeway)
-		}
-		// РАСТРУБ ШИРЕ РАБОЧЕГО ЖЕЛОБА. Отдельным отказом, а не диапазоном:
-		// оба числа порознь законны, а раструб уже желоба — это воронка,
-		// сужающаяся навстречу колесу.
-		if f.FlareGap <= f.Flangeway || f.FlareGap <= f.CheckFlangeway {
-			return fmt.Errorf(
-				"%sтип %q: frog.flare_gap %g не шире желобов (%g и %g) — раструб на то и раструб, что он шире",
-				prefix, Labeled(t.Name, t.ID), f.FlareGap, f.Flangeway, f.CheckFlangeway)
-		}
-		// ДВА ОТГИБА КОРОЧЕ САМОЙ НИТКИ. Иначе рабочей части не остаётся вовсе:
-		// контррельс, состоящий из одних отгибов, ничего не удерживает.
-		if 2*f.Flare >= f.CheckLength || 2*f.Flare >= f.WingLength {
-			return fmt.Errorf(
-				"%sтип %q: два отгиба по %g не помещаются в усовик %g и контррельс %g — рабочей части не остаётся",
-				prefix, Labeled(t.Name, t.ID), f.Flare, f.WingLength, f.CheckLength)
-		}
-	}
-	if t.Switch != nil {
-		sw := t.Switch
-		if !(sw.BladeLength >= MinBladeLength && sw.BladeLength <= MaxBladeLength) {
-			return bad("switch.blade_length", sw.BladeLength, MinBladeLength, MaxBladeLength)
-		}
-		if !(sw.Throw >= MinBladeThrow && sw.Throw <= MaxBladeThrow) {
-			return bad("switch.throw", sw.Throw, MinBladeThrow, MaxBladeThrow)
-		}
-		// Ход остряка ШИРЕ ГОЛОВКИ РЕЛЬСА — это не перевод, а вырванный рельс:
-		// отведённый остряк отходит от рамного на просвет, в который проваливается
-		// колесо. Отдельным отказом, а не диапазоном: 0.5 м законны для хода узкой
-		// колеи и незаконны рядом с головкой в 75 мм.
-		if sw.Throw > t.Rail.HeadWidth*BladeThrowHeads {
-			return fmt.Errorf(
-				"%sтип %q: switch.throw %g больше %g ширин головки (%g) — такой отвод не переводит стрелку, а разрывает путь",
-				prefix, Labeled(t.Name, t.ID), sw.Throw, BladeThrowHeads, t.Rail.HeadWidth)
-		}
-	}
 	return nil
 }
 
@@ -587,6 +523,52 @@ func checkRailSection(t *TrackType) error {
 			"rail.section: головка начинается на x = %g м, а не на нуле — "+
 				"x отсчитывается ОТ РАБОЧЕЙ ГРАНИ, и она же начало отсчёта",
 			topMin)
+	}
+	return nil
+}
+
+// validateTrackFrog проверяет КРЕСТОВИННЫЙ КОМПЛЕКТ.
+//
+// Вынесено из проверки типа пути 2026-08-16, когда комплект переехал в каталог
+// типов устройств: правила у него не изменились, изменился владелец. Второй
+// копии этих порогов проект не заводит — они и здесь одни.
+func validateTrackFrog(where string, f TrackFrog) error {
+	bad := func(field string, got, lo, hi float64) error {
+		return fmt.Errorf("mapfmt: тип устройства %s: %s = %v вне [%v, %v]", where, field, got, lo, hi)
+	}
+	if !(f.Flangeway >= MinFlangeway && f.Flangeway <= MaxFlangeway) {
+		return bad("frog_set.flangeway", f.Flangeway, MinFlangeway, MaxFlangeway)
+	}
+	if !(f.CheckFlangeway >= MinFlangeway && f.CheckFlangeway <= MaxFlangeway) {
+		return bad("frog_set.check_flangeway", f.CheckFlangeway, MinFlangeway, MaxFlangeway)
+	}
+	if !(f.WingLength >= MinFrogRailLength && f.WingLength <= MaxFrogRailLength) {
+		return bad("frog_set.wing_length", f.WingLength, MinFrogRailLength, MaxFrogRailLength)
+	}
+	if !(f.CheckLength >= MinFrogRailLength && f.CheckLength <= MaxFrogRailLength) {
+		return bad("frog_set.check_length", f.CheckLength, MinFrogRailLength, MaxFrogRailLength)
+	}
+	if !(f.CastingLength >= MinFrogRailLength && f.CastingLength <= MaxFrogRailLength) {
+		return bad("frog_set.casting_length", f.CastingLength, MinFrogRailLength, MaxFrogRailLength)
+	}
+	// СЕРДЕЧНИК КОРОЧЕ УСОВИКА. Усовик обнимает сердечник с двух сторон и по
+	// построению длиннее его; отливка длиннее своих крыльев — это уже не
+	// крестовина, а вставка.
+	if f.CastingLength*2 > f.WingLength {
+		return fmt.Errorf("mapfmt: тип устройства %s: сердечник %g в каждую сторону не помещается в усовик %g — крылья короче отливки",
+			where, f.CastingLength, f.WingLength)
+	}
+	if !(f.Flare >= MinFlare && f.Flare <= MaxFlare) {
+		return bad("frog_set.flare", f.Flare, MinFlare, MaxFlare)
+	}
+	if f.FlareGap <= f.Flangeway {
+		return fmt.Errorf("mapfmt: тип устройства %s: раструб %g не шире рабочего желоба %g — раструб на то и раструб",
+			where, f.FlareGap, f.Flangeway)
+	}
+	// ДВА ОТГИБА КОРОЧЕ САМОЙ НИТКИ: нитка из одних отгибов ничего не удерживает.
+	if 2*f.Flare >= f.CheckLength || 2*f.Flare >= f.WingLength {
+		return fmt.Errorf("mapfmt: тип устройства %s: два отгиба по %g не помещаются в усовик %g и контррельс %g — рабочей части не остаётся",
+			where, f.Flare, f.WingLength, f.CheckLength)
 	}
 	return nil
 }

@@ -62,7 +62,8 @@ func TestBladesLieOnTheThreadsThatMeetAtTheFrog(t *testing.T) {
 // его позвали после валидатора» (blade.go). Валидатор проверяется своим тестом.
 func TestBladeIsNotLongerThanItsPassage(t *testing.T) {
 	m := seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
-		m.Construction.Types[0].Switch.BladeLength = 40.0
+		m.Construction.TurnoutTypes[0].Switch.BladeLengthStraight = 40.0
+		m.Construction.TurnoutTypes[0].Switch.BladeLengthDiverging = 40.0
 	}))
 	els, rg, err := Compile(m)
 	if err != nil {

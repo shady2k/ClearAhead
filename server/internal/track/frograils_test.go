@@ -32,6 +32,7 @@ func TestFrogRailsSitOnBothSidesOfTheWheel(t *testing.T) {
 			len(rg.TurnoutRails), len(m.Topology.Turnouts))
 	}
 	tt := m.Construction.Types[0]
+	dt := m.Construction.TurnoutTypes[0]
 	half := tt.Gauge / 2
 	hands := map[string]string{}
 	for _, x := range m.Topology.Turnouts {
@@ -51,8 +52,8 @@ func TestFrogRailsSitOnBothSidesOfTheWheel(t *testing.T) {
 				t.Fatalf("усовик %s: рабочая грань на %+.4f, нитка на %+.4f — усовик обязан лежать снаружи",
 					r.Element, r.Face, inner)
 			}
-			if d := math.Abs(r.Face) - math.Abs(inner); math.Abs(d-tt.Frog.Flangeway) > 1e-9 {
-				t.Fatalf("усовик %s: желоб %.4f, а норма %.4f", r.Element, d, tt.Frog.Flangeway)
+			if d := math.Abs(r.Face) - math.Abs(inner); math.Abs(d-dt.FrogSet.Flangeway) > 1e-9 {
+				t.Fatalf("усовик %s: желоб %.4f, а норма %.4f", r.Element, d, dt.FrogSet.Flangeway)
 			}
 		case FrogRailCheck:
 			// ВНУТРИ противоположной нитки: ближе к оси, чем она.
@@ -65,8 +66,8 @@ func TestFrogRailsSitOnBothSidesOfTheWheel(t *testing.T) {
 				t.Fatalf("контррельс %s оказался по другую сторону оси: %+.4f против нитки %+.4f",
 					r.Element, r.Face, opp)
 			}
-			if d := math.Abs(opp) - math.Abs(r.Face); math.Abs(d-tt.Frog.CheckFlangeway) > 1e-9 {
-				t.Fatalf("контррельс %s: желоб %.4f, а норма %.4f", r.Element, d, tt.Frog.CheckFlangeway)
+			if d := math.Abs(opp) - math.Abs(r.Face); math.Abs(d-dt.FrogSet.CheckFlangeway) > 1e-9 {
+				t.Fatalf("контррельс %s: желоб %.4f, а норма %.4f", r.Element, d, dt.FrogSet.CheckFlangeway)
 			}
 		case FrogRailCasting:
 			// Грань сердечника лежит РОВНО ПО НИТКЕ: отливка есть продолжение
@@ -125,8 +126,8 @@ func TestFrogRailsSitOnBothSidesOfTheWheel(t *testing.T) {
 // клиент откладывал бы нитку за концом элемента — то есть на соседнем пути.
 func TestFrogRailsAreClippedToTheirPassage(t *testing.T) {
 	m := seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
-		m.Construction.Types[0].Frog.CheckLength = 100
-		m.Construction.Types[0].Frog.WingLength = 100
+		m.Construction.TurnoutTypes[0].FrogSet.CheckLength = 100
+		m.Construction.TurnoutTypes[0].FrogSet.WingLength = 100
 	}))
 	els, rg, err := Compile(m)
 	if err != nil {

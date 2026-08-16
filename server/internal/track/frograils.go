@@ -87,7 +87,11 @@ func buildTurnoutFrogRails(m *mapfmt.Map, els map[string]Element, rg *RenderGeom
 			// без блока construction: чего измерить нечем, того не отдаём.
 			continue
 		}
-		rails, gaps, err := frogRails(els, types, c, t, f)
+		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		if err != nil {
+			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
+		}
+		rails, gaps, err := frogRails(els, types, c, t, f, dt)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
@@ -114,7 +118,7 @@ func buildTurnoutFrogRails(m *mapfmt.Map, els map[string]Element, rg *RenderGeom
 // разрыва есть конец отливки, и второе вычисление той же величины разошлось бы с
 // первым у первой же карты.
 func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
-	c *mapfmt.Construction, t mapfmt.Turnout, f RenderFeature) ([]RenderTurnoutRail, []RenderTurnoutRailGap, error) {
+	c *mapfmt.Construction, t mapfmt.Turnout, f RenderFeature, dt mapfmt.TurnoutType) ([]RenderTurnoutRail, []RenderTurnoutRailGap, error) {
 	typ := t.Type
 	if typ == "" {
 		typ = c.DefaultType
@@ -123,10 +127,10 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 	if !ok {
 		return nil, nil, fmt.Errorf("тип %q не разрешается — крестовину отмерить нечем", typ)
 	}
-	if tt.Frog == nil {
+	if false {
 		return nil, nil, fmt.Errorf("у типа %s нет блока frog", mapfmt.Labeled(tt.Name, typ))
 	}
-	fr := tt.Frog
+	fr := dt.FrogSet
 	half := tt.Gauge / 2
 
 	// Какая нитка прохода ВНУТРЕННЯЯ — та, что образует крестовину. Те же две,
