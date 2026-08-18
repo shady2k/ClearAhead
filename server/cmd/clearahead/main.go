@@ -191,8 +191,16 @@ func main() {
 		log.Printf("мир засеян: регион %s (домен x [%v, %v] z [%v, %v])",
 			rep.Region, worldMap.Terrain.Domain.MinX, worldMap.Terrain.Domain.MaxX,
 			worldMap.Terrain.Domain.MinZ, worldMap.Terrain.Domain.MaxZ)
+	} else if rep.NetworkRepublished {
+		// ГРОМКО И С ПРИЧИНОЙ. Прежде сервер молча отдавал замороженное тело,
+		// построенное другим кодом, и расхождение ловилось только глазом на
+		// кадре (бида ClearAhead-u09k). Теперь оно называется на старте: что
+		// именно разошлось и какой версией опубликовано новое.
+		log.Printf("мир уже есть: регион %s; СЕТЬ ПЕРЕСОБРАНА — лежавшее тело построено не этим кодом или не этой картой, опубликована версия мира %d",
+			rep.Region, rep.WorldVersion)
 	} else {
-		log.Printf("мир уже есть: регион %s, база не тронута", rep.Region)
+		log.Printf("мир уже есть: регион %s, база не тронута (сеть версии %d совпала байт в байт)",
+			rep.Region, rep.WorldVersion)
 	}
 
 	// Прогрев: явный шаг того, кто запускает, и только для свежего засева

@@ -371,3 +371,41 @@ func BenchmarkRebuildTurnout(b *testing.B) {
 	}
 	b.ReportMetric(float64(rep.TotalChunks), "адресов")
 }
+
+// BenchmarkNetworkBuildVsCompare — ЦЕНА СВЕРКИ ТЕЛА СЕТИ на боевой карте.
+//
+// Меряется ради одного решения: сверять ли лежащее тело с построенным на каждом
+// старте (republishStaleNetwork). Сборка тела на старте была и раньше — её
+// делает seedHead ради идемпотентного засева, — а сверка добавляет к ней
+// сравнение байтов. Замер и говорит, сколько именно добавляет: если бы сравнение
+// стоило заметную долю сборки, довод «сверка ничего не стоит сверх уже
+// сделанного» был бы рассуждением, а не числом.
+func BenchmarkNetworkBuildVsCompare(b *testing.B) {
+	m, err := mapfmt.DecodeFile(filepath.Join("..", "..", mapfmt.ShippedMapPath))
+	if err != nil {
+		b.Fatalf("разбор боевой карты: %v", err)
+	}
+	_, body, err := seedHead(m)
+	if err != nil {
+		b.Fatalf("тело сети: %v", err)
+	}
+	stored := string(body)
+
+	b.Run("build", func(b *testing.B) {
+		for b.Loop() {
+			if _, _, err := seedHead(m); err != nil {
+				b.Fatalf("сборка: %v", err)
+			}
+		}
+		b.ReportMetric(float64(len(body)), "байт")
+	})
+	b.Run("compare", func(b *testing.B) {
+		same := false
+		for b.Loop() {
+			same = stored == string(body)
+		}
+		if !same {
+			b.Fatal("сравнение тела с самим собой дало неравенство")
+		}
+	})
+}

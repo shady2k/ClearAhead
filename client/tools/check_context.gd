@@ -38,7 +38,8 @@
 ## снимка — одна команда, а не правка руками.
 extends RefCounted
 
-## Снимок ответа /regions/ST_A/revisions/2/network. Разложен по строкам нарочно:
+## Снимок ответа /matches/{m}/worlds/{v}/network — ТОГО адреса, который читает
+## игра (разбор — у network_answer). Разложен по строкам нарочно:
 ## diff снимка обязан читаться, иначе обновление фикстуры проходит не глядя.
 const NETWORK_FIXTURE := "res://tools/fixtures/network_ST_A.json"
 
@@ -92,6 +93,7 @@ var _man: Dictionary = {}
 var _man_answer: WorldApi.Manifest = null
 var _net_data: Dictionary = {}
 var _net_answer: WorldApi.Network = null
+var _match_id := ""
 var _elements: Array[TrackGeom.Element] = []
 var _axis := PackedVector2Array()
 
@@ -132,14 +134,59 @@ func revision() -> int:
 	return int(man.get("revision", -1))
 
 
+## network_answer — сеть С ТОГО АДРЕСА, КОТОРЫЙ ЧИТАЕТ ИГРА.
+##
+## Адрес версионный (/matches/{m}/worlds/{v}/network), а не ревизионный, и это
+## не мелочь адресации. Ревизионный отдаёт геометрию, скомпилированную из карты
+## в памяти сервера, — она свежая ВСЕГДА. Версионный отдаёт замороженную
+## публикацию из базы. Пока публикация не зависела от кода геометрии, проверки
+## по ревизионному адресу зеленели на мире, которого игрок не видел (бида
+## ClearAhead-u09k): наката в кадре не было вовсе, упоры не рисовались две
+## ревизии, а client-check был зелен.
+##
+## Проверка обязана мерить ТОТ мир, который показывают. Совпадение двух адресов
+## само по себе — тоже утверждение, и сторожит его отдельная проверка
+## (checks/live/35_worlds), а не молчаливое допущение здесь.
 func network_answer() -> WorldApi.Network:
 	if _net_answer == null:
-		_net_answer = await api.network(region, await revision())
+		var version := await world_version()
+		var match_id := await match_of_live()
+		if version <= 0 or match_id == "":
+			_break("сеть не получена: версия мира %d, матч %q — версионный адрес не собрать"
+				% [version, match_id])
+			_net_answer = WorldApi.Network.new()
+			_net_answer.reason = "версионный адрес не собран"
+			return _net_answer
+		_net_answer = await api.world_network(match_id, version)
 		if _net_answer.failed():
 			_break("сеть не получена: " + _net_answer.reason)
 		else:
 			_net_data = _net_answer.data
 	return _net_answer
+
+
+## world_version — версия мира, которую назвала голова проекций манифеста. Ноль
+## значит «не названа»: подставлять единицу нельзя, правдоподобная версия
+## неотличима от настоящей.
+func world_version() -> int:
+	var man := await manifest()
+	var head: Dictionary = man.get("projection_head", {}) as Dictionary
+	return int(head.get("world_version", 0))
+
+
+## match_of_live — матч, которому принадлежит мир. Спрашивается у живого
+## состояния: каталога партий не существует, и другого места, где сервер называет
+## партию, сегодня нет (match.Match, шапка). Пустая строка — «не назван».
+func match_of_live() -> String:
+	if _match_id != "":
+		return _match_id
+	if api == null:
+		return ""
+	var res := await api.live(region)
+	if res.failed():
+		return ""
+	_match_id = String(res.data.get("match", ""))
+	return _match_id
 
 
 func network_data() -> Dictionary:

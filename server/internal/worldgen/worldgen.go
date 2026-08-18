@@ -41,6 +41,13 @@ type Report struct {
 	ByLevel     map[int]int
 	TotalChunks int
 	TotalBytes  int
+	// WorldVersion — версия мира, которую голова называет ПОСЛЕ бутстрапа.
+	// Названа отчётом, потому что бутстрап её теперь двигает (см.
+	// republishStaleNetwork), и запускающий обязан увидеть, какую именно.
+	WorldVersion int64
+	// NetworkRepublished — сеть пересобрана и опубликована новой версией:
+	// лежавшее в базе тело разошлось с тем, что строит этот код на этой карте.
+	NetworkRepublished bool
 }
 
 // Generate разворачивает карту в чанки и пишет их в базу ПОД ВЕРСИЕЙ МИРА.
@@ -515,7 +522,11 @@ func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64, provenance st
 		if err := s.Seed(worldstore.Region{ID: region, Rule: rule, Domain: m.Terrain.Domain}, head, network); err != nil {
 			return Report{Region: region}, false, err
 		}
-		return Report{Region: region}, false, nil
+		v, republished, err := republishStaleNetwork(s, region, network)
+		if err != nil {
+			return Report{Region: region}, false, err
+		}
+		return Report{Region: region, WorldVersion: v, NetworkRepublished: republished}, false, nil
 	}
 
 	frame := "{}"
@@ -552,7 +563,77 @@ func Bootstrap(s *worldstore.Store, m *mapfmt.Map, revision int64, provenance st
 	// на этом останавливается: чанки ради ПРАВИЛЬНОСТИ не нужны (порождение по
 	// требованию — основной путь), а прогрев — это КЭШ, и включается он явно
 	// тем, кто запускает (cmd/clearahead), а не подразумевается бутстрапом.
-	return Report{Region: region}, true, nil
+	return Report{Region: region, WorldVersion: head.WorldVersion}, true, nil
+}
+
+// republishStaleNetwork сверяет ЛЕЖАЩЕЕ тело сети с ПОСТРОЕННЫМ и, если они
+// разошлись, публикует построенное новой версией мира. Возвращает версию,
+// которую голова называет после сверки, и было ли что публиковать.
+//
+// # Дефект, ради которого это заведено (бида ClearAhead-u09k)
+//
+// Игра берёт сеть с версионного адреса /matches/{m}/worlds/{v}/network, и тело
+// там заморожено по построению. Версию порождала только публикация, а
+// публикация зависела от карты и рецепта — и НЕ ЗАВИСЕЛА ОТ КОДА. Значит всякая
+// правка геометрии в игру не попадала, пока базу не пересеют руками, и молчала
+// об этом: сервер отдавал старое тело как исправное.
+//
+// Стоило это трёх коммитов подряд (f03e784, a706675, a9bc9fd), прошедших
+// зелёные проверки: наката в живом клиенте не было вовсе, а упоры две ревизии
+// не рисовались — «упоров 0» вместо 3.
+//
+// # Почему сверяются БАЙТЫ, а не объявленная версия построителя
+//
+// Кандидат «завести константу версии геометрии и поднимать её при правке» — это
+// то же «не забывать пересеивать», только записанное в код: забывший поднять
+// константу получает ровно прежнюю тишину. Байты забыть нельзя.
+//
+// Сверка ничего не стоит сверх уже сделанного: тело сети бутстрап СТРОИТ НА
+// КАЖДОМ СТАРТЕ (seedHead) — оно нужно ему для идемпотентного засева, — и
+// сверка добавляет к этому одно сравнение байтов. ЗАМЕР на боевой карте ST_A
+// (BenchmarkNetworkBuildVsCompare, Apple M2 Pro): сборка тела 16.5 мс,
+// сравнение 49789 байт — 1.5 мкс, то есть одна одиннадцатитысячная сборки.
+//
+// # Почему НОВАЯ версия, а не правка тела текущей
+//
+// Тело под версией v неизменяемо, и на этом стоит Cache-Control: immutable
+// (бида ClearAhead-5vr). Переписать тело версии, которую клиент уже забрал,
+// значило бы соврать ему кэшем — тем самым заголовком, ради честности которого
+// версионный адрес и заведён. Новая версия старому ответу не мешает: клиент
+// спросит голову и увидит, что мир уехал вперёд (world.gd следит за
+// projection_head и пересобирает).
+//
+// # Отказом это не сделано нарочно
+//
+// Бида предлагала альтернативу: сервер, увидевший чужое тело, отказывает или
+// кричит в лог. Отказ здесь означал бы, что после всякой правки геометрии
+// сервер не поднимается, пока человек не выполнит обряд, — то есть та же ручная
+// работа, которую дефект и породил. Публикация делает правильное само, а лог
+// остаётся: cmd/clearahead печатает, какая версия опубликована и почему.
+func republishStaleNetwork(s *worldstore.Store, region string, built []byte) (int64, bool, error) {
+	head, ok, err := s.GetProjectionHead(region)
+	if err != nil {
+		return 0, false, err
+	}
+	if !ok {
+		// Головы нет после Seed — это поломка хранилища, а не случай жизни:
+		// Seed кладёт голову той же транзакцией, что и регион.
+		return 0, false, fmt.Errorf("worldgen: регион %s заведён без головы проекций", region)
+	}
+	stored, _, ok, err := s.GetNetwork(region, head.WorldVersion)
+	if err != nil {
+		return 0, false, err
+	}
+	if ok && stored == string(built) {
+		return head.WorldVersion, false, nil
+	}
+	// Журнал передаётся СВОЙ ЖЕ: публикация сети не двигает «до какой команды
+	// построено», а откат этого числа голова отвергает.
+	next, err := s.Publish(region, nil, built, head.SourceJournalSeq)
+	if err != nil {
+		return 0, false, fmt.Errorf("worldgen: публикация пересобранной сети %s: %w", region, err)
+	}
+	return next.WorldVersion, true, nil
 }
 
 // seedHead собирает голову проекций и первое тело сети из карты: рецепт
