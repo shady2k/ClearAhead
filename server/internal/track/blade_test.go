@@ -61,20 +61,35 @@ func TestBladesLieOnTheThreadsThatMeetAtTheFrog(t *testing.T) {
 // нарочно: проверяется поведение КОМПИЛЯТОРА, который «не полагается на то, что
 // его позвали после валидатора» (blade.go). Валидатор проверяется своим тестом.
 func TestBladeIsNotLongerThanItsPassage(t *testing.T) {
-	m := seedmap.Station(seedmap.Mutate(func(m *mapfmt.Map) {
-		m.Construction.TurnoutTypes[0].Switch.BladeLengthStraight = 40.0
-		m.Construction.TurnoutTypes[0].Switch.BladeLengthDiverging = 40.0
-	}))
-	els, rg, err := Compile(m)
+	m := seedmap.Station()
+	_, els, err := Propagate(m)
 	if err != nil {
-		t.Fatalf("компиляция: %v", err)
+		t.Fatalf("распространение поз: %v", err)
 	}
-	for _, b := range rg.TurnoutBlades {
-		el, ok := els.Elements[b.Passage]
+	// ПРОЕКТ ПОРТИТСЯ У ВЫЗОВА, А НЕ В КАРТЕ: каталог живёт в коде сервера, и
+	// фикстура до него не достаёт. Портится копия записи, построитель зовётся
+	// напрямую — проверяется ровно его обрезка.
+	dt := seedmap.TurnoutProjectForTest()
+	dt.Switch.BladeLengthStraight = 40.0
+	dt.Switch.BladeLengthDiverging = 40.0
+	types := map[string]mapfmt.TrackType{}
+	for i := range m.Construction.Types {
+		types[m.Construction.Types[i].ID] = m.Construction.Types[i]
+	}
+	var blades []RenderTurnoutBlade
+	for _, x := range m.Topology.Turnouts {
+		got, err := turnoutBlades(els, types, m.Construction, x, dt)
+		if err != nil {
+			t.Fatalf("остряки стрелки %s: %v", x.ID, err)
+		}
+		blades = append(blades, got...)
+	}
+	for _, b := range blades {
+		el, ok := els[b.Passage]
 		if !ok {
 			t.Fatalf("проход %s не скомпилирован", b.Passage)
 		}
-		length := el.LengthU.Meters()
+		length := el.Plan.Length().Meters()
 		if b.Length > length+1e-9 {
 			t.Fatalf("остряк %.3f м на проходе %.3f м", b.Length, length)
 		}
@@ -85,110 +100,33 @@ func TestBladeIsNotLongerThanItsPassage(t *testing.T) {
 	}
 }
 
-// TestBladeGrowsOutwardLikeAnyRail — ТЕЛО ОСТРЯКА РАСТЁТ НАРУЖУ.
-//
-// # Здесь стояло обратное требование, и оно было ошибкой
-//
-// Тест требовал роста ВНУТРЬ КОЛЕИ с доводом «расти наружу некуда, там сам
-// рамный рельс». Довод был верен для той модели и неверен по существу: остряк
-// строился масштабированием путевого Р65, а такой профиль правда некуда
-// поставить. Замер: проникновение в рамный рельс доходило до 52 мм при росте к
-// оси и до 100 мм при росте наружу — НИ ОДНА постоянная сторона не годилась.
-//
-// Неверна была не сторона, а профиль. Остряк катают из острякового ОР65: он
-// ниже Р65 на 40 мм и лежит на стрелочной подушке ровно в эту толщину, поэтому
-// подошвы расходятся ПО ВЫСОТЕ, а не в плане. Тогда телу можно расти наружу —
-// как у всякого рельса, у которого рабочая грань смотрит внутрь колеи, а металл
-// уходит в другую сторону.
-//
-// Следствие проверяется отдельно (сборка): в корне тело остряка целиком
-// укладывается в тело закорневой нитки, и это стык, а не прыжок.
-func TestBladeGrowsOutwardLikeAnyRail(t *testing.T) {
+// TestBladeSpaceIsOwnedByNamedTurnoutParts — место остряка освобождается самой
+// сборкой, а не разворотом сечения и не маской маршрутной нитки.
+func TestBladeSpaceIsOwnedByNamedTurnoutParts(t *testing.T) {
 	m := seedmap.Station()
 	_, rg, err := Compile(m)
 	if err != nil {
 		t.Fatalf("компиляция: %v", err)
+	}
+	if len(rg.TurnoutBlades) == 0 {
+		t.Fatal("остряков нет вовсе — мерить нечего")
 	}
 	for _, b := range rg.TurnoutBlades {
 		if math.Abs(math.Abs(b.Grow)-1) > 1e-9 {
 			t.Fatalf("стрелка %s, ветвь %s: сторона роста %+.4f, ожидается ±1", b.Owner, b.Branch, b.Grow)
 		}
-		if math.Signbit(b.Grow) != math.Signbit(b.Offset) {
-			t.Fatalf("стрелка %s, ветвь %s: остряк на %+.4f растёт в %+.0f — внутрь колеи, а рельс растёт наружу",
-				b.Owner, b.Branch, b.Offset, b.Grow)
-		}
-	}
-}
-
-// TestSideBranchHasNoRailsAlongTheBlade — У БОКОВОГО ПРОХОДА НА УЧАСТКЕ ОСТРЯКА
-// СВОИХ НИТОК НЕТ, а у прямого разрывов нет вовсе.
-//
-// Так на настоящем переводе: до корня остряка боковой путь рельсов не имеет —
-// колесо идёт по рамному рельсу и остряку. У нас же обе нитки бокового прохода
-// шли от самого острия, и наружная лежала ВНУТРИ прижатого остряка прямого:
-// проходы выходят из одной точки одним курсом, и пока оси разошлись меньше
-// ширины головки, два рельса занимают один объём.
-//
-// Проверяются ОБЕ нитки бокового: разрыв на одной означал бы, что вторая
-// по-прежнему дублирует чужой рельс.
-func TestSideBranchHasNoRailsAlongTheBlade(t *testing.T) {
-	m := seedmap.Station()
-	_, rg, err := Compile(m)
-	if err != nil {
-		t.Fatalf("компиляция: %v", err)
-	}
-	half := m.Construction.Types[0].Gauge / 2
-	// Корень остряка бокового прохода — оттуда и досюда разрыв.
-	roots := map[string]float64{}
-	for _, b := range rg.TurnoutBlades {
-		if b.Branch == "diverging" {
-			roots[b.Passage] = b.Length
-		}
-	}
-	seen := map[string]map[float64]bool{}
-	for _, g := range rg.TurnoutRailGaps {
-		if g.Kind != GapStock {
-			continue
-		}
-		root, ok := roots[g.Element]
-		if !ok {
-			t.Fatalf("разрыв %s на элементе %s, который не боковой проход: рамный рельс отменяет нитки только у него",
-				g.Kind, g.Element)
-		}
-		// У ДВУХ НИТОК РАЗРЫВЫ РАЗНЫЕ, и это устройство перевода, а не поблажка.
-		//
-		// ВНУТРЕННЯЯ кончается ровно с остряком: остряк ЕСТЬ эта нитка на своём
-		// протяжении, за корнем её продолжает закорневой рельс.
-		//
-		// НАРУЖНАЯ кончается РАНЬШЕ — там, где нитки разошлись настолько, что
-		// перестали занимать один объём. У настоящего перевода наружная нить
-		// бокового пути не начинается, а ОТСЛАИВАЕТСЯ от рамного рельса; до
-		// 2026-08-16 она у нас возникала в корне посреди пустоты, и замер дал
-		// 0.227 м до ближайшего металла.
-		if g.From != 0 {
-			t.Fatalf("разрыв %s на %s начинается не с острия: [%.3f, %.3f]",
-				g.Kind, g.Element, g.From, g.To)
-		}
-		if g.To > root+1e-9 || g.To < 1e-9 {
-			t.Fatalf("разрыв %s на %s кончается на %.3f, а корень остряка на %.3f",
-				g.Kind, g.Element, g.To, root)
-		}
-		if math.Abs(math.Abs(g.Offset)-half) > 1e-9 {
-			t.Fatalf("разрыв %s на %s: нитка на %+.4f, а нитки прохода на ±%.4f",
-				g.Kind, g.Element, g.Offset, half)
-		}
-		if seen[g.Element] == nil {
-			seen[g.Element] = map[float64]bool{}
-		}
-		seen[g.Element][g.Offset] = true
-	}
-	if len(seen) != len(roots) {
-		t.Fatalf("разрывы у %d боковых проходов из %d", len(seen), len(roots))
-	}
-	for el, offsets := range seen {
-		if len(offsets) != 2 {
-			t.Fatalf("проход %s: разорвана %d нитка из двух — вторая по-прежнему дублирует рамный рельс",
-				el, len(offsets))
+		for _, r := range rg.Rails {
+			// Общая грань законна: рамный рельс лежит на ней же, а остряк
+			// прижат к нему изнутри колеи. Незаконно совпадение сторон, в
+			// которые растут ТЕЛА, — тогда они занимают один объём.
+			//
+			// У остряка сторон две, и путать их нельзя: Grow продолжает рабочую
+			// нитку за корнем, BodyGrow размещает само тело. Сравнение с Grow
+			// показывало бы наложение там, где его нет.
+			if r.Owner == b.Owner && r.Element == b.Passage && r.Grow == b.BodyGrow &&
+				math.Abs(r.Face-b.Offset) < 1e-9 && r.From < b.Length-1e-9 {
+				t.Fatalf("деталь %s занимает место остряка %s до корня %.3f", r.ID, b.Passage, b.Length)
+			}
 		}
 	}
 }

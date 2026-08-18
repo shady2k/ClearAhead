@@ -176,6 +176,11 @@ var driver_view := "eye"
 ## зонда, разбор — у app.gd::_board.
 var driver_board := false
 
+## ПОКАЗЫВАТЬ ЛИ ПОРТЫ ДЕТАЛЕЙ (ключ --ports, клавиша F2). Слой строится всегда,
+## а этот признак решает, видно ли его: снимок и зонд включают порты ключом, а
+## игрок — клавишей, и перестраивать ради этого мир было бы платой за просмотр.
+var ports_debug := false
+
 ## ДАЛЬНОСТЬ ВЗГЛЯДА, метры. Приходит от оболочки — это НАСТРОЙКА ИГРОКА.
 ##
 ## Свойство ВИДА, а не факт о месте, ровно тем же правом, каким клиенту
@@ -228,6 +233,9 @@ var _fog_standoff_m := -1.0
 
 var world: Node3D
 var ui_label: RichTextLabel
+## Панель выбранной детали (слой портов, F2). Своя, а не строка в панели отладки:
+## разбор — у _refresh_ports_panel.
+var ui_ports: RichTextLabel
 ## Подсказка подошедшему. Пустая и невидимая, пока предложить нечего.
 var ui_prompt: Label
 ## Пульт кабины: рукоятки, скорость и клавиши. Живёт ВСЕГДА, когда машинист
@@ -352,6 +360,19 @@ var _stock_assets := {}     # имя вида   -> Dictionary записи ка�
 var _device_models := {}
 var _terrain_node: Node3D = null
 var _terrain_solid: Array[MeshInstance3D] = []
+## Слой портов деталей (PortDebug). Держится узлом по тому же доводу, что гладь
+## воды: его меши НЕ становятся твердью — булавка порта не предмет мира, а метка
+## поверх него, и встать на неё нельзя ровно так же, как нельзя встать на подпись.
+var _ports_node: Node3D = null
+## Детали региона для выбора щелчком: перечень от PortDebug и тела по ключу.
+var _port_parts: Array[Dictionary] = []
+var _part_nodes := {}
+## Выбранная деталь: её место в _port_parts и материалы, снятые с её тел на
+## время подсветки. Материалы КЛАДУТСЯ ОБРАТНО при смене выбора — подсветка
+## обязана быть снимаемой, иначе она перестаёт быть подсветкой и становится
+## правкой показа.
+var _port_selected := -1
+var _port_saved := {}
 
 ## ВЕРСИЯ МИРА (sqym.6). Клиент рисует ОДНУ версию целиком и переключается на
 ## новую только по готовности её набора: сеть + патчи всех чанков в памяти.
@@ -410,6 +431,7 @@ func configure(cfg: Dictionary) -> void:
 	view_reach_m = float(cfg.get("view_reach_m", view_reach_m))
 	shot_path = String(cfg.get("shot_path", ""))
 	quit_when_done = bool(cfg.get("quit_when_done", false))
+	ports_debug = bool(cfg.get("ports", ports_debug))
 
 
 func _ready() -> void:
@@ -667,6 +689,32 @@ func _build_scene() -> void:
 	# клавиша H, и молчаливое умолчание сменилось на явный вопрос игрока.
 	ui_label.visible = shot_path != ""
 	ui.add_child(ui_label)
+
+	# ПАНЕЛЬ ВЫБРАННОЙ ДЕТАЛИ — внизу слева, под панелью отладки и над подсказкой.
+	# Мышь ей не принадлежит по тому же доводу, что панели отладки: это ответ, а
+	# не орган управления, и глотать щелчки по миру он не вправе — тем более что
+	# щелчком по миру его и открывают.
+	ui_ports = RichTextLabel.new()
+	ui_ports.bbcode_enabled = true
+	ui_ports.scroll_active = false
+	ui_ports.fit_content = true
+	ui_ports.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_ports.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	ui_ports.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	ui_ports.position = Vector2(14, -14)
+	ui_ports.custom_minimum_size = Vector2(560, 0)
+	ui_ports.size = Vector2(560, 0)
+	ui_ports.add_theme_font_size_override("normal_font_size", 13)
+	ui_ports.add_theme_font_size_override("bold_font_size", 14)
+	var pbox := StyleBoxFlat.new()
+	pbox.bg_color = Color(0.05, 0.06, 0.09, 0.90)
+	pbox.set_content_margin_all(10.0)
+	pbox.set_corner_radius_all(4)
+	pbox.border_color = Color(1.00, 0.85, 0.20, 0.75)
+	pbox.set_border_width_all(1)
+	ui_ports.add_theme_stylebox_override("normal", pbox)
+	ui_ports.visible = false
+	ui.add_child(ui_ports)
 
 	# ПОДСКАЗКА ПОДОШЕДШЕМУ. Появляется, когда действие возможно, и исчезает,
 	# когда нет, — так это устроено в играх, и довод у них общий: предложение
@@ -2029,43 +2077,11 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# стёрт, но не отполирован. Разбор и числа — у TrackView.RAILHEAD_FILLET.
 	var fillet_mat := TrackView.railfillet_material()
 	var thread_mat := TrackView.flat_material(Color(0.90, 0.91, 0.95), TrackView.PRIO_RAIL, true)
-	var threads: Array[PackedVector3Array] = []
-	var rail_bodies := 0
-	var railheads := 0
-	for sp in spans:
-		if sp.has_rail_body():
-			var rmi := MeshInstance3D.new()
-			rmi.name = "%s@rail" % sp.element_id
-			rmi.mesh = TrackView.rail_body_mesh(sp)
-			if rmi.mesh != null:
-				rmi.material_override = rail_mat
-				rails_node.add_child(rmi)
-				rail_bodies += 1
-			var hmi := MeshInstance3D.new()
-			hmi.name = "%s@railhead" % sp.element_id
-			hmi.mesh = TrackView.railhead_mesh(sp)
-			if hmi.mesh != null:
-				hmi.material_override = railhead_mat
-				rails_node.add_child(hmi)
-				railheads += 1
-			var fmi := MeshInstance3D.new()
-			fmi.name = "%s@fillet" % sp.element_id
-			fmi.mesh = TrackView.rail_fillet_mesh(sp)
-			if fmi.mesh != null:
-				fmi.material_override = fillet_mat
-				rails_node.add_child(fmi)
-			continue
-		threads.append_array(sp.threads())
-	if not threads.is_empty():
-		var thread_mi := MeshInstance3D.new()
-		thread_mi.name = "Threads"
-		thread_mi.mesh = TrackView.rail_mesh(threads)
-		if thread_mi.mesh != null:
-			thread_mi.material_override = thread_mat
-			rails_node.add_child(thread_mi)
-	st["rail_bodies_drawn"] = rail_bodies
-	st["railheads_drawn"] = railheads
-	st["rail_threads_drawn"] = threads.size()
+	# РЕЛЬСЫ ЗДЕСЬ БОЛЬШЕ НЕ СТРОЯТСЯ. С 2026-08-17 их все — и перегонные, и
+	# устройства — присылает сервер поимёнными деталями, и рисует их один цикл
+	# ниже (блок Rails). Здесь оставались символические нитки для участков без
+	# сечения; теперь и они приезжают деталями, а участок без сечения означает
+	# карту без профиля рельса, а не повод выдумать линию.
 	st["rail_spans_drawn"] = spans.size()
 
 	# 4а. ОСТРЯКИ — СВОИ ТЕЛА ВНУТРИ КОЛЕИ, а не подвижные участки ниток.
@@ -2079,6 +2095,11 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# Узлы ЗАПОМИНАЮТСЯ вместе с деталью: перевод пересобирает один меш, а не
 	# путь целиком — станция строится сотнями миллисекунд, а стрелку переводят
 	# посреди игры.
+	# ТЕЛА ДЕТАЛЕЙ ПО КЛЮЧУ ПРОВОДА — их подсвечивает выбор щелчком (F2). Ключ
+	# приходит от разбора (TrackBuild), а не собирается здесь: имя узла — вещь
+	# показа, и опознавать деталь по нему значило бы завязать выбор на строку,
+	# которую вправе поменять кто угодно, не тронув смысла.
+	var part_nodes := {}
 	var bl := TrackBuild.blades(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
 	var blade_list: Array[TrackBuild.Blade] = bl["list"]
 	var blade_parts := {}
@@ -2107,7 +2128,20 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 			rails_node.add_child(bfi)
 		blade_parts[blade.element_id] = {
 			"blade": blade, "node": bmi, "head": bhi, "fillet": bfi}
+		var blade_nodes: Array = [bmi]
+		if bhi.mesh != null:
+			blade_nodes.append(bhi)
+		if bfi.mesh != null:
+			blade_nodes.append(bfi)
+		part_nodes[blade.key] = blade_nodes
 	st["blades_drawn"] = blade_parts.size()
+	# ВЛАДЕЛЕЦ ДЛЯ ГАБАРИТА «СТРЕЛКА» — первый по каноническому порядку, по доводу
+	# крестовины: у двух стрелок ST_A общий габарит есть вся горловина.
+	var sowner := ""
+	for b_raw in blade_list:
+		var blade: TrackBuild.Blade = b_raw
+		if sowner == "" or blade.owner < sowner:
+			sowner = blade.owner
 	st["blades_skipped"] = bl["skipped"]
 	# Живые остряки подменяются ЦЕЛИКОМ и только на боевом пути — тот же довод и
 	# то же условие, что у приводов ниже: перестройка версии строит путь в
@@ -2153,8 +2187,8 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# (turnout_rails), сердечник остаётся пересечением самих ниток прохода.
 	# Точка крестовины из контракта НЕ УХОДИТ — она канонический адрес, — она
 	# просто перестала быть тем, что рисуют.
-	var fr := TrackBuild.frog_rails(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
-	var frog_rails: Array[TrackBuild.FrogRail] = fr["list"]
+	var fr := TrackBuild.rails(network, by_id, TESS_MAX_SEG_M, TESS_MAX_ANG_RAD)
+	var frog_rails: Array[TrackBuild.FrogRail] = TrackBuild.stitch_continuous_rails(fr["list"])
 	var frog_node := Node3D.new()
 	frog_node.name = "FrogRails"
 	node.add_child(frog_node)
@@ -2162,6 +2196,9 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# ГРАНИ СЕРДЕЧНИКА КОПЯТСЯ ПО ВЛАДЕЛЬЦУ: тело отливки лежит МЕЖДУ двумя
 	# гранями одной стрелки, и построить его по одной записи нельзя.
 	var castings := {}
+	# ТЕЛА СЕРДЕЧНИКОВ приезжают отдельным блоком: у отливки две грани и одно тело
+	# между ними, и вдоль одной оси она не описывается (контракт, RenderFrogCore).
+	var cores := TrackBuild.frog_cores(network)
 	for fr_raw in frog_rails:
 		var rail: TrackBuild.FrogRail = fr_raw
 		if rail.kind == TrackBuild.FROG_CASTING:
@@ -2177,6 +2214,8 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		mi.material_override = rail_mat
 		frog_node.add_child(mi)
 		frog_drawn += 1
+		for part_key in rail.part_keys:
+			part_nodes[part_key] = [mi]
 		# НАКАТ ХОДОВОЙ НИТКИ. Пусто у контррельса — по нему колесо не катится, и
 		# блестеть ему не с чего.
 		var rhi := MeshInstance3D.new()
@@ -2185,12 +2224,16 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		if rhi.mesh != null:
 			rhi.material_override = railhead_mat
 			frog_node.add_child(rhi)
+			for part_key in rail.part_keys:
+				(part_nodes[part_key] as Array).append(rhi)
 		var rfi := MeshInstance3D.new()
 		rfi.name = "%s@%s_fillet" % [rail.element_id, rail.kind]
 		rfi.mesh = TrackView.frog_rail_fillet_mesh(rail)
 		if rfi.mesh != null:
 			rfi.material_override = fillet_mat
 			frog_node.add_child(rfi)
+			for part_key in rail.part_keys:
+				(part_nodes[part_key] as Array).append(rfi)
 	var cast_drawn := 0
 	for owner_id in castings:
 		var pair: Array = castings[owner_id]
@@ -2200,12 +2243,16 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 			continue
 		var cmi := MeshInstance3D.new()
 		cmi.name = "%s@casting" % owner_id
-		cmi.mesh = TrackView.frog_casting_mesh(pair[0], pair[1])
+		cmi.mesh = TrackView.frog_casting_mesh(pair[0], pair[1], cores.get(owner_id))
 		if cmi.mesh == null:
 			continue
 		cmi.material_override = rail_mat
 		frog_node.add_child(cmi)
 		cast_drawn += 1
+		# ОБЕ ГРАНИ УКАЗЫВАЮТ НА ОДНО ТЕЛО: сердечник — цельная отливка, а граней
+		# у него две, и щелчок по любой обязан подсветить всю отливку.
+		for face_rail in pair:
+			part_nodes[(face_rail as TrackBuild.FrogRail).key] = [cmi]
 		# ПЛОЩАДКА СЕРДЕЧНИКА — накатом: по ней колесо переходит с усовика на
 		# отливку, и она полируется так же, как головка рельса.
 		var chi := MeshInstance3D.new()
@@ -2231,16 +2278,23 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	# ОДНОЙ, а не всех: у двух крестовин ST_A общий габарит — 66 м, то есть вся
 	# горловина, а спрашивают у этого кадра про желоб в 46 мм. Берётся первая по
 	# каноническому порядку владельцев — тому же, в котором их отдаёт сервер.
+	#
+	# ТОЛЬКО ДЕТАЛИ КРЕСТОВИНЫ, а не все детали её владельца. С 2026-08-17 сервер
+	# шлёт одним списком ВСЕ рельсы, и «владелец тот же» стало значить «вся
+	# стрелка»: кадр раздуло с пяти метров до тридцати двух, то есть желоб в 46 мм
+	# снова стал мельче пикселя. Замер: «габарит frog, кадр 32 м» в отчёте.
 	var fowner := ""
 	for fr_raw in frog_rails:
 		var rail: TrackBuild.FrogRail = fr_raw
+		if not _is_frog_part(rail.kind):
+			continue
 		if fowner == "" or rail.owner < fowner:
 			fowner = rail.owner
 	var fbox := Rect2()
 	var fbox_any := false
 	for fr_raw in frog_rails:
 		var rail: TrackBuild.FrogRail = fr_raw
-		if rail.owner != fowner:
+		if rail.owner != fowner or not _is_frog_part(rail.kind):
 			continue
 		for p_raw in rail.axis:
 			var p: TrackGeom.AxisPoint = p_raw
@@ -2248,6 +2302,35 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 			fbox = cell if not fbox_any else fbox.merge(cell)
 			fbox_any = true
 	st["frog_box"] = fbox
+	# ГАБАРИТ СТРЕЛКИ (frame=switch) — остряки И РАМНЫЕ РЕЛЬСЫ, тем же приёмом, что
+	# у крестовины: наводка берёт то, что нарисовано.
+	#
+	# Рамные рельсы входят в него не для запаса: стрелка — это они и остряки
+	# вместе, и кончаются они позже корня (у Р65 1/9 в 8.969 м против 6.5 м). По
+	# одним остряковым осям кадр обрезал бы стык за корнем — то самое место, ради
+	# которого габарит заведён 2026-08-17 вместе со слоем портов: ближайший кадр к
+	# нему был «горловина», 66 м на экран, где порт мельче пикселя.
+	var sbox := Rect2()
+	var sbox_any := false
+	for b_raw in blade_list:
+		var blade: TrackBuild.Blade = b_raw
+		if blade.owner != sowner:
+			continue
+		for p_raw in blade.axis:
+			var p: TrackGeom.AxisPoint = p_raw
+			var cell := Rect2(Vector2(p.x, p.y), Vector2.ZERO)
+			sbox = cell if not sbox_any else sbox.merge(cell)
+			sbox_any = true
+	for fr_raw in frog_rails:
+		var rail: TrackBuild.FrogRail = fr_raw
+		if rail.owner != sowner or rail.kind != TrackBuild.RAIL_STOCK:
+			continue
+		for p_raw in rail.axis:
+			var p: TrackGeom.AxisPoint = p_raw
+			var cell := Rect2(Vector2(p.x, p.y), Vector2.ZERO)
+			sbox = cell if not sbox_any else sbox.merge(cell)
+			sbox_any = true
+	st["switch_box"] = sbox
 
 	# 7. Стрелка — ОДНО устройство, а не две независимые ветви.
 	#
@@ -2296,6 +2379,27 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		built[d.owner] = stand
 	st["turnout_drives_drawn"] = drives.size()
 	st["turnout_drives_skipped"] = dr["skipped"]
+
+	# 9. ПОРТЫ ДЕТАЛЕЙ — отладочный слой поверх пути (PortDebug), по умолчанию
+	#    невидимый. Строится ВСЕГДА, а не по признаку: включают его клавишей F2
+	#    посреди партии, и перестройка пути ради просмотра стоила бы дороже сотни
+	#    спящих узлов.
+	var pd := PortDebug.build(network, by_id)
+	var ports_node: Node3D = pd["node"]
+	node.add_child(ports_node)
+	ports_node.visible = ports_debug
+	if parent == null:
+		# Выбор щелчком живёт только у ЖИВОГО пути: перестройка версии строит
+		# новый в стороне, и указывать на его детали пока не на что.
+		_port_parts = pd["parts"]
+		_part_nodes = part_nodes
+		_deselect_part()
+	st["ports_drawn"] = pd["ports"]
+	st["port_gaps_drawn"] = pd["gaps"]
+	st["port_index"] = pd["index"]
+	st["ports_skipped"] = pd["skipped"]
+	if parent == null:
+		_ports_node = ports_node
 	# Живые приводы подменяются ЦЕЛИКОМ, а не дополняются: перестройка версии
 	# строит новый путь в стороне, и старые узлы вместе со старым Track уезжают.
 	if parent == null:
@@ -2303,6 +2407,14 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 		_show_turnouts()
 		if _driver != null:
 			_driver.set_stands(_stand_list())
+
+
+## _is_frog_part — деталь ли это КРЕСТОВИНЫ. Усовик, контррельс и грань
+## сердечника — да; рамный, соединительный и перегонная нитка — нет, хотя владелец
+## у них может быть тот же.
+func _is_frog_part(kind: String) -> bool:
+	return kind == TrackBuild.FROG_WING or kind == TrackBuild.FROG_CHECK \
+		or kind == TrackBuild.FROG_CASTING
 
 
 func _axis_bbox(axis: PackedVector2Array) -> Rect2:
@@ -3045,7 +3157,11 @@ func _build_solid() -> void:
 ## и обход отдал бы их все (разбор — в _build_solid).
 func _solid_meshes(node: Node) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
-	if node == _water_node or node == _terrain_node:
+	# Слой портов пропускается целиком по той же причине, что гладь воды: он не
+	# предмет мира, а метка поверх него. Твердь из булавок дала бы человеку
+	# невидимую ступеньку у каждого стыка — и она стояла бы там, когда слой
+	# выключен, то есть неизвестно откуда.
+	if node == _water_node or node == _terrain_node or node == _ports_node:
 		return out
 	var mi := node as MeshInstance3D
 	if mi != null and mi.mesh != null:
@@ -3369,6 +3485,16 @@ func _frame_bbox(bbox: Rect2, elements: Array[TrackGeom.Element]) -> Rect2:
 				_fail("габарит «состав»: в партии нет ни одной поставленной единицы")
 				return bbox
 			return sb
+		"switch":
+			# СТРЕЛКА ВБЛИЗИ: остряки, рамные рельсы и стык за корнем. Заведено
+			# 2026-08-17 по той же причине, что «крестовина», и для того же разбора:
+			# слой портов показывает концы деталей, а концы эти отстоят на
+			# сантиметры — их не рассмотреть ни в одном кадре крупнее стрелки.
+			var sb2: Rect2 = stats.get("switch_box", Rect2())
+			if sb2.size == Vector2.ZERO:
+				_fail("габарит «стрелка»: остряков не приехало — наводиться не на что")
+				return bbox
+			return sb2
 		"frog":
 			# КРЕСТОВИНА ВБЛИЗИ. Заведено 2026-08-16: жалоба владельца «крестовина
 			# выглядит плохо, там каша» проверялась нечем — обзорный кадр наводится
@@ -3461,6 +3587,16 @@ static func _keycode_of(name: String) -> int:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	# ЩЕЛЧОК ПО ДЕТАЛИ — только при включённом слое портов, и событие НЕ съедается.
+	#
+	# Не съедается нарочно: левая кнопка у обзорной камеры начинает орбиту, и
+	# отобрав её, отладка отняла бы у мира вращение. Щелчок без протяжки орбиту не
+	# меняет, а протяжка попутно переберёт выбор — это дёшево и никому не мешает.
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if ports_debug and mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			_select_part_at(mb.position)
+		return
 	if not (event is InputEventKey):
 		return
 	var key := event as InputEventKey
@@ -3478,6 +3614,20 @@ func _unhandled_input(event: InputEvent) -> void:
 	if key.keycode == KEY_H:
 		if ui_label != null:
 			ui_label.visible = not ui_label.visible
+		get_viewport().set_input_as_handled()
+		return
+	# F2 — ПОРТЫ ДЕТАЛЕЙ. У мира, а не у панели, по тому же доводу, что F1: клавиша
+	# принадлежит миру целиком. Съедается всегда, даже когда слоя нет: иначе она
+	# доходила бы до кабины на карте без устройств и делала бы там что-то другое.
+	if key.keycode == KEY_F2:
+		ports_debug = not ports_debug
+		if is_instance_valid(_ports_node):
+			_ports_node.visible = ports_debug
+		if not ports_debug:
+			# Выключили слой — сняли и выбор: подсвеченная деталь без слоя
+			# осталась бы жёлтой в мире, и объяснить это было бы нечем.
+			_deselect_part()
+		_refresh_ports_panel()
 		get_viewport().set_input_as_handled()
 		return
 	# T — ПЕРЕВЕСТИ СТРЕЛКУ, ту самую, которую показывает пульт. Клавиша у мира,
@@ -3662,10 +3812,9 @@ func _hud_text() -> String:
 		l.append("  призма телом на %d участках, лентой на %d, нитью (без размеров) %d элемента: %s" % [
 			stats.get("ballast_prisms_drawn", 0), stats.get("ballast_ribbons_drawn", 0),
 			stats.get("bare_lines_drawn", 0), ", ".join(stats["elements_without_width_ids"])])
-		l.append("  шпал %d (рецепт: phase + n·pitch, полуоткрыто), рельсов телом %d (накатом %d), ниток %d, участков %d" % [
-			stats.get("sleepers_drawn", 0), stats.get("rail_bodies_drawn", 0),
-			stats.get("railheads_drawn", 0),
-			stats.get("rail_threads_drawn", 0), stats.get("rail_spans_drawn", 0)])
+		l.append("  шпал %d (рецепт: phase + n·pitch, полуоткрыто), рельсов деталями %d, участков %d" % [
+			stats.get("sleepers_drawn", 0), stats.get("frog_rails_drawn", 0),
+			stats.get("rail_spans_drawn", 0)])
 		l.append("  платформ %d (плитой %d), упоров %d, крестовин %d, стрелок %d" % [
 			stats.get("platforms_drawn", 0), stats.get("platform_slabs_drawn", 0),
 			stats.get("buffer_stops_drawn", 0), stats.get("frog_rails_drawn", 0), stats.get("devices", 0)])
@@ -3811,6 +3960,8 @@ func _hud_text() -> String:
 		l.append("[color=#ffc060]упор пропущен — %s[/color]" % s)
 	for s in (stats.get("frog_rails_skipped", []) as Array):
 		l.append("[color=#ffc060]особенность пропущена — %s[/color]" % s)
+	for s in (stats.get("ports_skipped", []) as Array):
+		l.append("[color=#ffc060]порт пропущен — %s[/color]" % s)
 	for s in (stats.get("unknown_fields", []) as Array):
 		l.append("[color=#ffc060]прислано, но клиент такого поля не знает — %s[/color]" % s)
 	if errors.is_empty():
@@ -3853,8 +4004,7 @@ func _print_report() -> void:
 			"ballast_ribbons_drawn", "ballast_toe_m", "bare_lines_drawn",
 			"sleepers_drawn", "sleeper_runs",
 			"timbers_drawn", "timber_grids", "timbers_skipped",
-			"sleepers_skipped", "rail_bodies_drawn", "railheads_drawn",
-			"rail_threads_drawn", "rail_spans_drawn",
+			"sleepers_skipped", "rail_spans_drawn",
 			# ОСТРЯКИ: сколько проходов подвижны и сколько раз они переставлялись.
 			# Второе число — доказательство, что перевод стрелки доехал до рельсов,
 			# а не остановился на указателе.
@@ -3863,6 +4013,10 @@ func _print_report() -> void:
 			"grass_drawn", "grass_plants", "grass_plant_ms",
 			"grass_chunks", "grass_chunks_kept", "ballast_mask_cells",
 			"platforms_drawn", "platforms_skipped", "frog_rails_drawn", "frog_rails_skipped",
+			# ПОРТЫ: сколько концов деталей и объявленных разрывов положено в мир.
+			# Числа нужны и при выключенном слое — «портов 0» на карте со стрелкой
+			# значит, что слой не построился, а по невидимому слою этого не видно.
+			"ports_drawn", "port_gaps_drawn", "ports_skipped",
 			"devices", "device_lines", "unknown_fields",
 			"chunks_requested", "chunks_got", "chunks_absent", "chunks_orphaned", "chunks_by_level",
 			"lod_nodes", "lod_anchors", "lod_linked",
@@ -3878,10 +4032,88 @@ func _print_report() -> void:
 	# Счётчики транспорта — свойство ПРОГОНА, а не факт о мире, и потому им место
 	# в отчёте, а не в решениях. Слой отдаёт их одной строкой; чем считались,
 	# отсюда не видно.
+	# ПЕРЕЧЕНЬ ДЕТАЛЕЙ — РАСШИФРОВКА НОМЕРОВ, стоящих в кадре слоя портов. Печатается
+	# всегда, а не только при включённом слое: номер называют, глядя на кадр, а
+	# кадр к тому времени уже снят и клиент закрыт.
+	#
+	# Отдельным блоком, а не значением ключа: сорок строк в одну строку отчёта —
+	# это не отчёт. Ключи выше печатаются как есть, потому что там числа.
+	var port_index: Array = stats.get("port_index", [])
+	if not port_index.is_empty():
+		print("--- ДЕТАЛИ ПУТИ (номера в кадре слоя портов, клавиша F2) ---")
+		for line in port_index:
+			print("  %s" % line)
 	print("%-24s %s" % ["transport_replies", api.transport_counts() if api != null else {}])
 	print("%-24s %d" % ["errors", errors.size()])
 	for e in errors:
 		print("  ОТКАЗ: %s" % e)
+
+
+
+## _select_part_at — выбрать деталь под курсором.
+##
+## Луч берётся у КАМЕРЫ ВЬЮПОРТА, а не у поля camera: в роли с человеком смотрит
+## его голова, и спрашивать надо ту камеру, которая рисует кадр. Иначе выбор
+## работал бы только в обзоре.
+func _select_part_at(at: Vector2) -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or _port_parts.is_empty():
+		return
+	var i := PortDebug.pick(_port_parts, cam.project_ray_origin(at), cam.project_ray_normal(at))
+	if i < 0:
+		# ПРОМАХ СНИМАЕТ ВЫБОР, а не оставляет прежний: щелчок мимо — это «покажи
+		# мне пустоту», и держать на экране ответ про другую деталь значило бы
+		# отвечать на незаданный вопрос.
+		_deselect_part()
+		_refresh_ports_panel()
+		return
+	if i == _port_selected:
+		return
+	_deselect_part()
+	_port_selected = i
+	var key := String(_port_parts[i]["key"])
+	var hi := PortDebug.highlight_material()
+	for n in (_part_nodes.get(key, []) as Array):
+		var mi := n as MeshInstance3D
+		if mi == null or not is_instance_valid(mi):
+			continue
+		_port_saved[mi] = mi.material_override
+		mi.material_override = hi
+	_refresh_ports_panel()
+
+
+## _deselect_part — снять подсветку и вернуть телам их материалы.
+func _deselect_part() -> void:
+	for mi in _port_saved:
+		if is_instance_valid(mi):
+			(mi as MeshInstance3D).material_override = _port_saved[mi]
+	_port_saved = {}
+	_port_selected = -1
+
+
+## _refresh_ports_panel — что написано про выбранную деталь.
+##
+## Панель СВОЯ, а не строка в панели отладки: та отвечает на «что построилось»
+## числами всего мира, а эта — на «что это за деталь», и вопрос задают, когда
+## смотрят на неё. Смешав их, пришлось бы держать открытой всю панель ради двух
+## строк.
+func _refresh_ports_panel() -> void:
+	if ui_ports == null:
+		return
+	if not ports_debug or _port_selected < 0 or _port_selected >= _port_parts.size():
+		ui_ports.visible = false
+		return
+	var part: Dictionary = _port_parts[_port_selected]
+	var l: Array[String] = []
+	l.append("[b]№%d  %s[/b]" % [int(part["num"]), String(part["name"])])
+	for line in PortDebug.describe(part):
+		l.append(line)
+	# ТЕЛА У РАЗРЫВА НЕТ, и это сказано прямо: подсветки не случилось не потому,
+	# что выбор промахнулся.
+	if not _part_nodes.has(String(part["key"])):
+		l.append("[i]тела нет: подсвечивать нечего[/i]")
+	ui_ports.text = "\n".join(l)
+	ui_ports.visible = true
 
 
 ## FPS_PROBE_FRAMES — сколько кадров меряется, прежде чем снять картинку.

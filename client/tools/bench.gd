@@ -250,9 +250,23 @@ func _track_subject() -> Node3D:
 	span.axis = axis
 	var node := Node3D.new()
 	node.name = "TrackSample"
+	# ОБРАЗЕЦ СТРОИТСЯ ДЕТАЛЬЮ (2026-08-17): рельсы приезжают с сервера
+	# поимёнными, и стенд обязан показывать то же, что мир, — иначе он сравнивал
+	# бы с тем, чего в кадре нет.
+	var sample := TrackBuild.FrogRail.new()
+	sample.element_id = "SAMPLE"
+	sample.kind = "running"
+	sample.rail_height_m = span.rail_height_m
+	sample.rail_head_width_m = span.rail_head_width_m
+	sample.rail_section = span.rail_section
+	sample.grow = 1.0
+	sample.axis = axis
+	sample.faces = PackedFloat64Array()
+	for _k in axis.size():
+		sample.faces.append(span.gauge_m * 0.5)
 	for pair in [
-		{"mesh": TrackView.rail_body_mesh(span), "mat": TrackView.rail_material()},
-		{"mesh": TrackView.railhead_mesh(span), "mat": TrackView.railhead_material()},
+		{"mesh": TrackView.frog_rail_mesh(sample), "mat": TrackView.rail_material()},
+		{"mesh": TrackView.frog_railhead_mesh(sample), "mat": TrackView.railhead_material()},
 	]:
 		var mesh := pair["mesh"] as ArrayMesh
 		if mesh == null:
@@ -293,6 +307,7 @@ func _frog_subject() -> Node3D:
 	# отдаёт сервер: два прогона стенда обязаны показывать одну и ту же вещь.
 	var owner := ""
 	var window := {} # элемент -> (u от, u до)
+	var frog_point := Vector2.ZERO
 	for f_raw in (net.get("features", []) as Array):
 		var f: Dictionary = f_raw as Dictionary
 		if String(f.get("kind", "")) != "frog":
@@ -302,6 +317,8 @@ func _frog_subject() -> Node3D:
 			continue
 		owner = this_owner
 		window = {}
+		var point: Dictionary = f.get("point", {}) as Dictionary
+		frog_point = Vector2(float(point.get("x", 0.0)), float(point.get("y", 0.0)))
 		for a_raw in (f.get("addresses", []) as Array):
 			var a: Dictionary = a_raw as Dictionary
 			var u := float(a.get("u", 0.0))
@@ -313,22 +330,20 @@ func _frog_subject() -> Node3D:
 	var node := Node3D.new()
 	node.name = "Frog"
 	var rail_mat := TrackView.rail_material()
-	# НИТКИ ПРОХОДОВ — с их разрывами: ровно то, ради чего разрывы и заведены.
-	# Обрезаются окном, а не рисуются целиком: перевод длиной 33 м на стенде дал
-	# бы крестовину в двадцатую долю кадра.
-	for sp in TrackBuild.covered_spans(net, by_id, SEG_M, ANG_RAD):
-		if not window.has(sp.element_id) or not sp.has_rail_body():
-			continue
-		var win: Vector2 = window[sp.element_id]
-		_add_mesh(node, TrackView.rail_body_mesh(_clip_span(sp, win)), rail_mat)
-		_add_mesh(node, TrackView.railhead_mesh(_clip_span(sp, win)), TrackView.railhead_material())
-		_add_mesh(node, TrackView.rail_fillet_mesh(_clip_span(sp, win)), TrackView.railfillet_material())
 	# Усовики, контррельсы и сердечник — как в мире, без обрезки: они и так лежат
 	# вокруг точки крестовины.
 	var castings: Array = []
-	for r_raw in (TrackBuild.frog_rails(net, by_id, SEG_M, ANG_RAD)["list"] as Array):
+	# ДЛИННЫЕ ДЕТАЛИ ОБРЕЗАЮТСЯ ОКНОМ: перевод длиной 33 м на стенде дал бы
+	# крестовину в двадцатую долю кадра. Усовики, контррельсы и сердечник и так
+	# лежат вокруг точки, их окно не трогает.
+	var built_rails: Array[TrackBuild.FrogRail] = TrackBuild.stitch_continuous_rails(
+		TrackBuild.rails(net, by_id, SEG_M, ANG_RAD)["list"])
+	for r_raw in built_rails:
 		var rail: TrackBuild.FrogRail = r_raw
 		if rail.owner != owner:
+			continue
+		rail = _clip_rail_near(rail, frog_point, FROG_WINDOW_M)
+		if rail == null:
 			continue
 		if rail.kind == TrackBuild.FROG_CASTING:
 			castings.append(rail)
@@ -337,7 +352,8 @@ func _frog_subject() -> Node3D:
 		_add_mesh(node, TrackView.frog_railhead_mesh(rail), TrackView.railhead_material())
 		_add_mesh(node, TrackView.frog_rail_fillet_mesh(rail), TrackView.railfillet_material())
 	if castings.size() == 2:
-		_add_mesh(node, TrackView.frog_casting_mesh(castings[0], castings[1]), rail_mat)
+		_add_mesh(node, TrackView.frog_casting_mesh(castings[0], castings[1],
+			TrackBuild.frog_cores(net).get(castings[0].owner)), rail_mat)
 		_add_mesh(node, TrackView.frog_casting_head_mesh(castings[0], castings[1]),
 			TrackView.railhead_material())
 		_add_mesh(node, TrackView.frog_casting_fillet_mesh(castings[0], castings[1]),
@@ -358,30 +374,35 @@ func _frog_subject() -> Node3D:
 	return node
 
 
-## _clip_span — участок, обрезанный окном по u.
-##
-## Копией, а не правкой на месте: тот же участок спрашивают четыре вида подряд, и
-## обрезанный дважды стал бы вдвое короче. Куски ниток (разрывы) обрезаются тем
-## же окном — иначе рельс вылез бы за край предмета там, где разрывов нет.
-func _clip_span(sp: TrackBuild.Span, win: Vector2) -> TrackBuild.Span:
-	var out := TrackBuild.Span.new()
-	out.element_id = sp.element_id
-	out.type_id = sp.type_id
-	out.gauge_m = sp.gauge_m
-	out.rail_height_m = sp.rail_height_m
-	out.rail_head_width_m = sp.rail_head_width_m
-	out.rail_section = sp.rail_section
-	out.axis = _clip_axis(sp.axis, win)
-	out.rail_cut_left = sp.rail_cut_left
-	out.rail_cut_right = sp.rail_cut_right
-	for run in sp.rail_runs_left:
-		var piece := _clip_axis(run as Array, win)
-		if piece.size() >= 2:
-			out.rail_runs_left.append(piece)
-	for run in sp.rail_runs_right:
-		var piece := _clip_axis(run as Array, win)
-		if piece.size() >= 2:
-			out.rail_runs_right.append(piece)
+## _clip_rail_near обрезает уже СШИТЫЙ физический рельс мировым окном стенда.
+## Его element_id после сшивки — ключ детали, а u отсчитан заново, поэтому
+## прежнее адресное окно прохода к нему неприменимо.
+func _clip_rail_near(rail: TrackBuild.FrogRail, point: Vector2, radius: float) -> TrackBuild.FrogRail:
+	var out := TrackBuild.FrogRail.new()
+	out.owner = rail.owner
+	out.element_id = rail.element_id
+	out.kind = rail.kind
+	out.grow = rail.grow
+	out.rail_section = rail.rail_section
+	out.rail_height_m = rail.rail_height_m
+	out.rail_head_width_m = rail.rail_head_width_m
+	out.faces = PackedFloat64Array()
+	out.sinks = PackedFloat64Array()
+	out.rides = PackedFloat64Array()
+	var kept: Array[TrackGeom.AxisPoint] = []
+	for k in rail.axis.size():
+		var p: TrackGeom.AxisPoint = rail.axis[k]
+		if Vector2(p.x, p.y).distance_to(point) > radius:
+			continue
+		kept.append(p)
+		out.faces.append(rail.faces[k])
+		if k < rail.sinks.size():
+			out.sinks.append(rail.sinks[k])
+		if k < rail.rides.size():
+			out.rides.append(rail.rides[k])
+	if kept.size() < 2:
+		return null
+	out.axis = kept
 	return out
 
 

@@ -94,15 +94,13 @@ func TestEdgeNamedAsPassageIsRejected(t *testing.T) {
 		Topology: Topology{
 			Nodes: []Node{{ID: uIDN1, Name: "N1", Ports: []Port{{ID: "P1", Purpose: "map_boundary"}}}},
 			Turnouts: []Turnout{
-				{ID: uIDSW, Name: "SW", Kind: KindRail, Hand: "right", Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+				// Проект перевода назван, хотя разбор идёт не о нём: без разрешимой
+				// ссылки карта отвергается раньше, и тест мерил бы не то правило.
+				{ID: uIDSW, Name: "SW", Kind: KindRail, Hand: "right", TurnoutType: "r65-1-9-2434", Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
 			},
 			Edges: []Edge{{ID: uIDSW + PassageStraight, Name: "E_FAKE", Kind: KindRail, From: uIDN1 + ".P1", To: uIDN1 + ".P1"}},
 		},
 		Geometry: Geometry{
-			Turnouts: map[string]TurnoutGeometry{uIDSW: {
-				Straight:  Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
-				Diverging: Alignments{Horizontal: []HPrim{{Kind: "straight", Length: 10}}},
-			}},
 			Edges: map[string]Alignments{
 				uIDSW + PassageStraight: {Horizontal: []HPrim{{Kind: "straight", Length: 999}}},
 			},

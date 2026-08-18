@@ -157,6 +157,8 @@ var _driver_view_refusal := ""
 ## тех же четырёх метров значило бы, что снимок из кабины можно снять, только
 ## пройдя туда пешком.
 var _board := false
+## Показывать ли порты деталей с первого кадра (ключ --ports; в партии — F2).
+var _ports := false
 var _shot_path := ""
 var _quit_when_done := false
 var _autostart_role := -1
@@ -244,6 +246,12 @@ func _parse_args() -> void:
 			_shot_path = a.substr(7)
 		elif a == "--board":
 			_board = true
+		# --ports — ОТЛАДОЧНЫЙ СЛОЙ ПОРТОВ с самого начала, не дожидаясь F2.
+		# Ключ существует отдельно от клавиши по той же причине, что --driver-view
+		# рядом с V: снимку и зонду нажимать некому, а слой им нужен ровно затем,
+		# ради чего заведён, — чтобы стык было видно на картинке, а не в тесте.
+		elif a == "--ports":
+			_ports = true
 		elif a == "--quit-when-done":
 			_quit_when_done = true
 
@@ -459,6 +467,7 @@ func _build_world(role: int) -> void:
 		"view_reach_m": _view_reach_m,
 		"shot_path": _shot_path,
 		"quit_when_done": _quit_when_done,
+		"ports": _ports,
 	})
 	_world3d.add_child(_world)
 

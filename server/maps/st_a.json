@@ -1,5 +1,5 @@
 {
-  "format_version": 7,
+  "format_version": 8,
   "map_id": "ST_A",
   "map_revision": 3,
   "anchors": {
@@ -60,7 +60,7 @@
         "kind": "rail",
         "hand": "right",
         "frog": "1/9",
-        "turnout_type": "018bcfe5-6850-7242-8242-000050424242",
+        "turnout_type": "r65-1-9-2434",
         "drive": "manual",
         "ports": {
           "common": "C",
@@ -74,7 +74,7 @@
         "kind": "rail",
         "hand": "right",
         "frog": "1/9",
-        "turnout_type": "018bcfe5-6850-7242-8242-000050424242",
+        "turnout_type": "r65-1-9-2434",
         "drive": "electric",
         "ports": {
           "common": "C",
@@ -183,64 +183,6 @@
     ]
   },
   "geometry": {
-    "turnouts": {
-      "018bcfe5-680a-7242-8242-00000a424242": {
-        "straight": {
-          "horizontal": [
-            {
-              "kind": "straight",
-              "length": 27.504
-            }
-          ]
-        },
-        "diverging": {
-          "horizontal": [
-            {
-              "kind": "arc",
-              "radius": 300,
-              "angle": -0.0217167
-            },
-            {
-              "kind": "arc",
-              "radius": 200.06,
-              "angle": -0.0650205
-            },
-            {
-              "kind": "straight",
-              "length": 8.0764
-            }
-          ]
-        }
-      },
-      "018bcfe5-680b-7242-8242-00000b424242": {
-        "straight": {
-          "horizontal": [
-            {
-              "kind": "straight",
-              "length": 27.504
-            }
-          ]
-        },
-        "diverging": {
-          "horizontal": [
-            {
-              "kind": "arc",
-              "radius": 300,
-              "angle": -0.0217167
-            },
-            {
-              "kind": "arc",
-              "radius": 200.06,
-              "angle": -0.0650205
-            },
-            {
-              "kind": "straight",
-              "length": 8.0764
-            }
-          ]
-        }
-      }
-    },
     "edges": {
       "018bcfe5-680c-7242-8242-00000c424242": {
         "horizontal": [
@@ -436,74 +378,6 @@
             "direction": "forward"
           }
         ]
-      }
-    ],
-    "turnout_types": [
-      {
-        "id": "018bcfe5-6850-7242-8242-000050424242",
-        "name": "Р65 1/9 пр. 2434",
-        "frog": "1/9",
-        "switch": {
-          "blade_length_straight": 6.5,
-          "blade_length_diverging": 6.515,
-          "throw": 0.152,
-          "initial_angle": 0.0239211
-        },
-        "frog_set": {
-          "flangeway": 0.046,
-          "check_flangeway": 0.044,
-          "wing_length": 2,
-          "check_length": 4.5,
-          "casting_length": 0.9,
-          "flare": 0.25,
-          "flare_gap": 0.086
-        },
-        "blade_rail": {
-          "height": 0.14,
-          "head_width": 0.07733,
-          "section": [
-            [
-              0,
-              0
-            ],
-            [
-              0,
-              -0.035
-            ],
-            [
-              0.01933,
-              -0.045
-            ],
-            [
-              0.01933,
-              -0.125
-            ],
-            [
-              -0.03667,
-              -0.132
-            ],
-            [
-              -0.03667,
-              -0.14
-            ],
-            [
-              0.09533,
-              -0.14
-            ],
-            [
-              0.09533,
-              -0.132
-            ],
-            [
-              0.07733,
-              -0.125
-            ],
-            [
-              0.07733,
-              0
-            ]
-          ]
-        }
       }
     ]
   },

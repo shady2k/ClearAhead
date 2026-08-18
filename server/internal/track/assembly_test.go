@@ -2,12 +2,9 @@ package track
 
 import (
 	"math"
-	"strings"
 	"testing"
 
-	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
-	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Ось для рукотворных сборок: прямая, чтобы вынос по левой нормали читался
@@ -173,63 +170,19 @@ func TestSeedTurnoutRootMatesButOuterThreadDoesNot(t *testing.T) {
 	// КОРЕНЬ ОСТРЯКА СОМКНУТ. Утверждение положительное, и это важнее отказа:
 	// оно сторожит починку от отката. Ни один прыжок тела на корне не допускается
 	// ни у одного прохода.
-	bladeRootU := m.Construction.TurnoutTypes[0].Switch.BladeLengthDiverging
+	bladeRootU := seedmap.TurnoutProjectForTest().Switch.BladeLengthDiverging
 	for _, b := range breaks {
 		if b.Kind == BreakStep && math.Abs(b.Port.U-bladeRootU) < 1e-6 {
 			t.Fatalf("корень остряка снова разъехался: %s общего %.0f %%", b.Port.Part, b.Overlap*100)
 		}
 	}
 
-	// НАРУЖНАЯ НИТКА — единственное, что осталось, и осталось по УСТРОЙСТВУ
-	// МОДЕЛИ, а не по геометрии.
-	//
-	// У настоящего перевода наружная нить бокового пути не начинается: она
-	// ОТСЛАИВАЕТСЯ от рамного рельса. Начиная с 2026-08-16 так же и у нас —
-	// разрыв кончается там, где нитки разошлись на ширину головки, и нитка
-	// начинается ВПЛОТНУЮ к рамному рельсу. Проверка этого не видит: она считает
-	// объединение металла ТОЛЬКО ПО СВОЕМУ ЭЛЕМЕНТУ, а рамный рельс лежит на
-	// соседнем проходе.
-	//
-	// То есть отказ здесь — известная и названная слепота правила, и тест
-	// сторожит именно её: пока металла становится ровно столько же, сколько
-	// нужно, и ровно там, где нужно.
-	if len(breaks) != 1 || breaks[0].Kind != BreakOpen {
-		t.Fatalf("ожидалось ровно одно несмыкание вида open, получено %d: %+v", len(breaks), breaks)
+	// Общий рамный рельс теперь межэлементная деталь с двумя выведенными
+	// портами, поэтому прежняя единственная открытая нитка обязана исчезнуть.
+	if len(breaks) != 0 {
+		t.Fatalf("в поимённой сборке остались несомкнутые порты: %+v", breaks)
 	}
-	open := breaks[0]
-	if !strings.Contains(open.Port.Part, "-0.760") {
-		t.Fatalf("несомкнута не наружная нитка бокового прохода, а %s", open.Port.Part)
-	}
-
-	// НИТКА НАЧИНАЕТСЯ ВПЛОТНУЮ К РАМНОМУ РЕЛЬСУ. Утверждение положительное и
-	// проверяет то, ради чего разрыв и переставлен: на её начале расстояние до
-	// одноимённой нитки прямого прохода равно ширине головки, то есть рельсы
-	// стоят касаясь. До правки нитка возникала в 0.227 м — в воздухе.
-	dv := els[owner+mapfmt.PassageDiverging]
-	st := els[owner+mapfmt.PassageStraight]
-	du, err := units.MetersToDistance(open.Port.U)
-	if err != nil {
-		t.Fatalf("координата начала нитки: %v", err)
-	}
-	pd, err := dv.Plan.PoseAt(dv.Start.Plan, du)
-	if err != nil {
-		t.Fatalf("поза бокового: %v", err)
-	}
-	ps, err := st.Plan.PoseAt(st.Start.Plan, du)
-	if err != nil {
-		t.Fatalf("поза прямого: %v", err)
-	}
-	nd := [2]float64{-math.Sin(pd.Heading), math.Cos(pd.Heading)}
-	ns := [2]float64{-math.Sin(ps.Heading), math.Cos(ps.Heading)}
-	off := -m.Construction.Types[0].Gauge / 2
-	head := m.Construction.Types[0].Rail.HeadWidth
-	gap := math.Hypot((pd.X+nd[0]*off)-(ps.X+ns[0]*off), (pd.Y+nd[1]*off)-(ps.Y+ns[1]*off))
-	if math.Abs(gap-head) > 1e-3 {
-		t.Fatalf("нитка начинается в %.4f м от рамного рельса, а обязана касаться его — ширина головки %.4f",
-			gap, head)
-	}
-	if open.Port.U >= bladeRootU {
-		t.Fatalf("наружная нитка начинается на %.3f м, то есть не раньше корня остряка %.3f — отслаивания нет",
-			open.Port.U, bladeRootU)
+	if _, err := Validate(a, els); err != nil {
+		t.Fatalf("поимённая сборка не прошла проверку портов: %v", err)
 	}
 }

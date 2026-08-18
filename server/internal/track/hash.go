@@ -89,7 +89,15 @@ func BuildManifest(m *mapfmt.Map, cn *CompiledNetwork, rg *RenderGeometry) (Mani
 }
 
 func writeNetworkModel(w io.Writer, m *mapfmt.Map, cn *CompiledNetwork) {
-	fmt.Fprintf(w, "v%d|%s|%d\n", mapfmt.FormatVersion, cn.MapID, cn.Revision)
+	// ВЕРСИЯ КАТАЛОГА ПЕРЕВОДОВ ВХОДИТ В МОДЕЛЬ НАРАВНЕ С ВЕРСИЕЙ ФОРМАТА.
+	//
+	// Пока эпюра лежала в карте, её правка меняла карту и сбрасывала кэш клиента
+	// по построению. С 2026-08-17 она живёт в коде сервера (mapfmt CatalogVersion),
+	// и карта от такой правки не меняется НИ БАЙТОМ — а перевод меняется весь.
+	// Не войди версия сюда, клиент с закэшированной сетью показывал бы старую
+	// геометрию до тех пор, пока автор не тронет карту по другому поводу.
+	fmt.Fprintf(w, "v%d|c%d|%s|%d\n",
+		mapfmt.FormatVersion, mapfmt.CatalogVersion, cn.MapID, cn.Revision)
 
 	// Геопривязка входит: она меняет смысл координат. Provenance не входит:
 	// правка комментария не должна сбрасывать кэш клиента.

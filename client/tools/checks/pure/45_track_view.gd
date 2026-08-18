@@ -70,10 +70,10 @@ func run() -> void:
 		"правая нормаль обхода лицевой грани %s нормали грани" % ["сонаправлена" if front > 0.0 else "противонаправлена"])
 
 	_check_prisms(spans)
-	_check_rails(spans)
+	_check_rails(network, by_id)
 	_check_rail_profile(spans)
 	_check_blades(network, by_id, spans)
-	_check_rail_gaps(network, by_id, spans)
+	_check_turnout_rails_are_named(network, spans)
 	_check_sleepers(network, by_id, front)
 	_check_buffer_stops(network, by_id, front)
 	_check_platforms(network, by_id, front)
@@ -103,42 +103,36 @@ func _check_prisms(spans: Array[TrackBuild.Span]) -> void:
 
 ## РЕЛЬС И НАКАТ. Две поверхности, и они обязаны считать одни и те же точки:
 ## разойдись тело с накатом — между ними откроется щель во всю длину пути.
-func _check_rails(spans: Array[TrackBuild.Span]) -> void:
+##
+## СЧИТАЕТСЯ ПО ДЕТАЛЯМ, А НЕ ПО УЧАСТКАМ (2026-08-17). Раньше рельсы перегона
+## строил сам клиент из оси участка, и проверка шла по участкам; теперь их все —
+## и перегонные, и устройства — присылает сервер поимёнными деталями, и второго
+## пути построения не осталось. Проверять участки значило бы проверять то, чего
+## показ больше не делает.
+func _check_rails(network: Dictionary, by_id: Dictionary) -> void:
+	var res := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
+	var list: Array = res["list"] as Array
+	_ok("детали рельсов приехали", not list.is_empty(),
+		"их %d, пропущено %d" % [list.size(), (res["skipped"] as Array).size()])
 	var empty_body: Array[String] = []
 	var empty_head: Array[String] = []
-	var want_body := 0
-	var got_body := 0
-	var want_head := 0
-	var got_head := 0
-	for sp in spans:
-		if not sp.has_rail_body():
+	var running := 0
+	for r_raw in list:
+		var rail: TrackBuild.FrogRail = r_raw
+		if rail.kind == TrackBuild.FROG_CASTING:
+			# Грань сердечника телом не рисуется: отливку строит пара граней.
 			continue
-		# ПО КУСКАМ, А НЕ ПО ВСЕЙ ОСИ. У прохода стрелки нитка есть не везде — её
-		# место занимают остряк с рамным рельсом и сердечник, — и каждый кусок
-		# даёт свои (точек − 1) полос. Считай по всей оси, и проверка требовала бы
-		# рисовать рельс там, где сервер сказал, что рельса нет.
-		for sgn in [1.0, -1.0]:
-			var steps := 0
-			for run in sp.rail_runs(sgn):
-				steps += maxi((run as Array).size() - 1, 0)
-			want_body += _strips_of(sp) * 2 * steps
-			want_head += 2 * steps
-		var body := TrackView.rail_body_mesh(sp)
-		if body == null:
-			empty_body.append(sp.element_id)
-		else:
-			got_body += _tris(body)
-		var head := TrackView.railhead_mesh(sp)
-		if head == null:
-			empty_head.append(sp.element_id)
-		else:
-			got_head += _tris(head)
-	_ok("рельс телом построен у каждого участка с колеёй", empty_body.is_empty(), str(empty_body))
-	_ok("накат построен у каждого участка с колеёй", empty_head.is_empty(), str(empty_head))
-	_ok("треугольников рельса = 4·полос·(точек оси − 1) по присланному сечению",
-		got_body == want_body, "%d против %d" % [got_body, want_body])
-	_ok("треугольников наката = 4·(точек оси − 1)", got_head == want_head,
-		"%d против %d" % [got_head, want_head])
+		if rail.kind == "running":
+			running += 1
+		if TrackView.frog_rail_mesh(rail) == null:
+			empty_body.append("%s@%s" % [rail.element_id, rail.kind])
+		# Накат есть не у всякой детали: контррельс колесо не несёт.
+		if rail.kind != TrackBuild.FROG_CHECK and TrackView.frog_railhead_mesh(rail) == null:
+			empty_head.append("%s@%s" % [rail.element_id, rail.kind])
+	_ok("рельс телом построен у каждой присланной детали", empty_body.is_empty(), str(empty_body))
+	_ok("накат построен у каждой ходовой детали", empty_head.is_empty(), str(empty_head))
+	_ok("перегонные нитки пришли деталями, а не выводятся показом", running > 0,
+		"перегонных деталей %d" % running)
 
 
 ## ПРОФИЛЬ РЕЛЬСА НА ПРЯМОМ УЧАСТКЕ: куда он сел и куда смотрит.
@@ -174,26 +168,32 @@ func _check_rail_profile(spans: Array[TrackBuild.Span]) -> void:
 	if src == null:
 		return
 
+	# ПРОБНАЯ ДЕТАЛЬ, А НЕ УЧАСТОК (2026-08-17): рельсы строятся из присланных
+	# деталей, и посадку сечения надо мерить у того, чем показ пользуется.
 	# Прямая ось на десять метров, курс 0: плановый +x, отметка 100.
-	var straight := TrackBuild.Span.new()
-	straight.element_id = "PROBE"
-	straight.gauge_m = src.gauge_m
-	straight.rail_height_m = src.rail_height_m
-	straight.rail_head_width_m = src.rail_head_width_m
-	straight.rail_section = src.rail_section
+	var probe := TrackBuild.FrogRail.new()
+	probe.element_id = "PROBE"
+	probe.kind = "running"
+	probe.rail_height_m = src.rail_height_m
+	probe.rail_head_width_m = src.rail_head_width_m
+	probe.rail_section = src.rail_section
+	# ЛЕВАЯ НИТКА: +gauge/2 по левой нормали, тело наружу. Правая легла бы на
+	# положительные z, и проверка ниже искала бы грань не там.
+	probe.grow = 1.0
 	var axis: Array[TrackGeom.AxisPoint] = []
+	var faces := PackedFloat64Array()
 	for k in 3:
 		axis.append(TrackGeom.AxisPoint.new(float(k) * 5.0, 0.0, 100.0, 0.0, float(k) * 5.0))
-	straight.axis = axis
+		faces.append(src.gauge_m * 0.5)
+	probe.axis = axis
+	probe.faces = faces
 
-	var mesh := TrackView.rail_profile_mesh(straight)
+	var mesh := TrackView.frog_rail_mesh(probe)
 	_ok("профиль построен", mesh != null)
 	if mesh == null:
 		return
 	var arr := mesh.surface_get_arrays(0)
 	var verts: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
-	var norms: PackedVector3Array = arr[Mesh.ARRAY_NORMAL]
-	var idx: PackedInt32Array = arr[Mesh.ARRAY_INDEX]
 
 	# ПОСАДКА. Левая нормаль курса 0 — плановый +y, в осях движка это −Z, поэтому
 	# правая нитка живёт на отрицательных z.
@@ -212,51 +212,13 @@ func _check_rail_profile(spans: Array[TrackBuild.Span]) -> void:
 		if v.z < 0.0 and absf(v.y - 100.0) < 1e-4 and v.z > near_z:
 			near_z = v.z
 	_ok("рабочая грань легла на половину колеи",
-		absf(-near_z - straight.gauge_m * 0.5) < 1e-4,
-		"грань на %.5f м от оси, половина колеи %.5f м" % [-near_z, straight.gauge_m * 0.5])
+		absf(-near_z - src.gauge_m * 0.5) < 1e-4,
+		"грань на %.5f м от оси, половина колеи %.5f м" % [-near_z, src.gauge_m * 0.5])
 	_ok("поверхность катания легла на отметку оси", absf(high_y - 100.0) < 1e-4,
 		"верх на %.5f при отметке 100" % high_y)
 	_ok("подошва легла на объявленную высоту рельса",
-		absf((100.0 - low_y) - straight.rail_height_m) < 1e-4,
-		"высота меша %.5f м при rail.height %.5f м" % [100.0 - low_y, straight.rail_height_m])
-
-	# ОБХОД. Проверяется ШАГОМ ПО НОРМАЛИ, а не углом к оси рельса.
-	#
-	# «Нормаль смотрит прочь от середины» — правило для ВЫПУКЛОГО тела, и на
-	# двутавре оно врёт: изнанка головки смотрит ВНИЗ, а середина рельса лежит
-	# ниже неё, и верная нормаль засчиталась бы вывернутой. Первая редакция этой
-	# проверки на том и споткнулась: 72 треугольника «внутрь» при исправном меше.
-	#
-	# Настоящее правило локально: отступи от грани на миллиметр ПО нормали — и
-	# окажешься СНАРУЖИ металла; отступи ПРОТИВ — окажешься внутри. Считается это
-	# принадлежностью точки многоугольнику, то есть способом, к экструзии
-	# отношения не имеющим, — это и делает проверку независимой.
-	#
-	# Миллиметр меньше самой тонкой части сечения (шейка 18 мм, подошва у кромки
-	# 12 мм), поэтому шаг не проскакивает металл насквозь.
-	const STEP := 1e-3
-	var wrong_out := 0
-	var wrong_in := 0
-	var half := straight.gauge_m * 0.5
-	for t in range(0, idx.size(), 3):
-		var mid := (verts[idx[t]] + verts[idx[t + 1]] + verts[idx[t + 2]]) / 3.0
-		var n := (norms[idx[t]] + norms[idx[t + 1]] + norms[idx[t + 2]]) / 3.0
-		# Обратный перевод в оси СЕЧЕНИЯ. У правой нитки (z < 0) сечение растёт
-		# в сторону −z, у левой — в сторону +z.
-		var right := mid.z < 0.0
-		var sx := (-mid.z - half) if right else (mid.z - half)
-		var sy := mid.y - 100.0
-		var nx := (-n.z) if right else n.z
-		var here := Vector2(sx, sy)
-		var step := Vector2(nx, n.y).normalized() * STEP
-		if _inside_section(straight.rail_section, here + step):
-			wrong_out += 1
-		if not _inside_section(straight.rail_section, here - step):
-			wrong_in += 1
-	_ok("шаг по нормали рельса выводит наружу металла", wrong_out == 0,
-		"граней с нормалью внутрь: %d" % wrong_out)
-	_ok("шаг против нормали рельса ведёт внутрь металла", wrong_in == 0,
-		"граней, у которых металла за спиной нет: %d" % wrong_in)
+		absf((100.0 - low_y) - src.rail_height_m) < 1e-4,
+		"высота меша %.5f м при rail.height %.5f м" % [100.0 - low_y, src.rail_height_m])
 
 
 ## _inside_section — лежит ли точка внутри сечения. Обычный счёт пересечений
@@ -373,90 +335,42 @@ func _check_blades(network: Dictionary, by_id: Dictionary,
 
 	# НИТКИ ПРОХОДА НЕПОДВИЖНЫ. Проверяется на том же проходе, на котором лежит
 	# остряк: его участок — единственное место, где нитка когда-либо ездила.
-	var host: TrackBuild.Span = null
-	for sp in spans:
-		if sp.element_id == blade.element_id and sp.has_rail_body():
-			host = sp
+	# Деталью, а не участком: рельсы прохода приезжают с сервера, и «поехала ли
+	# нитка» надо спрашивать у того, что рисуется.
+	var host: TrackBuild.FrogRail = null
+	for r_raw in (TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M,
+			CheckContext.MAX_ANG_RAD)["list"] as Array):
+		var r: TrackBuild.FrogRail = r_raw
+		if r.element_id == blade.element_id and TrackView.frog_rail_mesh(r) != null:
+			host = r
 			break
 	if host == null:
 		return
-	var before := _vertices(TrackView.rail_body_mesh(host))
+	var before := _vertices(TrackView.frog_rail_mesh(host))
 	blade.set_open(1.0)
-	var after := _vertices(TrackView.rail_body_mesh(host))
+	var after := _vertices(TrackView.frog_rail_mesh(host))
 	blade.set_open(0.0)
 	_ok("нитки прохода не ездят вслед за остряком", before == after,
 		"вершин %d, перевод их не тронул" % before.size())
 
 
-## РАЗРЫВЫ НИТОК: есть ли рельс там, где сервер сказал, что его нет.
-##
-## # Зачем это отдельной проверкой
-##
-## Разрыв — единственное, чем выражено, что у стрелки не четыре нитки, а три.
-## Пропусти его показ, и в кадре вернётся ровно то, ради чего всё переделано:
-## наружная нитка бокового прохода, лежащая внутри прижатого остряка. Замер, с
-## которого началась работа: оси проходов расходятся как u²/2R, и при R = 300 м
-## и головке 0.075 м первые 6.7 метра два рельса занимали один объём.
-##
-## Проверяется НЕ ЧИСЛО РАЗРЫВОВ, а результат: попала ли хоть одна вершина
-## рельса внутрь отменённого участка. Число сказало бы лишь то, что разбор
-## случился.
-func _check_rail_gaps(network: Dictionary, by_id: Dictionary,
+## Проходы стрелки не порождают рельсов: вся физика приходит поимёнными
+## деталями. Проверка закрывает возврат масок с обеих сторон контракта.
+func _check_turnout_rails_are_named(network: Dictionary,
 		spans: Array[TrackBuild.Span]) -> void:
-	var gaps := TrackBuild.rail_gaps_by_element(network)
-	_ok("сервер прислал разрывы ниток", not gaps.is_empty(),
-		"элементов с разрывами: %d" % gaps.size())
-	if gaps.is_empty():
-		return
-	var checked := 0
-	var inside := 0
-	var worst := ""
-	for sp in spans:
-		if not gaps.has(sp.element_id):
-			continue
-		var by_side: Dictionary = gaps[sp.element_id]
-		for sgn_raw in by_side:
-			var sgn := float(sgn_raw)
-			checked += 1
-			for c_raw in (by_side[sgn_raw] as Array):
-				var cut: Vector2 = c_raw
-				for run in sp.rail_runs(sgn):
-					for p_raw in run:
-						var p: TrackGeom.AxisPoint = p_raw
-						# Края разрыва — законные точки: кусок нитки кончается ровно
-						# на них. Внутрь же не должна попасть ни одна.
-						if p.u > cut.x + 1e-6 and p.u < cut.y - 1e-6:
-							inside += 1
-							worst = "%s: точка u=%.3f внутри разрыва [%.3f, %.3f]" % [
-								sp.element_id, p.u, cut.x, cut.y]
-	_ok("нитки нет там, где сервер её отменил", inside == 0,
-		"проверено ниток %d, точек внутри разрыва %d%s" % [
-			checked, inside, "" if worst == "" else " — " + worst])
-	# ЦЕЛОЕ НЕ ПОТЕРЯНО. Разрыв обязан отнять ровно свою длину, а не весь участок:
-	# ошибка в нарезке (например, разрывы, не слитые перед вычитанием) съела бы
-	# нитку целиком, и проверка выше этого не заметила бы — точек внутри разрыва
-	# у пустой нитки нет.
-	var lost := ""
-	for sp in spans:
-		if not gaps.has(sp.element_id) or sp.axis.is_empty():
-			continue
-		var by_side: Dictionary = gaps[sp.element_id]
-		for sgn_raw in by_side:
-			var sgn := float(sgn_raw)
-			var cut_len := 0.0
-			for c_raw in (by_side[sgn_raw] as Array):
-				var cut: Vector2 = c_raw
-				cut_len += cut.y - cut.x
-			var kept := 0.0
-			for run in sp.rail_runs(sgn):
-				var pts: Array = run
-				if pts.size() >= 2:
-					kept += float(pts[pts.size() - 1].u) - float(pts[0].u)
-			var whole: float = float(sp.axis[sp.axis.size() - 1].u) - float(sp.axis[0].u)
-			if absf(kept - (whole - cut_len)) > 1e-3:
-				lost = "%s, сторона %+.0f: осталось %.3f м из %.3f при разрывах %.3f м" % [
-					sp.element_id, sgn, kept, whole, cut_len]
-	_ok("разрыв отнимает ровно свою длину", lost == "", lost)
+	var named: Array = network.get("rails", []) as Array
+	_ok("физические рельсы стрелок присланы поимённо", not named.is_empty(),
+		"деталей: %d" % named.size())
+	# «Проход не создаёт рельсов» проверять больше не у чего: рельсы не создаёт
+	# НИКТО из показа — все они приезжают деталями. Осталось требование к
+	# составу: у каждой стрелки детали есть, и они поимённые.
+	var owners := {}
+	for r_raw in named:
+		var r: Dictionary = r_raw as Dictionary
+		var o := String(r.get("owner", ""))
+		if o != "":
+			owners[o] = int(owners.get(o, 0)) + 1
+	_ok("у каждой стрелки свои детали", owners.size() > 0, str(owners))
 
 
 ## _vertices — вершины меша в порядке построения. Порядок и есть то, чем
@@ -635,7 +549,7 @@ func _check_platforms(network: Dictionary, by_id: Dictionary, front: float) -> v
 ## здесь НЕ режется — наката на нитке крестовины нет, — и в этом отличие от
 ## рельса участка.
 func _check_frogs(network: Dictionary, by_id: Dictionary) -> void:
-	var res := TrackBuild.frog_rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
+	var res := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 	var rails: Array[TrackBuild.FrogRail] = res["list"]
 	_ok("нитки крестовин разобраны", not rails.is_empty(),
 		"%d, пропущено: %s" % [rails.size(), str(res["skipped"])])
@@ -644,41 +558,124 @@ func _check_frogs(network: Dictionary, by_id: Dictionary) -> void:
 	var by_owner := {}
 	var kinds := {}
 	for r in rails:
+		if r.kind != TrackBuild.FROG_WING and r.kind != TrackBuild.FROG_CHECK and r.kind != TrackBuild.FROG_CASTING:
+			continue
 		by_owner[r.owner] = int(by_owner.get(r.owner, 0)) + 1
 		kinds[r.kind] = int(kinds.get(r.kind, 0)) + 1
-	# ШЕСТЬ ЗАПИСЕЙ НА СТРЕЛКУ: два усовика, два контррельса и две ГРАНИ
-	# СЕРДЕЧНИКА. Грани — не нитки: по ним строится не рельс, а тело отливки
+	# ВОСЕМЬ ЗАПИСЕЙ НА СТРЕЛКУ: два контррельса, две ГРАНИ СЕРДЕЧНИКА и ЧЕТЫРЕ
+	# половины усовиков. Грани — не нитки: по ним строится не рельс, а тело отливки
 	# между ними.
-	var six := true
+	#
+	# Усовиков по-прежнему два, но каждый лежит на ДВУХ проходах: у горла он
+	# переходит с нитки одного маршрута на нитку другого, и записан двумя отрезками
+	# (сервер, track/frograils.go). Было шесть, пока усовик считался ниткой своего
+	# прохода во всю длину, — и такие усовики пересекались друг с другом.
+	var eight := true
 	for o in by_owner:
-		if int(by_owner[o]) != 6:
-			six = false
-	_ok("у каждой стрелки шесть записей крестовины", six, str(by_owner))
-	_ok("приехали все три пары: усовики, контррельсы, грани сердечника",
-		int(kinds.get(TrackBuild.FROG_WING, 0)) == int(kinds.get(TrackBuild.FROG_CHECK, 0))
-		and int(kinds.get(TrackBuild.FROG_WING, 0)) == int(kinds.get(TrackBuild.FROG_CASTING, 0))
-		and int(kinds.get(TrackBuild.FROG_WING, 0)) > 0, str(kinds))
+		if int(by_owner[o]) != 8:
+			eight = false
+	_ok("у каждой стрелки восемь записей крестовины", eight, str(by_owner))
+	_ok("усовиков вдвое больше, чем контррельсов и граней сердечника",
+		int(kinds.get(TrackBuild.FROG_WING, 0)) == 2 * int(kinds.get(TrackBuild.FROG_CHECK, 0))
+		and int(kinds.get(TrackBuild.FROG_CHECK, 0)) == int(kinds.get(TrackBuild.FROG_CASTING, 0))
+		and int(kinds.get(TrackBuild.FROG_CHECK, 0)) > 0, str(kinds))
 
-	# ОТГИБ ЕСТЬ У НИТОК И НЕТ У ОТЛИВКИ. У усовика и контррельса конец
-	# раскрывается раструбом, у сердечника раструба нет вовсе: он сплошной.
-	var flared := 0
-	var straightened := 0
-	for r in rails:
-		var mid: float = r.faces[r.faces.size() / 2]
-		var end: float = r.faces[0]
-		var bent := absf(end - mid) > 1e-6
-		if r.kind == TrackBuild.FROG_CASTING:
-			if bent:
-				straightened += 1
+	# ДВЕ АДРЕСНЫЕ ПОЛОВИНЫ — ОДИН ФИЗИЧЕСКИЙ УСОВИК. После сшивки их должно
+	# остаться по два на стрелку, а курс каждого сечения обязан смотреть вдоль
+	# фактической мировой линии. Старый курс оси прохода давал клиновидные заломы
+	# головки при совершенно правильных координатах рабочей грани.
+	var stitched := TrackBuild.stitch_continuous_rails(rails)
+	var stitched_wings := 0
+	var incomplete_wings: Array[String] = []
+	var bad_heading: Array[String] = []
+	for r in stitched:
+		if r.kind != TrackBuild.FROG_WING:
 			continue
-		if bent:
-			flared += 1
-		else:
-			straightened += 1
-	_ok("отгиб у каждой нитки и ни одного у отливки", straightened == 0,
-		"с отгибом %d, лишних %d" % [flared, straightened])
+		stitched_wings += 1
+		if r.part_keys.size() != 3:
+			incomplete_wings.append("%s: %d частей" % [r.id, r.part_keys.size()])
+		for k in r.axis.size():
+			var here := Vector2(r.axis[k].x, r.axis[k].y)
+			var tangent := Vector2.ZERO
+			if k > 0:
+				tangent += (here - Vector2(r.axis[k - 1].x, r.axis[k - 1].y)).normalized()
+			if k + 1 < r.axis.size():
+				tangent += (Vector2(r.axis[k + 1].x, r.axis[k + 1].y) - here).normalized()
+			if tangent.length_squared() > 1e-18 and absf(r.axis[k].forward().cross(tangent.normalized())) > 1e-6:
+				bad_heading.append("%s[%d]" % [r.id, k])
+	_ok("две половины сшиты в один усовик", stitched_wings * 2 == int(kinds.get(TrackBuild.FROG_WING, 0)),
+		"%d физических из %d адресных половин" % [stitched_wings, int(kinds.get(TrackBuild.FROG_WING, 0))])
+	_ok("соединительный рельс и две половины образуют одно тело усовика",
+		incomplete_wings.is_empty(), str(incomplete_wings))
+	_ok("сечения усовика стоят поперёк его мировой линии", bad_heading.is_empty(), str(bad_heading))
 
-	# ТЕЛО СЕРДЕЧНИКА строится между двумя гранями одной стрелки.
+	# ГРАНЬ ИДЁТ ПО ПРИСЛАННОМУ ЗАКОНУ: концы на end_face_from и end_face_to,
+	# рабочая часть на face. Это и есть весь отгиб, и проверяется он сверкой с
+	# проводом, а не счётом изломов.
+	#
+	# СЧЁТ ИЗЛОМОВ СТОЯЛ ЗДЕСЬ ДО 2026-08-17 и держался на догадке «рабочая часть
+	# посередине детали»: середина бралась за рабочий вынос, а концы сравнивались с
+	# ней. Догадка умерла вместе с горлом крестовины — у половины усовика до горла
+	# отвод идёт ВО ВСЮ ДЛИНУ (ГОСТ 28370-89, разбор в track/frograils.go), рабочей
+	# части у неё нет вовсе, и проверка объявляла лишним отгиб, которого требует
+	# чертёж. Сверка с проводом такой догадки не делает.
+	var wire := {}
+	for raw in (network.get("rails", []) as Array):
+		var d: Dictionary = raw as Dictionary
+		wire[String(d.get("id", ""))] = d
+	var shaped := 0
+	var wrong: Array[String] = []
+	for r in rails:
+		if r.kind != TrackBuild.FROG_WING and r.kind != TrackBuild.FROG_CHECK and r.kind != TrackBuild.FROG_CASTING:
+			continue
+		var d: Dictionary = wire.get(r.id, {}) as Dictionary
+		if d.is_empty():
+			wrong.append("%s: записи в проводе нет" % r.id)
+			continue
+		var face := float(d.get("face", 0.0))
+		var ff := float(d.get("end_face_from", face))
+		var ft := float(d.get("end_face_to", face))
+		if absf(r.faces[0] - ff) > 1e-6:
+			wrong.append("%s: начало на %.4f, прислано %.4f" % [r.id, r.faces[0], ff])
+			continue
+		if absf(r.faces[r.faces.size() - 1] - ft) > 1e-6:
+			wrong.append("%s: конец на %.4f, прислано %.4f" % [r.id, r.faces[r.faces.size() - 1], ft])
+			continue
+		# РАБОЧАЯ ЧАСТЬ ПРОВЕРЯЕТСЯ, ТОЛЬКО ЕСЛИ ОНА ЕСТЬ: отгибы вправе занять
+		# деталь целиком, и тогда рабочего выноса нитка не набирает нигде.
+		var body_lo := float(d.get("from", 0.0)) + float(d.get("flare_from", 0.0))
+		var body_hi := float(d.get("to", 0.0)) - float(d.get("flare_to", 0.0))
+		if body_hi - body_lo > 1e-3:
+			var mid_u := (body_lo + body_hi) * 0.5
+			var best := 0
+			for k in r.axis.size():
+				if absf(r.axis[k].u - mid_u) < absf(r.axis[best].u - mid_u):
+					best = k
+			if absf(r.faces[best] - face) > 1e-6:
+				wrong.append("%s: рабочая грань %.4f, прислана %.4f" % [r.id, r.faces[best], face])
+				continue
+		shaped += 1
+	_ok("грань нитки идёт по присланному закону", wrong.is_empty(),
+		"сверено %d, разошлись %s" % [shaped, str(wrong)])
+
+	# КУБИЧЕСКИЙ ЗАКОН ПЛАНА ЧИТАЕТ И ПРОИЗВОДНЫЕ, а не только точки. Без этого
+	# половины усовика по-прежнему совпали бы в горле положением и образовали бы
+	# там угол марки 1/9.
+	var plan := [
+		{"u": 0.0, "face": 0.2, "slope": 0.0},
+		{"u": 1.0, "face": 0.3, "slope": 0.2},
+	]
+	var h := 1e-5
+	var slope_from := (TrackBuild.plan_face(plan, h) - TrackBuild.plan_face(plan, 0.0)) / h
+	var slope_to := (TrackBuild.plan_face(plan, 1.0) - TrackBuild.plan_face(plan, 1.0 - h)) / h
+	_ok("план детали соблюдает присланную касательную в начале", absf(slope_from) < 1e-5,
+		"dFace/du=%.6f" % slope_from)
+	_ok("план детали соблюдает присланную касательную в конце", absf(slope_to - 0.2) < 1e-5,
+		"dFace/du=%.6f" % slope_to)
+
+	# ТЕЛО СЕРДЕЧНИКА строится между двумя гранями одной стрелки — по СЕЧЕНИЮ,
+	# присланному сервером (frog_cores).
+	var cores := TrackBuild.frog_cores(network)
 	var by_owner_cast := {}
 	for r in rails:
 		if r.kind != TrackBuild.FROG_CASTING:
@@ -691,20 +688,24 @@ func _check_frogs(network: Dictionary, by_id: Dictionary) -> void:
 		var pair: Array = by_owner_cast[o]
 		if pair.size() != 2:
 			continue
-		if TrackView.frog_casting_mesh(pair[0], pair[1]) != null:
+		if TrackView.frog_casting_mesh(pair[0], pair[1], cores.get(o)) != null:
 			cast_built += 1
 	_ok("сердечник построен у каждой стрелки", cast_built == by_owner_cast.size(),
 		"%d из %d" % [cast_built, by_owner_cast.size()])
 
-	# Число полос выводится из СТРОЕНИЯ, как и у рельса участка: по полосе на
-	# ребро сечения плюс лишняя на каждое верхнее ребро У ХОДОВОЙ нитки — там верх
-	# режется под накат. У контррельса наката нет, и лишней полосы тоже.
+	# Число полос выводится из СТРОЕНИЯ: по полосе на ребро сечения плюс лишняя
+	# на каждое верхнее ребро У ХОДОВОЙ детали — там верх режется под накат.
+	#
+	# ХОДОВЫЕ — ВСЕ, КРОМЕ ДВУХ (2026-08-17). Раньше здесь стоял усовик
+	# единственным видом, потому что деталями были только детали устройства;
+	# теперь ими приезжают и рельсы перегона. Не несут колесо контррельс (ведёт
+	# гребень) и грань сердечника (её накат рисует отливка).
 	var want := 0
 	var got := 0
 	var empty: Array[String] = []
 	for r in rails:
 		var strips := 0
-		var rides := r.kind == TrackBuild.FROG_WING
+		var rides := r.kind != TrackBuild.FROG_CHECK and r.kind != TrackBuild.FROG_CASTING
 		for i in r.rail_section.size():
 			var a: Vector2 = r.rail_section[i]
 			var b: Vector2 = r.rail_section[(i + 1) % r.rail_section.size()]
@@ -725,26 +726,10 @@ func _check_frogs(network: Dictionary, by_id: Dictionary) -> void:
 
 ## НИТКИ И ОСИ. Линиями, а не полосами: ширина нитки — величина экранная.
 func _check_lines(spans: Array[TrackBuild.Span], elements: Array[TrackGeom.Element]) -> void:
-	var want_surfaces := 0
-	var got_surfaces := 0
-	var empty: Array[String] = []
-	for sp in spans:
-		var threads := sp.threads()
-		var n := 0
-		for line in threads:
-			if line.size() >= 2:
-				n += 1
-		want_surfaces += n
-		var mesh := TrackView.rail_mesh(threads)
-		if mesh == null:
-			if n > 0:
-				empty.append(sp.element_id)
-			continue
-		got_surfaces += mesh.get_surface_count()
-	_ok("нитки построены у всех участков с колеёй", empty.is_empty(), str(empty))
-	_ok("поверхностей ниток = число ниток длиннее точки", got_surfaces == want_surfaces,
-		"%d против %d" % [got_surfaces, want_surfaces])
-
+	# СИМВОЛИЧЕСКИХ НИТОК БОЛЬШЕ НЕТ (2026-08-17). Ими показ обходился там, где
+	# у участка не было сечения: две линии на ±gauge/2. Теперь рельсы приезжают
+	# деталями, а участок без сечения означает карту без профиля рельса — и
+	# рисовать вместо него линию значило бы выдумывать путь.
 	var no_line: Array[String] = []
 	for el in elements:
 		if el.points.size() < 2:
@@ -780,8 +765,11 @@ func _check_refusals(spans: Array[TrackBuild.Span]) -> void:
 	bare.element_id = "PROBE"
 	bare.axis = axis
 	_ok("призма без габарита отвергнута", TrackView.prism_mesh(bare) == null)
-	_ok("рельс без колеи отвергнут", TrackView.rail_body_mesh(bare) == null)
-	_ok("накат без колеи отвергнут", TrackView.railhead_mesh(bare) == null)
+	var bare_rail := TrackBuild.FrogRail.new()
+	bare_rail.element_id = "PROBE"
+	bare_rail.axis = axis
+	_ok("рельс без сечения отвергнут", TrackView.frog_rail_mesh(bare_rail) == null)
+	_ok("накат без сечения отвергнут", TrackView.frog_railhead_mesh(bare_rail) == null)
 
 	var no_sleepers: Array[TrackBuild.Sleeper] = []
 	_ok("пустая решётка отвергнута", TrackView.sleeper_mesh(no_sleepers) == null)

@@ -76,7 +76,7 @@ func TestTurnoutCommonPortDirections(t *testing.T) {
 	d := poses[Incidence{Port: common, Element: seedmap.StationSW1 + mapfmt.PassageDiverging}]
 	e := poses[Incidence{Port: common, Element: seedmap.StationApproach}]
 	// Правая стрелка: боковой отклоняется по часовой, курс убывает.
-	want := -seedmap.TurnoutTypeForTest().Switch.InitialAngle
+	want := -seedmap.TurnoutProjectForTest().Switch.InitialAngle
 	if got := d.Plan.Heading - s.Plan.Heading; math.Abs(got-want) > 1e-9 {
 		t.Fatalf("излом бокового прохода %.7f, а проект объявляет %.7f", got, want)
 	}

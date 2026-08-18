@@ -191,6 +191,18 @@ BOARD_ARG := $(if $(BOARD),--board)
 NOHUD ?=
 NOHUD_ARG := $(if $(NOHUD),--shot-no-hud)
 
+## PORTS — ОТЛАДОЧНЫЙ СЛОЙ ПОРТОВ на кадре: концы деталей с подписями и
+## объявленные разрывы пунктиром. В игре включается клавишей F2, но снимку и
+## зонду нажимать некому — та же пара, что BOARD рядом с клавишей E.
+##
+## Зачем он вообще: смычку деталей доказывает сервер, и обойти его проверку можно
+## ровно одним способом — объявить разрыв. Слой показывает, ЧТО именно объявлено,
+## и рядом с чем стоит конец детали (разбор — в client/scripts/port_debug.gd).
+##
+##   make turnout-probe PORTS=1 PROBE_SHOT=$(CURDIR)/shots/ports.png
+PORTS ?=
+PORTS_ARG := $(if $(PORTS),--ports)
+
 # Запятая переменной, и это не причуда. $(call …) режет свои аргументы ПО
 # ЗАПЯТЫМ, поэтому «--position -9000,-9000» внутри $(call with_server,…) уезжало
 # вторым аргументом: до Godot доходило «--position -9000», и он отвечал «Invalid
@@ -232,7 +244,7 @@ help:
 	@echo 'Цели dev* сносят базу перед стартом (DEV_RESEED=-reseed); serve — нет.'
 	@echo 'ROLE: builder (орто под углом), dsp (почти сверху, шире), driver (с оси, горизонтально).'
 	@echo 'FRAME: network (вся сеть), throat (только устройства), terrain (весь приехавший рельеф),'
-	@echo '       stock (поставленный подвижной состав).'
+	@echo '       stock (поставленный подвижной состав), switch (стрелка вблизи), frog (крестовина вблизи).'
 	@echo 'Горловина наводится по габаритам элементов с role.turnout, а не по числу.'
 	@echo
 	@echo 'Примеры:'
@@ -346,7 +358,7 @@ dev-check: dev-bin client-import
 ## снимать), но уведено за экран.
 dev-shot: dev-bin client-import
 	@mkdir -p $(dir $(SHOT))
-	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) $(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) --quit-when-done)
+	$(call with_server,$(GODOT) --path $(CLIENT) --position -9000$(COMMA)-9000 --resolution 1600x900 -- --server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) $(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) $(PORTS_ARG) --quit-when-done)
 	@echo "снимок: $(SHOT)"
 
 ## serve — только сервер. Держит порт, поэтому в переднем плане.
@@ -535,7 +547,7 @@ bench: client-import
 turnout-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
 		--script res://tools/turnout_probe.gd -- \
-		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG) $(PROBE_SHOT_ARG)
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver $(PROBE_REACH_ARG) $(PROBE_SHOT_ARG) $(PORTS_ARG)
 
 
 ## net-probe — НА КАКОМ ЭТАПЕ ТОРМОЗА. Сервер должен быть уже поднят.
@@ -569,5 +581,5 @@ client-shot: client-import
 	@mkdir -p $(dir $(SHOT))
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1600x900 -- \
 		--server=$(SERVER_URL) --region=$(REGION) --shot=$(SHOT) --role=$(ROLE) --frame=$(FRAME) \
-		$(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) --quit-when-done
+		$(REACH_ARG) $(BOARD_ARG) $(NOHUD_ARG) $(PORTS_ARG) --quit-when-done
 	@echo "снимок: $(SHOT)"

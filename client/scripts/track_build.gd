@@ -96,31 +96,6 @@ class Span:
 	## упрощением — прямоугольником head_width × height. Своего профиля клиент не
 	## подставляет: выдумать сечение — ровно то, что контракт запрещает.
 	var rail_section: PackedVector2Array = PackedVector2Array()
-	## РАЗРЫВЫ НИТОК: куски оси, на которых нитка этой стороны существует.
-	##
-	## Пустой список значит «разрывов нет» — нитка идёт по всей оси участка, и
-	## это случай всякого пути, кроме проходов стрелки. У прохода же рельса нет
-	## там, где его место занято чем-то другим: у бокового прохода до корня
-	## остряка (там лежат рамный рельс и остряк), у обоих проходов под
-	## сердечником крестовины. Что именно занимает место, сказал сервер
-	## (track.RenderTurnoutRailGap.Kind); показу довольно знать, что нитки тут
-	## нет.
-	##
-	## Куски НАРЕЗАНЫ ПРИ РАЗБОРЕ и каждый взят у элемента своим sample_range: их
-	## края обязаны лежать в присланном u ровно, а не приблизительно — иначе
-	## обрубок нитки торчал бы из-под края сердечника.
-	##
-	## Стороны врозь: разрывы у левой и правой нитки разные (у бокового прохода
-	## это две разные причины на одном участке), и один список на обе означал бы
-	## вырезанное лишнее.
-	var rail_runs_left: Array = []
-	var rail_runs_right: Array = []
-	## Была ли нитка НАРЕЗАНА. Отдельно от списка кусков, потому что пустой
-	## список значит разное: без признака — «разрывов не присылали», с признаком
-	## — «нитки нет вовсе на всём участке». Спутать их значило бы нарисовать
-	## рельс ровно там, где сервер сказал, что рельса нет.
-	var rail_cut_left := false
-	var rail_cut_right := false
 	## Покрыт ли участок строительным прогоном. У прохода стрелки false: тип у
 	## него есть (role.type), а run'а нет и быть не может — решётка устройства
 	## нерегулярна (контракт §6). Отсюда: призма и нитки на ветви рисуются, шпалы
@@ -141,16 +116,6 @@ class Span:
 	## has_rail_body — хватает ли на рельс телом.
 	func has_rail_body() -> bool:
 		return gauge_m > 0.0 and rail_height_m > 0.0 and rail_head_width_m > 0.0
-
-	## rail_runs — куски оси, на которых нитка этой стороны есть.
-	##
-	## sgn называет нитку так же, как её откладывает показ: +1 — левая (по левой
-	## нормали), −1 — правая. Разрывов нет — возвращается вся ось одним куском, и
-	## показу не приходится знать, особый это участок или обычный путь.
-	func rail_runs(sgn: float) -> Array:
-		if sgn > 0.0:
-			return rail_runs_left if rail_cut_left else [axis]
-		return rail_runs_right if rail_cut_right else [axis]
 
 	## has_rail_section — прислан ли профиль. Три точки — нижняя граница здравого
 	## смысла показа; настоящую границу (восемь) держит валидатор карты, и
@@ -557,9 +522,6 @@ static func covered_spans(network: Dictionary, by_id: Dictionary, max_seg_m: flo
 			_fill_type(span, t)
 			out.append(span)
 
-	# Разрывы ниток: элемент -> сторона -> отрезки. Собираются один раз на весь
-	# разбор, а не спрашиваются у сети на каждом проходе.
-	var gaps := rail_gaps_by_element(network)
 	# Проходы стрелок. Run'ами они не покрываются по правилу — решётка
 	# устройства нерегулярна, — но ТИП у них есть с 2026-08-12: он приезжает в
 	# role.type (контракт §6). До того у ветвей не было ни одного размера, и они
@@ -582,72 +544,11 @@ static func covered_spans(network: Dictionary, by_id: Dictionary, max_seg_m: flo
 		dspan.from_run = false
 		dspan.axis = axis_all
 		_fill_type(dspan, types[dev_type] as Dictionary)
-		_cut_rails(dspan, el, gaps.get(eid, {}) as Dictionary, max_seg_m, max_ang_rad)
+		# ПРОХОД — МАРШРУТ, НЕ ПАРА ФИЗИЧЕСКИХ РЕЛЬСОВ, и с 2026-08-17 это верно
+		# для всякого участка: рельсы не порождает ни один из них, все приезжают
+		# деталями в rails. Участок остался ради призмы, шпал и адресации.
 		out.append(dspan)
 	return out
-
-
-## rail_gaps_by_element — разрывы ниток, {элемент: {сторона: [(from, to), …]}}.
-##
-## Сторона ключом ±1, а не выносом: у клиента нитки уже разведены этим знаком, и
-## сравнивать присланный вынос с ±gauge/2 значило бы завести второе место, где
-## живёт правило «какая нитка левая».
-static func rail_gaps_by_element(network: Dictionary) -> Dictionary:
-	var out := {}
-	for g_raw in (network.get("turnout_rail_gaps", []) as Array):
-		var g: Dictionary = g_raw as Dictionary
-		var eid := String(g.get("element", ""))
-		var to := float(g.get("to", 0.0))
-		var from := float(g.get("from", 0.0))
-		if eid == "" or to <= from:
-			continue
-		var sgn := signf(float(g.get("offset", 0.0)))
-		if not out.has(eid):
-			out[eid] = {}
-		var by_side: Dictionary = out[eid]
-		if not by_side.has(sgn):
-			by_side[sgn] = []
-		(by_side[sgn] as Array).append(Vector2(from, to))
-	return out
-
-
-## _cut_rails — нарезать нитки участка на куски между разрывами.
-##
-## КАЖДЫЙ КУСОК БЕРЁТСЯ У ЭЛЕМЕНТА ЗАНОВО (sample_range), а не выбирается из
-## готовой оси: край разрыва обязан сесть в присланное u ровно. Выбери мы
-## ближайшие точки разбиения — под краем сердечника торчал бы обрубок нитки
-## длиной в шаг тесселяции, а это до полутора метров.
-##
-## Разрывы СЛИВАЮТСЯ перед вычитанием: у бокового прохода их два источника —
-## остряк и сердечник, — и на коротком переводе они могут наложиться. Два
-## перекрывающихся выреза, вычтенные порознь, дали бы кусок отрицательной длины.
-static func _cut_rails(span: Span, el: TrackGeom.Element, by_side: Dictionary,
-		max_seg_m: float, max_ang_rad: float) -> void:
-	if by_side.is_empty():
-		return
-	for sgn_raw in by_side:
-		var sgn := float(sgn_raw)
-		var cuts: Array = (by_side[sgn_raw] as Array).duplicate()
-		cuts.sort_custom(func(a: Vector2, b: Vector2) -> bool: return a.x < b.x)
-		var runs: Array = []
-		var at := 0.0
-		for c_raw in cuts:
-			var c: Vector2 = c_raw
-			if c.x > at:
-				var piece := el.sample_range(at, minf(c.x, el.length_m), max_seg_m, max_ang_rad)
-				if piece.size() >= 2:
-					runs.append(piece)
-			at = maxf(at, c.y)
-		if at < el.length_m:
-			var tail := el.sample_range(at, el.length_m, max_seg_m, max_ang_rad)
-			if tail.size() >= 2:
-				runs.append(tail)
-		if sgn > 0.0:
-			span.rail_runs_left = runs
-			span.rail_cut_left = true
-		else:
-			span.rail_runs_right = runs
-			span.rail_cut_right = true
 
 
 ## _fill_type — перенос чисел типа в участок. Одной функцией на оба источника
@@ -949,6 +850,23 @@ static func devices(elements: Array[TrackGeom.Element]) -> Array[Device]:
 class FrogRail:
 	var owner: String
 	var element_id: String
+	## КЛЮЧ ДЕТАЛИ В ПРОВОДЕ: «rail:3» — третья запись блока rails, «blade:1» —
+	## вторая запись turnout_blades. Нужен отладочному выбору (port_debug.gd):
+	## по нему щелчок находит тело детали, чтобы подсветить именно его.
+	##
+	## Позиция в списке, а не присланный id, потому что id есть НЕ У ВСЕХ: усовик,
+	## контррельс и грань сердечника приезжают безымянными. Ключ обязан быть у
+	## каждой детали, иначе выбрать можно было бы не всякую.
+	var key: String = ""
+	## Присланный идентификатор детали. Пуст у безымянных — показывается как есть.
+	var id: String = ""
+	## Части одного физического рельса могут лежать на разных элементах. Этот
+	## ключ велит показу сшить их в одно протянутое сечение без внутреннего шва.
+	var continuous_id: String = ""
+	var continuous_order: int = 0
+	## Ключи исходных записей: отладочный выбор любой половины подсвечивает весь
+	## физический рельс после сшивки.
+	var part_keys: Array[String] = []
 	## wing | check. Показу безразличен, отчёту — нет: по нему видно, что
 	## приехало обе пары, а не две одинаковые.
 	var kind: String
@@ -980,17 +898,17 @@ class FrogRail:
 	## нуля (модель CA-1/9-R65-v1: остряк 1.50…3.00 м, сердечник 0.40…0.80 м от
 	## острия).
 	var rides: PackedFloat64Array = PackedFloat64Array()
-	## ПОДЪЁМ детали над поверхностью катания, метры. Ноль у всех, кроме
-	## контррельса: он стоит выше головки на 20 мм, потому что держит гребень, а не
-	## несёт колесо.
-	var lift_m: float = 0.0
 
 	## width_at / sink_at — острожка в точке. Полное сечение, если её не задавали.
 	func width_at(k: int) -> float:
 		return 1.0 if k >= widths.size() else widths[k]
 
+	## Отрицательное понижение — ПОДЪЁМ над поверхностью катания: так приезжает
+	## контррельс, который держит гребень, а не несёт колесо. Отдельного поля под
+	## подъём нет нарочно: вопрос один — где верх детали относительно датума, — и
+	## два поля на него отвечали бы порознь.
 	func sink_at(k: int) -> float:
-		return (0.0 if k >= sinks.size() else sinks[k]) - lift_m
+		return 0.0 if k >= sinks.size() else sinks[k]
 
 	## ride_at — ширина наката в точке. Отрицательное значит «не задавали», и тогда
 	## показ берёт свою объявленную долю головки.
@@ -1001,18 +919,100 @@ class FrogRail:
 		return axis.size() >= 2 and faces.size() == axis.size() and rail_height_m > 0.0
 
 
-## frog_rails — нитки крестовин из блока turnout_rails.
+## FrogCore — ТЕЛО СЕРДЕЧНИКА, присланное станциями сечения.
 ##
-## ВЫНОС СЧИТАЕТСЯ ЗДЕСЬ, А НЕ ПРИ ПОКАЗЕ: отгиб — линейный переход от рабочего
-## выноса к раструбу на длине flare у каждого конца, и это арифметика над
-## присланным, а не решение о виде. Показ обязан только отложить готовое.
-static func frog_rails(network: Dictionary, by_id: Dictionary,
+## Форму отливки клиент больше не выводит ни в одной точке. До 2026-08-17 он брал
+## ширину между граневыми линиями и по пяти своим константам строил четыре уровня
+## по высоте — то есть решал, какой толщины отливка под головой и насколько шире
+## её подошва. Теперь на проводе сечение целиком, а здесь остаётся выбрать его на
+## нужном расстоянии от острия и протянуть.
+class FrogCore:
+	var owner: String
+	var length: float = 0.0
+	## Станции: расстояние от острия и сечение на нём. Порознь, а не парами,
+	## потому что читаются в цикле по точкам оси, а не по станциям.
+	var us := PackedFloat64Array()
+	var sections: Array[PackedVector2Array] = []
+
+	func ready() -> bool:
+		return us.size() >= 2 and us.size() == sections.size()
+
+	## section_at — сечение на расстоянии u от острия.
+	##
+	## Между станциями ЛИНЕЙНО, за крайними — постоянно: то же правило, что у
+	## строжки остряка и у ходовой поверхности, и объявлено оно контрактом, а не
+	## выбрано здесь. Число точек одинаково на всех станциях — это обещание
+	## сервера, и без него шов нечем сшить.
+	func section_at(u: float) -> PackedVector2Array:
+		if not ready():
+			return PackedVector2Array()
+		if u <= us[0]:
+			return sections[0]
+		var last := us.size() - 1
+		if u >= us[last]:
+			return sections[last]
+		var i := 0
+		while i + 1 < last and u > us[i + 1]:
+			i += 1
+		var span := us[i + 1] - us[i]
+		var t: float = 0.0 if span <= 0.0 else (u - us[i]) / span
+		var lo: PackedVector2Array = sections[i]
+		var hi: PackedVector2Array = sections[i + 1]
+		var n := mini(lo.size(), hi.size())
+		var out := PackedVector2Array()
+		out.resize(n)
+		for k in n:
+			out[k] = lo[k].lerp(hi[k], t)
+		return out
+
+
+## frog_cores — тела сердечников из блока frog_cores: владелец -> FrogCore.
+##
+## Словарём по владельцу, а не списком: спрашивают его ровно там, где собрана
+## пара граней одной стрелки.
+static func frog_cores(network: Dictionary) -> Dictionary:
+	var out := {}
+	for c_raw in (network.get("frog_cores", []) as Array):
+		var c: Dictionary = c_raw as Dictionary
+		var core := FrogCore.new()
+		core.owner = String(c.get("owner", ""))
+		core.length = float(c.get("length", 0.0))
+		for st_raw in (c.get("stations", []) as Array):
+			var st: Dictionary = st_raw as Dictionary
+			var pts := PackedVector2Array()
+			for p_raw in (st.get("section", []) as Array):
+				var p: Array = p_raw as Array
+				if p.size() >= 2:
+					pts.append(Vector2(float(p[0]), float(p[1])))
+			if pts.size() < 3:
+				continue
+			core.us.append(float(st.get("u", 0.0)))
+			core.sections.append(pts)
+		if core.ready():
+			out[core.owner] = core
+	return out
+
+
+## rails — ВСЕ РЕЛЬСЫ РЕГИОНА из блока rails: перегонные нитки и детали
+## устройств.
+##
+## С 2026-08-17 путь построения ОДИН. До того рельсы перегона клиент выводил сам
+## — брал ось участка и откладывал две линии на ±gauge/2, — а детали устройства
+## приезжали готовыми. Два пути построения одного и того же расходились молча, и
+## владелец закрыл вопрос: «все рельсы должны генериться процедурно на сервере».
+##
+## ВЫНОС СЧИТАЕТСЯ ЗДЕСЬ, А НЕ ПРИ ПОКАЗЕ. Новый контракт присылает станции
+## плана со значением и производной; старый — прямой отгиб на длине flare. В
+## обоих случаях это арифметика над присланным, а не решение клиента о форме.
+static func rails(network: Dictionary, by_id: Dictionary,
 		max_seg_m: float, max_ang_rad: float) -> Dictionary:
 	var out: Array[FrogRail] = []
 	var skipped: Array[String] = []
 	var types := types_by_id(network)
-	for r_raw in (network.get("turnout_rails", []) as Array):
+	var wire := -1
+	for r_raw in (network.get("rails", []) as Array):
 		var r: Dictionary = r_raw as Dictionary
+		wire += 1
 		var eid := String(r.get("element", ""))
 		if not by_id.has(eid):
 			skipped.append("нитка %s: элемент %s не пришёл" % [r.get("kind", ""), eid])
@@ -1023,7 +1023,9 @@ static func frog_rails(network: Dictionary, by_id: Dictionary,
 		if to <= from:
 			skipped.append("нитка %s на %s вырождена" % [r.get("kind", ""), eid])
 			continue
-		var flare := float(r.get("flare", 0.0))
+		var flare_from := float(r.get("flare_from", 0.0))
+		var flare_to := float(r.get("flare_to", 0.0))
+		var plan: Array = r.get("plan", []) as Array
 		# ТОЧКИ ИЗЛОМА ОБЯЗАНЫ БЫТЬ В ОСИ. Разбиение оси считает только длину и
 		# кривизну — про отгиб оно не знает, и на прямом коротком отрезке отдаёт
 		# ровно две точки: начало и конец. Вынос при этом линейно уезжает от
@@ -1032,28 +1034,48 @@ static func frog_rails(network: Dictionary, by_id: Dictionary,
 		# Найдено проверкой, а не глазом: «с отгибом 0, без 8».
 		# ШАГ СВОЙ, МЕЛКИЙ — по доводу остряка: понижение острия сердечника сходит
 		# на нет за 0.8 м, и на пятиметровом шаге от него не осталось бы ничего.
+		var breaks: Array = []
+		if plan.size() < 2:
+			breaks.assign([from + flare_from, to - flare_to])
+		for st_raw in plan:
+			var st: Dictionary = st_raw as Dictionary
+			breaks.append(from + float(st.get("u", 0.0)))
 		var axis := _with_breaks(el,
 			el.sample_range(from, to, minf(max_seg_m, FROG_STEP_M), max_ang_rad),
-			[from + flare, to - flare])
+			breaks)
 		if axis.size() < 2:
 			continue
 		var rail := FrogRail.new()
 		rail.owner = String(r.get("owner", ""))
 		rail.element_id = eid
+		rail.key = "rail:%d" % wire
+		rail.id = String(r.get("id", ""))
+		rail.continuous_id = String(r.get("continuous_id", ""))
+		rail.continuous_order = int(r.get("continuous_order", 0))
+		rail.part_keys = [rail.key]
 		rail.kind = String(r.get("kind", ""))
 		rail.axis = axis
 		rail.grow = signf(float(r.get("grow", 1.0)))
 		var face := float(r.get("face", 0.0))
-		var end_face := float(r.get("end_face", face))
+		var end_face_from := float(r.get("end_face_from", face))
+		var end_face_to := float(r.get("end_face_to", face))
 		rail.faces = PackedFloat64Array()
 		for p in axis:
-			rail.faces.append(_flared(face, end_face, flare, p.u - from, to - from))
-		# ТИП — У РОЛИ ПРОХОДА, как и у балласта ветвей: проходы стрелок
-		# прогонами не покрываются, и свой тип они несут в role.type.
-		var dev_type := String(el.role.get("type", ""))
+			if plan.size() >= 2:
+				rail.faces.append(plan_face(plan, p.u - from))
+			else:
+				rail.faces.append(_flared(face, end_face_from, end_face_to,
+					flare_from, flare_to, p.u - from, to - from))
+		# ТИП ПРИСЛАН ДЕТАЛЬЮ. Раньше он брался у роли прохода, и это работало,
+		# пока деталями были только рельсы устройства: у перегонной нитки роли
+		# нет вовсе, её тип знает прогон. Роль осталась запасным ответом для
+		# карт, снятых до 2026-08-17.
+		var dev_type := String(r.get("type", ""))
+		if dev_type == "":
+			dev_type = String(el.role.get("type", ""))
 		if types.has(dev_type):
 			_fill_rail_metal(rail, types[dev_type] as Dictionary)
-		_fill_frog_profile(rail, from)
+		_fill_frog_profile(rail, from, r.get("section", []) as Array)
 		if not rail.ready():
 			skipped.append("нитка %s на %s: рельс не описан типом %s" % [rail.kind, eid, dev_type])
 			continue
@@ -1061,45 +1083,180 @@ static func frog_rails(network: Dictionary, by_id: Dictionary,
 	return {"list": out, "skipped": skipped}
 
 
-## _fill_frog_profile — понижение, накат и подъём короткой нитки крестовины.
+## stitch_continuous_rails собирает физический рельс из адресных частей.
 ##
-## Числа модели CA-1/9-R65-v1 (§Б, §В, §Г), и каждое отвечает на «что видно»:
-##
-##   СЕРДЕЧНИК опущен в острие на 8 мм и выходит на отметку за 0.8 м: колесо
-##     переходит на отливку не скачком, а по мере того, как она принимает вес.
-##     Накат по той же причине начинается не с острия: до 0.4 м его нет вовсе.
-##   КОНТРРЕЛЬС стоит на 20 мм ВЫШЕ головки: он держит гребень, а не несёт
-##     колесо, и наката у него нет.
-##   УСОВИК — обычная ходовая нитка: ни подъёма, ни понижения.
-static func _fill_frog_profile(rail: FrogRail, from_u: float) -> void:
-	match rail.kind:
-		FROG_CHECK:
-			rail.lift_m = CHECK_LIFT_M
-		FROG_CASTING:
-			rail.sinks = PackedFloat64Array()
-			rail.rides = PackedFloat64Array()
-			rail.sinks.resize(rail.axis.size())
-			rail.rides.resize(rail.axis.size())
-			for k in rail.axis.size():
-				var p: TrackGeom.AxisPoint = rail.axis[k]
-				var s := p.u - from_u
-				rail.sinks[k] = CASTING_SINK_M * maxf(1.0 - s / CASTING_SINK_RUN_M, 0.0)
-				var ride := 0.0
-				if s >= CASTING_RIDE_FULL_M:
-					ride = CASTING_RIDE_WIDTH_M
-				elif s > CASTING_RIDE_FROM_M:
-					ride = CASTING_RIDE_WIDTH_M * (s - CASTING_RIDE_FROM_M) \
-						/ (CASTING_RIDE_FULL_M - CASTING_RIDE_FROM_M)
-				rail.rides[k] = ride
+## Сервер вынужден описать половины усовика на двух разных элементах, но это не
+## два рельса. Если протянуть каждую половину отдельно, в изгибе оказываются два
+## поперечных кольца с разными курсами: головки накладываются белым клином — тем
+## самым «лишним изгибом» на кадре. Здесь рабочие точки переводятся в мир, в
+## шов кладётся одно сечение по биссектрисе курсов, и меш получает только два
+## наружных конца.
+static func stitch_continuous_rails(list: Array[FrogRail]) -> Array[FrogRail]:
+	var out: Array[FrogRail] = []
+	var groups := {}
+	for r in list:
+		if r.continuous_id == "":
+			out.append(r)
+			continue
+		if not groups.has(r.continuous_id):
+			groups[r.continuous_id] = []
+		(groups[r.continuous_id] as Array).append(r)
+	var ids: Array = groups.keys()
+	ids.sort()
+	for id_raw in ids:
+		var id := String(id_raw)
+		var parts: Array = groups[id]
+		if parts.size() < 2:
+			for r in parts:
+				out.append(r)
+			continue
+		parts.sort_custom(func(a: FrogRail, b: FrogRail) -> bool:
+			return a.continuous_order < b.continuous_order)
+		var joined: FrogRail = parts[0]
+		var failed := false
+		for k in range(1, parts.size()):
+			joined = _stitch_rail_pair(joined, parts[k])
+			if joined == null:
+				failed = true
+				break
+		if failed:
+			for r in parts:
+				out.append(r)
+		else:
+			out.append(joined)
+	return out
 
 
-## Числа профиля крестовины (CA-1/9-R65-v1). Метры.
-const CHECK_LIFT_M := 0.020
-const CASTING_SINK_M := 0.008
-const CASTING_SINK_RUN_M := 0.80
-const CASTING_RIDE_FROM_M := 0.40
-const CASTING_RIDE_FULL_M := 0.80
-const CASTING_RIDE_WIDTH_M := 0.035
+static func _stitch_rail_pair(first: FrogRail, second: FrogRail) -> FrogRail:
+	if not first.ready() or not second.ready() \
+			or first.owner != second.owner or absf(first.grow - second.grow) > 1e-9 \
+			or first.rail_section != second.rail_section:
+		return null
+	var rail := FrogRail.new()
+	rail.owner = first.owner
+	rail.element_id = first.continuous_id
+	rail.key = first.key
+	rail.id = first.continuous_id
+	rail.continuous_id = first.continuous_id
+	rail.continuous_order = first.continuous_order
+	rail.part_keys.assign(first.part_keys)
+	rail.part_keys.append_array(second.part_keys)
+	# Соединительный участок становится усовиком в переднем отводе; разные
+	# серверные kind называют адресные роли частей, а continuous_id — одно тело.
+	rail.kind = FROG_WING if first.kind == FROG_WING or second.kind == FROG_WING else first.kind
+	rail.grow = first.grow
+	rail.rail_section = first.rail_section
+	rail.rail_height_m = first.rail_height_m
+	rail.rail_head_width_m = first.rail_head_width_m
+
+	# Все точки новой оси лежат прямо на рабочей грани, поэтому faces=0. Так
+	# адресация двух чужих элементов заканчивается здесь и не протекает в меш.
+	var running_u := 0.0
+	var last_xy := Vector2.ZERO
+	var have_last := false
+	for k in range(first.axis.size() - 1):
+		var p: TrackGeom.AxisPoint = first.axis[k]
+		var xy := Vector2(p.x, p.y) + p.left() * first.faces[k]
+		if have_last:
+			running_u += xy.distance_to(last_xy)
+		rail.axis.append(TrackGeom.AxisPoint.new(xy.x, xy.y, p.z, p.heading, running_u))
+		rail.faces.append(0.0)
+		last_xy = xy
+		have_last = true
+
+	var a: TrackGeom.AxisPoint = first.axis[first.axis.size() - 1]
+	var b: TrackGeom.AxisPoint = second.axis[0]
+	var axy := Vector2(a.x, a.y) + a.left() * first.faces[first.faces.size() - 1]
+	var bxy := Vector2(b.x, b.y) + b.left() * second.faces[0]
+	var seam := (axy + bxy) * 0.5
+	if have_last:
+		running_u += seam.distance_to(last_xy)
+	var seam_forward := (a.forward() + b.forward()).normalized()
+	if seam_forward == Vector2.ZERO:
+		return null
+	rail.axis.append(TrackGeom.AxisPoint.new(seam.x, seam.y, (a.z + b.z) * 0.5,
+		atan2(seam_forward.y, seam_forward.x), running_u))
+	rail.faces.append(0.0)
+	last_xy = seam
+
+	for k in range(1, second.axis.size()):
+		var p: TrackGeom.AxisPoint = second.axis[k]
+		var xy := Vector2(p.x, p.y) + p.left() * second.faces[k]
+		running_u += xy.distance_to(last_xy)
+		rail.axis.append(TrackGeom.AxisPoint.new(xy.x, xy.y, p.z, p.heading, running_u))
+		rail.faces.append(0.0)
+		last_xy = xy
+	_recompute_axis_headings(rail.axis)
+	return rail
+
+
+## _recompute_axis_headings поворачивает каждое сечение поперёк ФАКТИЧЕСКОЙ
+## линии сшитого рельса.
+##
+## До сшивки курс точки принадлежит оси прохода, а рабочая грань лежит от неё
+## на переменном выносе. После переноса рабочих точек в мир этот старый курс
+## больше не является касательной рельса: в отводе и особенно в горле сечения
+## вставали косо и растягивали головку белыми клиньями. Концы смотрят вдоль
+## соседнего звена, внутренние точки — по биссектрисе двух звеньев. Это только
+## ориентация присланного сечения; положение рабочей грани не меняется.
+static func _recompute_axis_headings(axis: Array[TrackGeom.AxisPoint]) -> void:
+	if axis.size() < 2:
+		return
+	for k in axis.size():
+		var here := Vector2(axis[k].x, axis[k].y)
+		var forward := Vector2.ZERO
+		if k > 0:
+			forward += (here - Vector2(axis[k - 1].x, axis[k - 1].y)).normalized()
+		if k + 1 < axis.size():
+			forward += (Vector2(axis[k + 1].x, axis[k + 1].y) - here).normalized()
+		if forward.length_squared() <= 1e-18:
+			continue
+		axis[k].heading = atan2(forward.y, forward.x)
+
+
+## _fill_frog_profile — разложить присланные станции ходовой поверхности.
+##
+## ЧИСЕЛ ЗДЕСЬ БОЛЬШЕ НЕТ (2026-08-17). До этого дня понижение сердечника, длину
+## выхода на отметку, начало и ширину наката и подъём контррельса задавали шесть
+## констант класса — то есть форму ходовой поверхности крестовины ВЫБИРАЛ КЛИЕНТ.
+## Теперь их шлёт сервер станциями (track.RenderSectionStation, разбор — в
+## frog_profile.go), а здесь остаётся раскладка: между станциями линейно, за
+## последней постоянно. Оба правила — часть контракта, а не выбор показа.
+##
+## Пустой список станций значит «нитка на отметке, накат обычный»: так у усовика,
+## и это не пропуск, а его свойство.
+static func _fill_frog_profile(rail: FrogRail, from_u: float, stations: Array) -> void:
+	if stations.is_empty():
+		return
+	var su := PackedFloat64Array()
+	var ss := PackedFloat64Array()
+	var sr := PackedFloat64Array()
+	for st_raw in stations:
+		var st: Dictionary = st_raw as Dictionary
+		su.append(float(st.get("u", 0.0)))
+		ss.append(float(st.get("sink", 0.0)))
+		sr.append(float(st.get("ride_width", 0.0)))
+	rail.sinks = PackedFloat64Array()
+	rail.rides = PackedFloat64Array()
+	rail.sinks.resize(rail.axis.size())
+	rail.rides.resize(rail.axis.size())
+	for k in rail.axis.size():
+		var p: TrackGeom.AxisPoint = rail.axis[k]
+		var u := p.u - from_u
+		var i := su.size() - 2
+		for j in range(su.size() - 1):
+			if u <= su[j + 1]:
+				i = j
+				break
+		if i < 0:
+			# Станция одна: сечение постоянно на всей детали.
+			rail.sinks[k] = ss[0]
+			rail.rides[k] = sr[0]
+			continue
+		var span := su[i + 1] - su[i]
+		var t := 0.0 if span <= 0.0 else clampf((u - su[i]) / span, 0.0, 1.0)
+		rail.sinks[k] = lerpf(ss[i], ss[i + 1], t)
+		rail.rides[k] = lerpf(sr[i], sr[i + 1], t)
 
 
 ## _with_breaks — вставить в разбиение оси точки излома, которых оно не знает.
@@ -1123,6 +1280,11 @@ static func _with_breaks(el: TrackGeom.Element, axis: Array[TrackGeom.AxisPoint]
 	if extra.is_empty():
 		return axis
 	extra.sort()
+	var unique: Array[float] = []
+	for b in extra:
+		if unique.is_empty() or absf(b - unique[unique.size() - 1]) > BREAK_EPS_M:
+			unique.append(b)
+	extra = unique
 	var k := 0
 	for p in axis:
 		while k < extra.size() and extra[k] < p.u - BREAK_EPS_M:
@@ -1153,18 +1315,61 @@ const BREAK_EPS_M := 1e-3
 
 ## _flared — вынос рабочей грани на расстоянии `at` от начала нитки длиной `len`.
 ##
-## Отгиб есть у ОБОИХ концов: колесо входит в желоб с любой стороны. Между ними
-## вынос постоянный. Нулевая длина отгиба даёт прямую нитку без единой ветки в
-## арифметике — деления на ноль здесь нет.
-static func _flared(face: float, end_face: float, flare: float,
-		at: float, length: float) -> float:
-	if flare <= 0.0:
-		return face
-	var d := minf(at, length - at)
-	if d >= flare:
-		return face
-	var t := 1.0 - d / flare
-	return face + (end_face - face) * t
+## ОТГИБЫ У КОНЦОВ РАЗНЫЕ, и потому их два числа. У контррельса они одинаковы —
+## колесо входит в желоб с любой стороны; у УСОВИКА разные оба: одним концом он
+## выходит из своей нитки, другим приходит в горло крестовины и там переходит на
+## нитку соседнего прохода (разбор — в track/frograils.go на сервере).
+##
+## ГРАНЕЙ НА КОНЦАХ ТОЖЕ ДВЕ, и это правка 2026-08-17: половина усовика за горлом
+## НАЧИНАЕТСЯ на половине горла от нитки, а КОНЧАЕТСЯ на самой нитке, прижавшись к
+## ней за корнем сердечника. Одним числом два разных выноса не выражаются.
+##
+## Ноль с какой-то стороны означает «отгиба тут нет», и грань там сразу рабочая.
+static func _flared(face: float, end_face_from: float, end_face_to: float,
+		flare_from: float, flare_to: float, at: float, length: float) -> float:
+	if flare_from > 0.0 and at < flare_from:
+		return face + (end_face_from - face) * (1.0 - at / flare_from)
+	if flare_to > 0.0 and length - at < flare_to:
+		return face + (end_face_to - face) * (1.0 - (length - at) / flare_to)
+	return face
+
+
+## plan_face — вынос по присланному закону плана.
+##
+## Станции задают значение и производную dFace/du; между соседними действует
+## кубический Эрмит. Это общий способ прочитать форму, а не решение клиента о
+## том, как гнуть усовик: касательные и точки выбрал сервер.
+static func plan_face(stations: Array, at: float) -> float:
+	if stations.is_empty():
+		return 0.0
+	if stations.size() == 1:
+		return float((stations[0] as Dictionary).get("face", 0.0))
+	var first: Dictionary = stations[0] as Dictionary
+	if at <= float(first.get("u", 0.0)):
+		return float(first.get("face", 0.0))
+	for i in range(stations.size() - 1):
+		var a: Dictionary = stations[i] as Dictionary
+		var b: Dictionary = stations[i + 1] as Dictionary
+		var ua := float(a.get("u", 0.0))
+		var ub := float(b.get("u", ua))
+		if at > ub and i + 2 < stations.size():
+			continue
+		var span := ub - ua
+		if span <= 0.0:
+			return float(b.get("face", 0.0))
+		var t := clampf((at - ua) / span, 0.0, 1.0)
+		var t2 := t * t
+		var t3 := t2 * t
+		var fa := float(a.get("face", 0.0))
+		var fb := float(b.get("face", fa))
+		var ma := float(a.get("slope", 0.0)) * span
+		var mb := float(b.get("slope", 0.0)) * span
+		return (2.0 * t3 - 3.0 * t2 + 1.0) * fa \
+			+ (t3 - 2.0 * t2 + t) * ma \
+			+ (-2.0 * t3 + 3.0 * t2) * fb \
+			+ (t3 - t2) * mb
+	var last: Dictionary = stations[stations.size() - 1] as Dictionary
+	return float(last.get("face", 0.0))
 
 
 ## _fill_rail_metal — перенести рельс типа в короткую нитку.
@@ -1188,6 +1393,9 @@ static func _fill_rail_metal(rail: FrogRail, t: Dictionary) -> void:
 const FROG_WING := "wing"
 const FROG_CHECK := "check"
 const FROG_CASTING := "casting"
+## РАМНЫЙ РЕЛЬС — вид нитки стрелки, а не крестовины. Нужен наводке кадра
+## (frame=switch): стрелка кончается там, где кончается он, а не корнем остряка.
+const RAIL_STOCK := "stock"
 ## Остряк на проводе отдельным списком (turnout_blades), а не видом нитки: у него
 ## есть то, чего нет ни у усовика, ни у контррельса, — ветвь и ход. Строка нужна
 ## показу, чтобы назвать узел, и отчёту, чтобы отличить его в списке.
@@ -1237,6 +1445,10 @@ class Blade extends FrogRail:
 	var offset_m: float = 0.0
 	var throw_m: float = 0.0
 	var length_m: float = 0.0
+	## Тело лежит внутри колеи, по другую сторону линии прилегания, чем профиль
+	## логического порта. Направление приезжает отдельно: смешивать его с grow
+	## нельзя — тогда либо исчезает остряк, либо размыкается корневой порт.
+	var body_grow: float = 1.0
 	## Куда растёт тело, прислано сервером (track.RenderTurnoutBlade.Grow).
 	## НАСКОЛЬКО остряк отведён сейчас: 0 — прижат, 1 — отведён целиком.
 	##
@@ -1337,8 +1549,10 @@ static func blades(network: Dictionary, by_id: Dictionary,
 	# ТИПЫ ПУТИ ЗДЕСЬ БОЛЬШЕ НЕ НУЖНЫ: у остряка свой рельс, и он приезжает в
 	# самой записи остряка. До 2026-08-16 профиль брали у типа пути прохода —
 	# то есть строили остряк из путевого Р65.
+	var wire := -1
 	for b_raw in (network.get("turnout_blades", []) as Array):
 		var b: Dictionary = b_raw as Dictionary
+		wire += 1
 		var eid := String(b.get("passage", ""))
 		if not by_id.has(eid):
 			skipped.append("остряк: проход %s не пришёл" % eid)
@@ -1368,6 +1582,7 @@ static func blades(network: Dictionary, by_id: Dictionary,
 		var blade := Blade.new()
 		blade.owner = String(b.get("owner", ""))
 		blade.element_id = eid
+		blade.key = "blade:%d" % wire
 		blade.kind = BLADE
 		blade.branch = String(b.get("branch", ""))
 		blade.axis = axis
@@ -1377,7 +1592,8 @@ static func blades(network: Dictionary, by_id: Dictionary,
 		# Сторона роста ПРИСЛАНА, а не выведена из знака выноса: тот же довод, что
 		# у усовика — сторона есть факт о станции, и два клиента, выводящие её
 		# порознь, дали бы два разных ответа.
-		blade.grow = signf(float(b.get("grow", -signf(blade.offset_m))))
+		blade.grow = signf(float(b.get("body_grow", -signf(blade.offset_m))))
+		blade.body_grow = blade.grow
 		for st_raw in section:
 			var st: Dictionary = st_raw as Dictionary
 			blade.sec_u.append(float(st.get("u", 0.0)))

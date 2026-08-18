@@ -27,12 +27,6 @@ func (m *Map) validateConstruction() error {
 	// зависят от блока construction (карта без него тоже обязана получить отказ,
 	// если в ней есть стрелка), и порядок здесь называет эту независимость.
 	const prefix = "отрисовка: "
-	// Каталог называет себя тем же модулем, что и решётка: он часть того же
-	// рецепта конструкции, и отказ, приходящий без имени модуля, читался бы как
-	// пришедший ниоткуда.
-	if err := validateTurnoutTypes(m); err != nil {
-		return fmt.Errorf("%s%w", prefix, err)
-	}
 	// Размеры платформ проверяются до раннего выхода: карта с платформой без
 	// размеров не должна выйти наружу, даже если решётка ещё не авторилась.
 	if err := m.checkPlatformSizes(prefix); err != nil {
@@ -549,24 +543,49 @@ func validateTrackFrog(where string, f TrackFrog) error {
 	if !(f.Flangeway >= MinFlangeway && f.Flangeway <= MaxFlangeway) {
 		return bad("frog_set.flangeway", f.Flangeway, MinFlangeway, MaxFlangeway)
 	}
+	// ГЛУБИНА ЖЕЛОБА МЕРИТСЯ ОТ ПОВЕРХНОСТИ КАТАНИЯ ВНИЗ и обязана быть меньше
+	// высоты рельса: дно ниже подошвы — это уже не крестовина, а канава.
+	if !(f.FlangewayDepth >= MinFlangewayDepth && f.FlangewayDepth <= MaxFlangewayDepth) {
+		return bad("frog_set.flangeway_depth", f.FlangewayDepth, MinFlangewayDepth, MaxFlangewayDepth)
+	}
 	if !(f.CheckFlangeway >= MinFlangeway && f.CheckFlangeway <= MaxFlangeway) {
 		return bad("frog_set.check_flangeway", f.CheckFlangeway, MinFlangeway, MaxFlangeway)
 	}
-	if !(f.WingLength >= MinFrogRailLength && f.WingLength <= MaxFrogRailLength) {
-		return bad("frog_set.wing_length", f.WingLength, MinFrogRailLength, MaxFrogRailLength)
+	if !(f.CoreLength >= MinFrogRailLength && f.CoreLength <= MaxFrogRailLength) {
+		return bad("frog_set.core_length", f.CoreLength, MinFrogRailLength, MaxFrogRailLength)
 	}
 	if !(f.CheckLength >= MinFrogRailLength && f.CheckLength <= MaxFrogRailLength) {
 		return bad("frog_set.check_length", f.CheckLength, MinFrogRailLength, MaxFrogRailLength)
 	}
-	if !(f.CastingLength >= MinFrogRailLength && f.CastingLength <= MaxFrogRailLength) {
-		return bad("frog_set.casting_length", f.CastingLength, MinFrogRailLength, MaxFrogRailLength)
+	// ВЫНОС УСОВИКА ВПЕРЁД — положительный: усовик начинается ДО математической
+	// точки, у горла. Нулевой вынос означал бы, что колесо въезжает в желоб ровно
+	// там, где нитки уже пересеклись, — то есть горла нет вовсе.
+	if f.WingApproach <= 0 || f.WingApproach > MaxFrogRailLength {
+		return bad("frog_set.wing_approach", f.WingApproach, 0, MaxFrogRailLength)
 	}
-	// СЕРДЕЧНИК КОРОЧЕ УСОВИКА. Усовик обнимает сердечник с двух сторон и по
-	// построению длиннее его; отливка длиннее своих крыльев — это уже не
-	// крестовина, а вставка.
-	if f.CastingLength*2 > f.WingLength {
-		return fmt.Errorf("mapfmt: тип устройства %s: сердечник %g в каждую сторону не помещается в усовик %g — крылья короче отливки",
-			where, f.CastingLength, f.WingLength)
+	// ЗДЕСЬ СТОЯЛА ПРОВЕРКА «СЕРДЕЧНИК КОРОЧЕ УСОВИКА», и она СНЯТА, а не забыта.
+	// Проверять больше нечего: конец усовика ЕСТЬ корень сердечника (frograils.go),
+	// и крылья короче отливки стать не могут по построению. Пока у усовика была
+	// своя длина, это требовалось сторожить — и сторож пропускал ровно то, что
+	// случилось: длины сошлись, а концы разъехались на 0.900 м.
+	// КОНТРОЛЬНЫЕ СЕЧЕНИЯ ИДУТ ОТ ГОРЛА НАРУЖУ И РАСХОДЯТСЯ. Обратный порядок или
+	// сужающийся просвет означали бы усовики, которые сходятся навстречу колесу, —
+	// такую крестовину строить нельзя, и молчаливо переставить сечения местами
+	// было бы подстановкой вместо отказа.
+	prev := WingControlSection{At: 0, Gap: f.Throat}
+	for i, c := range f.WingControl {
+		if c.At <= prev.At {
+			return fmt.Errorf("mapfmt: тип устройства %s: контрольное сечение %d стоит в %g м от горла, а предыдущее в %g м",
+				where, i, c.At, prev.At)
+		}
+		if c.Gap < prev.Gap {
+			return fmt.Errorf("mapfmt: тип устройства %s: в %g м от горла просвет %g у́же, чем %g ближе к горлу — усовики сходятся назад",
+				where, c.At, c.Gap, prev.Gap)
+		}
+		prev = c
+	}
+	if !(f.WingBendRadius >= MinWingBendRadius && f.WingBendRadius <= MaxWingBendRadius) {
+		return bad("frog_set.wing_bend_radius", f.WingBendRadius, MinWingBendRadius, MaxWingBendRadius)
 	}
 	if !(f.Flare >= MinFlare && f.Flare <= MaxFlare) {
 		return bad("frog_set.flare", f.Flare, MinFlare, MaxFlare)
@@ -576,9 +595,12 @@ func validateTrackFrog(where string, f TrackFrog) error {
 			where, f.FlareGap, f.Flangeway)
 	}
 	// ДВА ОТГИБА КОРОЧЕ САМОЙ НИТКИ: нитка из одних отгибов ничего не удерживает.
-	if 2*f.Flare >= f.CheckLength || 2*f.Flare >= f.WingLength {
+	// Длина усовика здесь СЧИТАЕТСЯ, а не берётся: своей у него больше нет —
+	// он лежит от горла (WingApproach вперёд от точки) до корня сердечника.
+	wing := f.WingApproach + f.CoreLength
+	if 2*f.Flare >= f.CheckLength || 2*f.Flare >= wing {
 		return fmt.Errorf("mapfmt: тип устройства %s: два отгиба по %g не помещаются в усовик %g и контррельс %g — рабочей части не остаётся",
-			where, f.Flare, f.WingLength, f.CheckLength)
+			where, f.Flare, wing, f.CheckLength)
 	}
 	return nil
 }

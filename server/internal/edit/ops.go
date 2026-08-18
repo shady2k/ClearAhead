@@ -292,26 +292,18 @@ func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 	if in.Hand != "left" && in.Hand != "right" {
 		return fmt.Errorf("edit: ветвление: рукость %q, ожидается left или right", in.Hand)
 	}
-	if _, err := m.TurnoutTypeByID(in.TurnoutType); err != nil {
+	if _, err := mapfmt.TurnoutProjectByID(in.TurnoutType); err != nil {
 		return fmt.Errorf("edit: ветвление: %w", err)
 	}
 	if in.Drive != mapfmt.DriveManual && in.Drive != mapfmt.DriveElectric {
 		return fmt.Errorf("edit: ветвление: переводной механизм %q, ожидается %s или %s",
 			in.Drive, mapfmt.DriveManual, mapfmt.DriveElectric)
 	}
-	if len(in.Straight) == 0 || len(in.Diverging) == 0 || len(in.Branch) == 0 {
-		return fmt.Errorf("edit: ветвление: нужны геометрии прямого и отклонённого проходов и ветви")
+	if len(in.Branch) == 0 {
+		return fmt.Errorf("edit: ветвление: нужна геометрия ветви")
 	}
 	if err := checkEndPurpose(in.EndPurpose); err != nil {
 		return fmt.Errorf("edit: ветвление: %w", err)
-	}
-	straightAL, err := chainToAlignments(in.Straight)
-	if err != nil {
-		return fmt.Errorf("edit: ветвление: прямой проход: %w", err)
-	}
-	divergingAL, err := chainToAlignments(in.Diverging)
-	if err != nil {
-		return fmt.Errorf("edit: ветвление: отклонённый проход: %w", err)
 	}
 	branchAL, err := chainToAlignments(in.Branch)
 	if err != nil {
@@ -347,7 +339,10 @@ func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 		return err
 	}
 
-	// Стрелка и её геометрия. Вид у стрелки, продолжения и ветви — вид
+	// Стрелка. Геометрии проходов строитель не кладёт: она приходит из каталога
+	// сервера по ссылке на проект и рукости (mapfmt.Map.AllAlignments).
+	//
+	// Вид у стрелки, продолжения и ветви — вид
 	// разрезанного ребра: ветвление порождает продолжение ТОЙ ЖЕ сети, и
 	// спрашивать автора «а какого вида получившаяся стрелка» значило бы
 	// разрешить ему развилку из рельсов в шоссе, для которой нет ни геометрии,
@@ -365,11 +360,6 @@ func applyBranch(m *mapfmt.Map, ids uuidv7.Source, in BranchIntent) error {
 			Diverging: "D",
 		},
 	})
-	if m.Geometry.Turnouts == nil {
-		m.Geometry.Turnouts = map[string]mapfmt.TurnoutGeometry{}
-	}
-	m.Geometry.Turnouts[swID] = mapfmt.TurnoutGeometry{Straight: straightAL, Diverging: divergingAL}
-
 	// Подходная часть сохраняет ID исходного ребра (фаза run'а наследуется),
 	// продолжение и ветвь — новые рёбра.
 	m.Topology.Edges[idx].To = swID + ".C"
@@ -681,7 +671,8 @@ func applyErase(m *mapfmt.Map, in EraseIntent) (*ErasePreview, error) {
 	turnouts := m.Topology.Turnouts[:0]
 	for _, t := range m.Topology.Turnouts {
 		if removed[t.ID] {
-			delete(m.Geometry.Turnouts, t.ID)
+			// Убрать геометрию проходов отдельно больше нечего: она не хранится,
+			// а строится из каталога по стрелке, и вместе со стрелкой исчезает.
 			continue
 		}
 		turnouts = append(turnouts, t)

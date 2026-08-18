@@ -61,7 +61,7 @@ func run() -> void:
 	var by_id := TrackBuild.elements_by_id(elements)
 	var spans := TrackBuild.covered_spans(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 
-	_check_rails(spans)
+	_check_rails(network, by_id)
 	_check_blades(network, by_id)
 	_check_frog(network, by_id)
 	_check_seams(network, by_id, spans)
@@ -76,33 +76,36 @@ func run() -> void:
 ## Проверяется ЧИСЛО ОТКРЫТЫХ КОНТУРОВ, а не число граничных рёбер: форма контура
 ## зависит от присланного сечения, а вот сколько их — свойство сборки. Два на
 ## кусок нитки: рельс объявлен без торцов и уходит в стык со следующим.
-func _check_rails(spans: Array[TrackBuild.Span]) -> void:
+func _check_rails(network: Dictionary, by_id: Dictionary) -> void:
+	# ПО ДЕТАЛЯМ, А НЕ ПО УЧАСТКАМ (2026-08-17): рельсы перегона больше не
+	# строятся показом из оси участка — их, как и детали устройства, присылает
+	# сервер. Оболочку надо мерить у того, что рисуется.
+	var res := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 	var flipped := 0
 	var nonmanifold := 0
 	var worst := ""
 	var checked := 0
-	for sp in spans:
-		if not sp.has_rail_section():
+	for r_raw in (res["list"] as Array):
+		var rail: TrackBuild.FrogRail = r_raw
+		if rail.kind == TrackBuild.FROG_CASTING or rail.rail_section.is_empty():
 			continue
-		var body := TrackView.rail_body_mesh(sp)
-		var head := TrackView.railhead_mesh(sp)
+		var body := TrackView.frog_rail_mesh(rail)
 		if body == null:
 			continue
 		checked += 1
-		var st := _shell([body, head])
+		var st := _shell([body, TrackView.frog_railhead_mesh(rail)])
 		flipped += int(st["flipped"])
 		nonmanifold += int(st["nonmanifold"])
-		var ends := 0
-		for sgn in [1.0, -1.0]:
-			ends += sp.rail_runs(sgn).size() * 2
-		if int(st["loops"]) != ends and worst == "":
-			worst = "%s: открытых контуров %d, ожидалось %d (по два на кусок нитки)" % [
-				sp.element_id, int(st["loops"]), ends]
+		# Два открытых контура на деталь: рельс объявлен без торцов и уходит в
+		# стык со следующим.
+		if int(st["loops"]) != 2 and worst == "":
+			worst = "%s@%s: открытых контуров %d, ожидалось 2" % [
+				rail.element_id, rail.kind, int(st["loops"])]
 	_ok("рельс: ни одной вывернутой грани", flipped == 0,
-		"участков %d, рёбер с совпавшим направлением %d" % [checked, flipped])
+		"деталей %d, рёбер с совпавшим направлением %d" % [checked, flipped])
 	_ok("рельс: тела не слиплись", nonmanifold == 0,
 		"рёбер больше чем в двух гранях: %d" % nonmanifold)
-	_ok("рельс с накатом: открыты только концы кусков", worst == "", worst)
+	_ok("рельс с накатом: открыты только концы деталей", worst == "", worst)
 
 
 ## ОСТРЯК. Тело короткое и оба конца открыты — тот же счёт, что у куска нитки.
@@ -140,7 +143,7 @@ func _check_blades(network: Dictionary, by_id: Dictionary) -> void:
 ## он виден снизу между брусьями. Вывернутая грань у него уже случалась и стоила
 ## чёрного пятна на шпалах.
 func _check_frog(network: Dictionary, by_id: Dictionary) -> void:
-	var fr := TrackBuild.frog_rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
+	var fr := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 	var rails: Array[TrackBuild.FrogRail] = fr["list"]
 	if rails.is_empty():
 		return
@@ -159,6 +162,7 @@ func _check_frog(network: Dictionary, by_id: Dictionary) -> void:
 	_ok("нитки крестовины: ни одной вывернутой грани", flipped == 0,
 		"рёбер с совпавшим направлением %d" % flipped)
 
+	var cores := TrackBuild.frog_cores(network)
 	var cast_flipped := 0
 	var up := 0
 	var down := 0
@@ -170,7 +174,7 @@ func _check_frog(network: Dictionary, by_id: Dictionary) -> void:
 		# ТЕЛО ВМЕСТЕ С НАКАТОМ И ФАСКОЙ — по доводу рельса участка: верхнюю
 		# площадку сердечника делят три меша, и порознь у каждого законная дыра там,
 		# где начинается соседний.
-		var mesh := TrackView.frog_casting_mesh(pair[0], pair[1])
+		var mesh := TrackView.frog_casting_mesh(pair[0], pair[1], cores.get(owner_id))
 		if mesh == null:
 			continue
 		var parts := [mesh,
@@ -222,6 +226,8 @@ func _check_seams(network: Dictionary, by_id: Dictionary,
 		spans: Array[TrackBuild.Span]) -> void:
 	var bl := TrackBuild.blades(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 	var blades: Array[TrackBuild.Blade] = bl["list"]
+	var fr := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
+	var named: Array[TrackBuild.FrogRail] = fr["list"]
 	if blades.is_empty():
 		return
 	var checked := 0
@@ -257,7 +263,11 @@ func _check_seams(network: Dictionary, by_id: Dictionary,
 		# ВСЕ ТЕЛА ПРОХОДА РАЗОМ по обе стороны шва: вопрос не в том, продолжает ли
 		# конкретная деталь конкретную, а в том, продолжается ли МЕТАЛЛ. Нахлёст,
 		# которым закрыт стык, — такое же тело, как рельс.
-		var bodies := [TrackView.frog_rail_mesh(blade), TrackView.rail_body_mesh(host)]
+		var bodies: Array = [TrackView.frog_rail_mesh(blade)]
+		for r_raw in named:
+			var rail: TrackBuild.FrogRail = r_raw
+			if rail.element_id == blade.element_id and rail.kind != TrackBuild.FROG_CASTING:
+				bodies.append(TrackView.frog_rail_mesh(rail))
 		var a := _section(bodies, here - along * SEAM_STEP_M, along, across, near)
 		var b := _section(bodies, here + along * SEAM_STEP_M, along, across, near)
 		if a == Vector2.ZERO or b == Vector2.ZERO:
@@ -490,7 +500,7 @@ func _check_frog_model(network: Dictionary, by_id: Dictionary) -> void:
 		_ok("остряк: ход в острие 152 мм", absf(at_toe - blade.throw_m) < 1e-6,
 			"%.4f м при ходе %.4f м" % [at_toe, blade.throw_m])
 
-	var fr := TrackBuild.frog_rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
+	var fr := TrackBuild.rails(network, by_id, CheckContext.MAX_SEG_M, CheckContext.MAX_ANG_RAD)
 	var rails: Array[TrackBuild.FrogRail] = fr["list"]
 	var casting: TrackBuild.FrogRail = null
 	var check: TrackBuild.FrogRail = null
@@ -518,10 +528,12 @@ func _check_frog_model(network: Dictionary, by_id: Dictionary) -> void:
 			"ширина полосы у острия %.4f м" % ride_at_toe)
 	if check != null:
 		# КОНТРРЕЛЬС ВЫШЕ ГОЛОВКИ: он держит гребень, а не несёт колесо.
+		# Подъём приезжает ОТРИЦАТЕЛЬНЫМ понижением: у датума один хозяин, и
+		# второго поля под «выше» контракт не заводит (track/frog_profile.go).
 		_ok("контррельс: стоит на 20 мм выше головки",
-			absf(check.lift_m - 0.020) < 0.0015, "%.4f м" % check.lift_m)
+			absf(check.sink_at(0) + 0.020) < 0.0015, "%.4f м" % -check.sink_at(0))
 		_ok("контррельс: наката нет",
 			TrackView.frog_railhead_mesh(check) == null, "")
 	if wing != null:
-		_ok("усовик: ни подъёма, ни понижения", absf(wing.lift_m) < 1e-9 and absf(wing.sink_at(0)) < 1e-9,
-			"подъём %.4f, понижение %.4f" % [wing.lift_m, wing.sink_at(0)])
+		_ok("усовик: ни подъёма, ни понижения", absf(wing.sink_at(0)) < 1e-9,
+			"понижение %.4f" % wing.sink_at(0))

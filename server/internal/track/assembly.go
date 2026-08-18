@@ -13,7 +13,7 @@ import (
 // # Зачем это заведено
 //
 // До 2026-08-16 сервер отдавал РЕЦЕПТ: нитки прохода плюс правила вычитания
-// (RenderTurnoutRailGap) плюс отдельные списки остряков и ниток крестовины. Тела
+// плюс отдельные списки остряков и ниток крестовины. Тела
 // из этого не было — тело собирал клиент. Два следствия, и оба были дырами:
 //
 //	 1. Единственным местом, где можно спросить «сомкнулся ли металл», оказался
@@ -225,14 +225,18 @@ const MinMetalOverlap = 0.9
 // ЗАНЯТЫМ ОТРЕЗКОМ, а высота и форма шейки на него не влияют. Возить сюда весь
 // профиль значило бы обещать проверку, которой нет.
 type Part struct {
-	ID       string
-	Kind     string
-	Owner    string
-	Element  string
-	FromU    float64
-	ToU      float64
-	FaceFrom float64
-	FaceTo   float64
+	ID      string
+	Kind    string
+	Owner   string
+	Element string
+	// FromElement/ToElement названы только у межэлементной детали. Пустые
+	// значения означают Element и сохраняют простую протяжку вдоль одной оси.
+	FromElement string
+	ToElement   string
+	FromU       float64
+	ToU         float64
+	FaceFrom    float64
+	FaceTo      float64
 	// Grow — в какую сторону от рабочей грани растёт тело: +1 или −1 по левой
 	// нормали элемента. У нитки наружу от оси, у остряка внутрь колеи — и именно
 	// в этой разнице сидит прыжок тела на шве корня.
@@ -267,6 +271,16 @@ type Port struct {
 	// нормали элемента. Считается из грани, стороны роста и сечения; автором не
 	// задаётся, как и всё остальное в порту.
 	MetalFrom, MetalTo float64
+	// Face — вынос рабочей грани, от которого отмерен металл, и NX, NY — левая
+	// нормаль элемента в этой точке.
+	//
+	// Нужны затем, что деталь бывает МЕЖЭЛЕМЕНТНОЙ: усовик крестовины у горла
+	// переходит с нитки одного прохода на нитку другого, и по разные стороны шва
+	// выносы отмерены от РАЗНЫХ осей. Сравнивать их числами нельзя — 0.769 на
+	// боковом проходе и −0.751 на прямом суть одно и то же место в мире.
+	// С нормалью и гранью металл переводится в мир и сравнивается там.
+	Face   float64
+	NX, NY float64
 	// Interior — порт лежит ВНУТРИ элемента, а не на его конце.
 	//
 	// Различие несёт всю силу проверки. Порт на конце элемента законно бывает
@@ -412,18 +426,24 @@ func derivePorts(a Assembly, els map[string]Element) ([]Port, error) {
 
 	out := make([]Port, 0, len(parts)*2)
 	for _, p := range parts {
-		el, ok := els[p.Element]
-		if !ok {
-			return nil, fmt.Errorf("track: сборка %s: деталь %s ссылается на элемент %s, которого нет среди скомпилированных",
-				a.Owner, p.ID, p.Element)
-		}
-		lengthU := el.Prof.LengthU().Meters()
 		for _, end := range []string{PortAtStart, PortAtEnd} {
-			u, face := p.FromU, p.FaceFrom
-			if end == PortAtEnd {
-				u, face = p.ToU, p.FaceTo
+			element, u, face := p.Element, p.FromU, p.FaceFrom
+			if p.FromElement != "" {
+				element = p.FromElement
 			}
-			x, y, z, err := facePoint(el, u, face)
+			if end == PortAtEnd {
+				element, u, face = p.Element, p.ToU, p.FaceTo
+				if p.ToElement != "" {
+					element = p.ToElement
+				}
+			}
+			el, ok := els[element]
+			if !ok {
+				return nil, fmt.Errorf("track: сборка %s: деталь %s ссылается на элемент %s, которого нет среди скомпилированных",
+					a.Owner, p.ID, element)
+			}
+			lengthU := el.Prof.LengthU().Meters()
+			x, y, z, nx, ny, err := facePointNormal(el, u, face)
 			if err != nil {
 				return nil, fmt.Errorf("track: сборка %s: деталь %s, конец %s: %w", a.Owner, p.ID, end, err)
 			}
@@ -433,9 +453,12 @@ func derivePorts(a Assembly, els map[string]Element) ([]Port, error) {
 			}
 			lo, hi := metalSpan(face, p.Grow, p.Near, p.Far, scale)
 			out = append(out, Port{
-				Part: p.ID, Kind: p.Kind, End: end, Element: p.Element, U: u,
+				Part: p.ID, Kind: p.Kind, End: end, Element: element, U: u,
 				X: x, Y: y, Z: z,
 				MetalFrom: lo, MetalTo: hi,
+				Face: face,
+				NX:   nx,
+				NY:   ny,
 				// Допуск сравнения с концом элемента — тот же миллиметр: u приходит
 				// из счёта, и «ровно ноль» здесь означало бы сравнение float64 байт
 				// в байт, что проект уже терял.
@@ -450,20 +473,27 @@ func derivePorts(a Assembly, els map[string]Element) ([]Port, error) {
 // нормали. Та же адресация, что у брусьев, привода и разрывов, — второго языка
 // «где это поперёк пути» проект не держит.
 func facePoint(el Element, u, face float64) (x, y, z float64, err error) {
+	x, y, z, _, _, err = facePointNormal(el, u, face)
+	return x, y, z, err
+}
+
+// facePointNormal — то же и ЛЕВАЯ НОРМАЛЬ в этой точке: по ней металл детали
+// переводится в мировые координаты, когда шов лежит между разными элементами.
+func facePointNormal(el Element, u, face float64) (x, y, z, nx, ny float64, err error) {
 	du, err := units.MetersToDistance(u)
 	if err != nil {
-		return 0, 0, 0, err
+		return 0, 0, 0, 0, 0, err
 	}
 	plan, err := el.Plan.PoseAt(el.Start.Plan, du)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("план на %v м: %w", u, err)
+		return 0, 0, 0, 0, 0, fmt.Errorf("план на %v м: %w", u, err)
 	}
 	rise, _, err := el.Prof.At(du)
 	if err != nil {
-		return 0, 0, 0, fmt.Errorf("профиль на %v м: %w", u, err)
+		return 0, 0, 0, 0, 0, fmt.Errorf("профиль на %v м: %w", u, err)
 	}
-	nx, ny := -math.Sin(plan.Heading), math.Cos(plan.Heading)
-	return plan.X + nx*face, plan.Y + ny*face, el.Start.Z + rise, nil
+	nx, ny = -math.Sin(plan.Heading), math.Cos(plan.Heading)
+	return plan.X + nx*face, plan.Y + ny*face, el.Start.Z + rise, nx, ny, nil
 }
 
 // metalSpan — отрезок, занятый телом, в выносе по левой нормали.
@@ -550,7 +580,8 @@ func (p Part) headAt(u float64) span {
 func metalUnionAt(parts []Part, element string, u, face, window float64) []span {
 	var out []span
 	for _, p := range parts {
-		if p.Element != element || u < p.FromU || u > p.ToU {
+		s, ok := p.metalAtElement(element, u)
+		if !ok {
 			continue
 		}
 		// ТОЛЬКО НЕСУЩИЕ. Контррельс лежит в тех же полутора метрах и тем же
@@ -559,7 +590,6 @@ func metalUnionAt(parts []Part, element string, u, face, window float64) []span 
 		if PartRole(p.Kind) != RoleCarry {
 			continue
 		}
-		s := p.metalAt(u)
 		if s.hi < face-window || s.lo > face+window {
 			continue
 		}
@@ -578,6 +608,34 @@ func metalUnionAt(parts []Part, element string, u, face, window float64) []span 
 		merged = append(merged, s)
 	}
 	return merged
+}
+
+// metalAtElement проецирует межэлементную деталь только в малую окрестность её
+// портов. Внутреннюю форму кривой валидатор не подменяет осью одного маршрута;
+// для смычки достаточно честно знать металл непосредственно до и после порта.
+func (p Part) metalAtElement(element string, u float64) (span, bool) {
+	fromElement, toElement := p.Element, p.Element
+	if p.FromElement != "" {
+		fromElement = p.FromElement
+	}
+	if p.ToElement != "" {
+		toElement = p.ToElement
+	}
+	if fromElement == toElement {
+		if element != fromElement || u < p.FromU || u > p.ToU {
+			return span{}, false
+		}
+		return p.metalAt(u), true
+	}
+	if element == fromElement && u >= p.FromU && u <= p.FromU+2*StationEps {
+		lo, hi := metalSpan(p.FaceFrom, p.Grow, p.Near, p.Far, p.ScaleFrom)
+		return span{lo, hi}, true
+	}
+	if element == toElement && u <= p.ToU && u >= p.ToU-2*StationEps {
+		lo, hi := metalSpan(p.FaceTo, p.Grow, p.Near, p.Far, p.ScaleTo)
+		return span{lo, hi}, true
+	}
+	return span{}, false
 }
 
 func totalLen(ss []span) float64 {
@@ -662,7 +720,21 @@ func findBreaks(parts []Part, ports []Port, gaps []Gap) []Break {
 		window := 2 * (p.MetalTo - p.MetalFrom)
 		before := metalUnionAt(parts, p.Element, p.U-StationEps, mid, window)
 		after := metalUnionAt(parts, p.Element, p.U+StationEps, mid, window)
-		if share := overlapShare(before, after); share >= MinMetalOverlap {
+		share := overlapShare(before, after)
+		if share < MinMetalOverlap && best >= 0 {
+			// ШОВ МЕЖДУ РАЗНЫМИ ЭЛЕМЕНТАМИ. Деталь устройства вправе перейти с одного
+			// прохода на другой: усовик крестовины у горла меняет нитку, потому что
+			// нитки там пересекаются, и рельс, идущий по краю, обязан достаться
+			// сначала одному маршруту, потом другому.
+			//
+			// Металл по своему элементу в таком шве не продолжен НИКОГДА — соседа там
+			// просто нет, — и сравнивать надо в МИРЕ. Условие строгое: конец в конец
+			// (тот же миллиметр, что у Interior) и то же перекрытие тел, что и всюду.
+			if s2, ok := worldOverlap(p, ports[best]); ok && s2 >= MinMetalOverlap {
+				continue
+			}
+		}
+		if share >= MinMetalOverlap {
 			continue
 		} else {
 			b := Break{Kind: BreakStep, Port: p, Distance: bestD, Overlap: share}
@@ -679,6 +751,32 @@ func findBreaks(parts []Part, ports []Port, gaps []Gap) []Break {
 		}
 	}
 	return out
+}
+
+// worldOverlap — доля общего тела у двух портов, СВЕДЁННЫХ В МИР.
+//
+// Возвращает признак «сравнение имело смысл»: точки портов обязаны совпасть (шов
+// есть шов), а нормали — смотреть в одну сторону. Разъехавшиеся концы сравнивать
+// нечего, и молчаливое «ложь» здесь скрыло бы дефект вместо того, чтобы его
+// назвать.
+//
+// Металл каждого порта отмерен от СВОЕЙ рабочей грани по СВОЕЙ нормали; общая
+// точка у них — сама грань, поэтому отрезки сводятся к ней и проектируются на
+// нормаль первого. У крестовины оси расходятся на угол марки, и проекция теряет
+// косинус этого угла — 0.6 % у 1/9, что на порядок мельче допуска перекрытия.
+func worldOverlap(p, q Port) (float64, bool) {
+	if math.Hypot(math.Hypot(p.X-q.X, p.Y-q.Y), p.Z-q.Z) > StationEps {
+		return 0, false
+	}
+	if p.NX*q.NX+p.NY*q.NY <= 0 {
+		return 0, false
+	}
+	// Проекция нормали соседа на свою: во столько раз его вынос длиннее в наших
+	// осях. Знак учтён проверкой выше, поэтому множитель положителен.
+	k := p.NX*q.NX + p.NY*q.NY
+	a := []span{{p.MetalFrom - p.Face, p.MetalTo - p.Face}}
+	b := []span{{(q.MetalFrom - q.Face) * k, (q.MetalTo - q.Face) * k}}
+	return overlapShare(a, b), true
 }
 
 // coveredByGap — попадает ли порт в объявленный разрыв.

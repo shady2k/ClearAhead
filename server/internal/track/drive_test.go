@@ -16,7 +16,7 @@ import (
 func sw1Drive(t *testing.T, turn mapfmt.Turnout) *RenderTurnoutDrive {
 	t.Helper()
 	els := frogEls(mustChain(t, primStraight(t, 33.5)), mustChain(t, primArc(t, 300, -0.1107)))
-	d, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), turn, seedmap.TurnoutTypeForTest())
+	d, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), turn, seedmap.TurnoutProjectForTest())
 	if err != nil {
 		t.Fatalf("привод стрелки: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDriveSideFollowsGeometry(t *testing.T) {
 	els := frogEls(mustChain(t, primStraight(t, 33.5)), mustChain(t, primArc(t, 300, +0.1107)))
 	left := sw1Right()
 	left.Hand = mapfmt.HandLeft
-	d, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), left, seedmap.TurnoutTypeForTest())
+	d, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), left, seedmap.TurnoutProjectForTest())
 	if err != nil {
 		t.Fatalf("привод стрелки: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestDriveSideFollowsGeometry(t *testing.T) {
 func TestHandContradictingGeometryIsRefused(t *testing.T) {
 	els := frogEls(mustChain(t, primStraight(t, 33.5)), mustChain(t, primArc(t, 300, +0.1107)))
 	lying := sw1Right() // пометка говорит "right", дуга уходит влево
-	if _, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), lying, seedmap.TurnoutTypeForTest()); err == nil {
+	if _, err := turnoutDrive(els, timberTypes(5.5), frogConstruction(), lying, seedmap.TurnoutProjectForTest()); err == nil {
 		t.Fatal("лживая пометка о рукости принята — компилятор промолчал о карте, у которой стрелка смотрит не туда")
 	}
 }

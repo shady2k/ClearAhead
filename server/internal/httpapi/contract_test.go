@@ -35,46 +35,91 @@ import (
 // ответ, и различитель заводится ЗАРАНЕЕ — поле в персистентных данных дешевле
 // всего добавить вслепую и дороже всего мигрировать (разбор в mapfmt.KindRail).
 type wireNetwork struct {
-	Region             string               `json:"region"`
-	Revision           int                  `json:"revision"`
-	Elements           []wireElement        `json:"elements"`
-	Structures         []wireStructure      `json:"structures"`
-	TrackTypes         []wireTrackType      `json:"track_types"`
-	ConstructionRuns   []wireRun            `json:"construction_runs"`
-	TurnoutGrids       []wireTurnoutGrid    `json:"turnout_grids"`
-	TurnoutDrives      []wireTurnoutDrive   `json:"turnout_drives"`
-	TurnoutBlades      []wireTurnoutBlade   `json:"turnout_blades"`
-	TurnoutRails       []wireTurnoutRail    `json:"turnout_rails"`
-	TurnoutRailGaps    []wireTurnoutRailGap `json:"turnout_rail_gaps"`
-	Features           []wireFeature        `json:"features"`
-	PlacementAlgorithm string               `json:"placement_algorithm"`
+	Region             string             `json:"region"`
+	Revision           int                `json:"revision"`
+	Elements           []wireElement      `json:"elements"`
+	Structures         []wireStructure    `json:"structures"`
+	TrackTypes         []wireTrackType    `json:"track_types"`
+	ConstructionRuns   []wireRun          `json:"construction_runs"`
+	TurnoutGrids       []wireTurnoutGrid  `json:"turnout_grids"`
+	TurnoutDrives      []wireTurnoutDrive `json:"turnout_drives"`
+	TurnoutBlades      []wireTurnoutBlade `json:"turnout_blades"`
+	Rails              []wireRailPart     `json:"rails"`
+	RailGaps           []wireRailGap      `json:"rail_gaps"`
+	FrogCores          []wireFrogCore     `json:"frog_cores"`
+	Features           []wireFeature      `json:"features"`
+	PlacementAlgorithm string             `json:"placement_algorithm"`
 }
 
-// wireTurnoutRail — нитка крестовины: усовик или контррельс. Смысл каждого
-// числа объявлен один раз — у track.RenderTurnoutRail.
-type wireTurnoutRail struct {
+// wireRailPart — РЕЛЬС КАК ДЕТАЛЬ: перегонная нитка или деталь устройства.
+// Смысл каждого числа объявлен один раз — у track.RenderRailPart.
+type wireRailPart struct {
+	ID      string  `json:"id"`
 	Owner   string  `json:"owner"`
 	Element string  `json:"element"`
 	Kind    string  `json:"kind"`
+	Type    string  `json:"type"`
 	From    float64 `json:"from"`
 	To      float64 `json:"to"`
 	Face    float64 `json:"face"`
-	EndFace float64 `json:"end_face"`
-	Flare   float64 `json:"flare"`
-	Grow    float64 `json:"grow"`
+	// Грани НА КОНЦАХ — по одной на конец: усовик за горлом начинается на половине
+	// горла от нитки, а кончается на самой нитке (track/frograils.go).
+	EndFaceFrom float64 `json:"end_face_from"`
+	EndFaceTo   float64 `json:"end_face_to"`
+	// Отгибы у концов РАЗНЫЕ: половина усовика до горла выходит из нитки началом,
+	// половина за горлом раскрывает желоб началом и садится на нитку концом.
+	FlareFrom       float64              `json:"flare_from"`
+	FlareTo         float64              `json:"flare_to"`
+	Grow            float64              `json:"grow"`
+	Plan            []wirePlanStation    `json:"plan"`
+	ContinuousID    string               `json:"continuous_id"`
+	ContinuousOrder int                  `json:"continuous_order"`
+	Section         []wireSectionStation `json:"section"`
+}
+
+type wirePlanStation struct {
+	U     float64 `json:"u"`
+	Face  float64 `json:"face"`
+	Slope float64 `json:"slope"`
+}
+
+// wireFrogCore — тело сердечника крестовины: сечение отливки станциями. Смысл
+// полей объявлен один раз — у track.RenderFrogCore.
+type wireFrogCore struct {
+	Owner    string            `json:"owner"`
+	Length   float64           `json:"length"`
+	Stations []wireCoreStation `json:"stations"`
+}
+
+type wireCoreStation struct {
+	U       float64      `json:"u"`
+	Section [][2]float64 `json:"section"`
+}
+
+// wireRailGap — объявленный разрыв нитки: где металла нет и почему. Смысл полей
+// объявлен один раз — у track.RenderRailGap.
+type wireRailGap struct {
+	Owner   string  `json:"owner"`
+	Element string  `json:"element"`
+	Face    float64 `json:"face"`
+	From    float64 `json:"from"`
+	To      float64 `json:"to"`
+	Kind    string  `json:"kind"`
+	Why     string  `json:"why"`
 }
 
 // wireTurnoutBlade — остряк одного прохода: на какой нитке лежит, докуда
 // подвижен и на сколько отходит. Смысл каждого числа объявлен один раз — у
 // track.RenderTurnoutBlade, и здесь не повторяется.
 type wireTurnoutBlade struct {
-	Owner   string  `json:"owner"`
-	Passage string  `json:"passage"`
-	Branch  string  `json:"branch"`
-	Offset  float64 `json:"offset"`
-	Length  float64 `json:"length"`
-	Throw   float64 `json:"throw"`
-	Grow    float64 `json:"grow"`
+	Owner    string  `json:"owner"`
+	Passage  string  `json:"passage"`
+	Branch   string  `json:"branch"`
+	Offset   float64 `json:"offset"`
+	Length   float64 `json:"length"`
+	Throw    float64 `json:"throw"`
+	Grow     float64 `json:"grow"`
+	BodyGrow float64 `json:"body_grow"`
 	// Rail — ПРОФИЛЬ ОСТРЯКОВОГО РЕЛЬСА: у остряка он свой (ОР65), не равный
 	// рельсу пути. Смысл — у track.RenderTurnoutBlade.Rail.
 	Rail    wireRail             `json:"rail"`
@@ -88,18 +133,6 @@ type wireSectionStation struct {
 	HeadWidth float64 `json:"head_width"`
 	Sink      float64 `json:"sink"`
 	RideWidth float64 `json:"ride_width"`
-}
-
-// wireTurnoutRailGap — участок прохода, на котором его нитки нет: место занял
-// остряк с рамным рельсом либо сердечник крестовины. Смысл полей объявлен один
-// раз — у track.RenderTurnoutRailGap.
-type wireTurnoutRailGap struct {
-	Owner   string  `json:"owner"`
-	Element string  `json:"element"`
-	Kind    string  `json:"kind"`
-	Offset  float64 `json:"offset"`
-	From    float64 `json:"from"`
-	To      float64 `json:"to"`
 }
 
 // wireTurnoutDrive — переводной механизм устройства: где станина с указателем и

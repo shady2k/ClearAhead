@@ -261,11 +261,15 @@ func run() -> void:
 			no_prism.append(sp.element_id)
 	_ok("призма строится у всех покрытых участков", no_prism.is_empty(), str(no_prism))
 
+	# «Хватает ли участку на рельс телом» — вопрос к ПРИСЛАННЫМ РАЗМЕРАМ, и он
+	# остаётся: без колеи, высоты и головки деталь не построить ни серверу, ни
+	# показу. Строит её теперь сервер, поэтому спрашивается про данные, а не про
+	# способность показа.
 	var no_rail: Array[String] = []
 	for sp in spans:
 		if not sp.has_rail_body():
 			no_rail.append(sp.element_id)
-	_ok("рельс телом у всех покрытых участков", no_rail.is_empty(), str(no_rail))
+	_ok("размеров рельса хватает на каждом покрытом участке", no_rail.is_empty(), str(no_rail))
 
 	# УПОРЫ. Их не было в проводе до 2026-08-12, и спайк выводил их из топологии
 	# сам. Проверяем, что теперь они ПРИСЛАНЫ и разобраны, а не выведены.
@@ -293,26 +297,9 @@ func run() -> void:
 			prof_bad.append("%s: цепочка %.6f м против плана %.6f м" % [el.id, total, el.length_m])
 	_ok("длина цепочки профиля = длине по плану", prof_bad.is_empty(), str(prof_bad))
 
-	# НИТКИ. Ровно две на участок, ровно на ±gauge/2 — форма предписана
-	# render-contract §3, и это единственная её проверка без окна.
-	var pairs := 0
-	var bad_gauge := 0
-	var bad_count := 0
-	for sp in spans:
-		var th := sp.threads()
-		if th.size() != 2:
-			bad_count += 1
-			continue
-		pairs += 1
-		for k in th[0].size():
-			var a: Vector3 = th[0][k]
-			var b: Vector3 = th[1][k]
-			if absf(Vector2(a.x - b.x, a.y - b.y).length() - sp.gauge_m) > EPS_PLAN_M:
-				bad_gauge += 1
-	_ok("ниток ровно две на каждый покрытый участок", bad_count == 0 and pairs == spans.size(),
-		"%d пар на %d участков" % [pairs, spans.size()])
-	_ok("расстояние между нитками = gauge", bad_gauge == 0, "%d точек мимо" % bad_gauge)
-
+	# НИТКИ ЗДЕСЬ БОЛЬШЕ НЕ ПРОВЕРЯЮТСЯ (2026-08-17): показ их не строит. Рельсы
+	# приезжают деталями, и «две на участок ровно на ±gauge/2» стало вопросом к
+	# серверу, а не к разбору участка. Спрашивает его проверка 45.
 	# ПЛАТФОРМА. Ищется в `structures` — по имени, которое сервер шлёт сегодня.
 	var raw_structures: Array = network.get("structures", []) as Array
 	var raw_platforms := 0

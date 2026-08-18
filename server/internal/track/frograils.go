@@ -2,6 +2,7 @@ package track
 
 import (
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
@@ -12,8 +13,12 @@ import (
 // # Что здесь считается
 //
 // Четыре коротких нитки на устройство: два усовика и два контррельса. Каждая —
-// отрезок вдоль ОДНОГО прохода, с постоянным выносом рабочей грани и отгибами на
-// обоих концах.
+// отрезок вдоль ОДНОГО прохода, с выносом рабочей грани и отгибами на концах.
+//
+// ВЫНОС НЕ ПОСТОЯНЕН — так стояло здесь до 2026-08-17, и это была вся крестовина
+// разом: усовик лежал в 46 мм от своей нитки от начала до конца, и горло
+// получалось сложением двух желобов. Теперь у усовика три выноса — горловой,
+// рабочий и посадка на нитку, — и переходы между ними суть отгибы.
 //
 // Место берётся у самой крестовины (buildFrogFeatures): её адреса называют u
 // точки пересечения НА КАЖДОМ проходе, и вокруг этих двух u всё и строится.
@@ -87,19 +92,18 @@ func buildTurnoutFrogRails(m *mapfmt.Map, els map[string]Element, rg *RenderGeom
 			// без блока construction: чего измерить нечем, того не отдаём.
 			continue
 		}
-		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		dt, err := mapfmt.TurnoutProjectByID(t.TurnoutType)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
-		rails, gaps, err := frogRails(els, types, c, t, f, dt)
+		rails, err := frogRails(els, types, c, t, f, dt)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}
-		rg.TurnoutRails = append(rg.TurnoutRails, rails...)
-		rg.TurnoutRailGaps = append(rg.TurnoutRailGaps, gaps...)
+		rg.Rails = append(rg.Rails, rails...)
 	}
-	sort.Slice(rg.TurnoutRails, func(i, j int) bool {
-		a, b := rg.TurnoutRails[i], rg.TurnoutRails[j]
+	sort.Slice(rg.Rails, func(i, j int) bool {
+		a, b := rg.Rails[i], rg.Rails[j]
 		if a.Owner != b.Owner {
 			return a.Owner < b.Owner
 		}
@@ -118,17 +122,17 @@ func buildTurnoutFrogRails(m *mapfmt.Map, els map[string]Element, rg *RenderGeom
 // разрыва есть конец отливки, и второе вычисление той же величины разошлось бы с
 // первым у первой же карты.
 func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
-	c *mapfmt.Construction, t mapfmt.Turnout, f RenderFeature, dt mapfmt.TurnoutType) ([]RenderTurnoutRail, []RenderTurnoutRailGap, error) {
+	c *mapfmt.Construction, t mapfmt.Turnout, f RenderFeature, dt mapfmt.TurnoutType) ([]RenderRailPart, error) {
 	typ := t.Type
 	if typ == "" {
 		typ = c.DefaultType
 	}
 	tt, ok := types[typ]
 	if !ok {
-		return nil, nil, fmt.Errorf("тип %q не разрешается — крестовину отмерить нечем", typ)
+		return nil, fmt.Errorf("тип %q не разрешается — крестовину отмерить нечем", typ)
 	}
 	if false {
-		return nil, nil, fmt.Errorf("у типа %s нет блока frog", mapfmt.Labeled(tt.Name, typ))
+		return nil, fmt.Errorf("у типа %s нет блока frog", mapfmt.Labeled(tt.Name, typ))
 	}
 	fr := dt.FrogSet
 	half := tt.Gauge / 2
@@ -145,19 +149,79 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 		inner[t.ID+mapfmt.PassageStraight] = +half
 		inner[t.ID+mapfmt.PassageDiverging] = -half
 	default:
-		return nil, nil, fmt.Errorf("рукость %q, ожидается right или left", t.Hand)
+		return nil, fmt.Errorf("рукость %q, ожидается right или left", t.Hand)
 	}
 
-	out := make([]RenderTurnoutRail, 0, 6)
-	gaps := make([]RenderTurnoutRailGap, 0, 2)
+	// ГДЕ СОПРЯГАЮТСЯ ПОЛОВИНЫ УСОВИКА. Обе приходят в горловое сечение на ПОЛОВИНУ
+	// ГОРЛА от своей нитки, и встречаются ТАМ, ГДЕ ЭТИ ЛИНИИ ПЕРЕСЕКАЮТСЯ, а не в
+	// математической точке: у точки они разминулись бы ровно на то, на сколько
+	// нормали двух проходов разошлись на угол марки.
+	//
+	// Смещение выводится из угла и выноса в горловом сечении:
+	//
+	//	delta = вынос · (1/cos α − 1) / tg α
+	//
+	// У марки 1/9 и половины горла 31 мм это 1.7 мм, и знак у половин РАЗНЫЙ:
+	// приходящая кончается на столько же ДО точки, уходящая начинается ПОСЛЕ — обе
+	// в одном и том же месте мира, просто выраженном по своей оси. Считать это
+	// отдельным числом каталога нечего: оно целиком следует из марки и горла.
+	//
+	// ВЫНОС ЗДЕСЬ ГОРЛОВОЙ, А НЕ ЖЕЛОБ (правка 2026-08-17 вместе с Throat): смещение
+	// обязано считаться по тому выносу, на котором половины ДЕЙСТВИТЕЛЬНО сходятся,
+	// иначе они разъедутся ровно на разницу — 15 мм там, где стыкуются встык.
+	//
+	// Угол берётся у КАСАТЕЛЬНЫХ, которые крестовина уже посчитала: второго ответа
+	// на вопрос «под каким углом сходятся нитки» проект не заводит.
+	// ГОРЛО ИЩЕТСЯ ПО ВЕРШИНАМ, А МЕРИТСЯ ПО ДУГАМ, и потому здесь итерация.
+	//
+	// Дуга гиба срезает вершину ломаной на sag = R·(1/cos(θ/2) − 1) и уходит от
+	// соседа: значит между ДУГАМИ просвет на 2·sag больше, чем между вершинами.
+	// Поставь вершины на объявленные 62 мм — и горло станет 82. Цель поиска
+	// поэтому уменьшается на этот же отступ, а поскольку сам отступ зависит от
+	// угла, который зависит от места шва, ответ берётся повторением: поправка
+	// падает на порядок за шаг, и трёх шагов хватает с запасом.
+	//
+	// СОПРЯЖЕНИЕ СЧИТАЕТСЯ ДО ДЕТАЛЕЙ, и это не порядок ради порядка: половины
+	// одного усовика лежат на РАЗНЫХ проходах, а сопряжение связывает их курсы.
+	// Считая его внутри цикла по адресам, мы спрашивали бы у соседа то, что ему
+	// самому ещё не посчитали.
+	var joinShift float64
+	var bends map[string]wingBend
+	target := fr.Throat
+	for step := 0; step < 20; step++ {
+		var err error
+		joinShift, err = frogWingThroatShift(els, f, inner, fr.Flangeway, target)
+		if err != nil {
+			return nil, err
+		}
+		bends, err = frogWingBends(els, f, inner, fr, joinShift)
+		if err != nil {
+			return nil, err
+		}
+		got, err := frogThroatGap(bends, f)
+		if err != nil {
+			return nil, err
+		}
+		if math.Abs(got-fr.Throat) < 1e-9 {
+			break
+		}
+		// Обратная связь, а не формула: просвет между дугами меняется вместе с
+		// целью почти один к одному, и поправка «на сколько промахнулись» сходится
+		// за пару шагов. Предсказание через один только отступ дуги (2·sag)
+		// раскачивалось: отступ зависит от угла, угол — от места шва, и шаг
+		// перелетал цель.
+		target += 0.6 * (fr.Throat - got)
+	}
+
+	out := make([]RenderRailPart, 0, 8)
 	for _, a := range f.Addresses {
 		in, ok := inner[a.Element]
 		if !ok {
-			return nil, nil, fmt.Errorf("адрес крестовины на элементе %s, который не проход этой стрелки", a.Element)
+			return nil, fmt.Errorf("адрес крестовины на элементе %s, который не проход этой стрелки", a.Element)
 		}
 		el, ok := els[a.Element]
 		if !ok {
-			return nil, nil, fmt.Errorf("проход %s не скомпилирован", a.Element)
+			return nil, fmt.Errorf("проход %s не скомпилирован", a.Element)
 		}
 		length := el.Plan.Length().Meters()
 		// НАРУЖУ — прочь от оси прохода: знак внутренней нитки и есть эта сторона.
@@ -165,26 +229,192 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 		if in < 0 {
 			side = -1.0
 		}
-		// УСОВИК — ОТОГНУТАЯ НИТКА, А НЕ РЕЙКА РЯДОМ С НЕЙ (переделано 2026-08-16).
+		// УСОВИК ПЕРЕХОДИТ С НИТКИ НА НИТКУ, И ЭТО ЕГО ГЛАВНОЕ СВОЙСТВО (2026-08-17).
 		//
-		// Прежде усовик лежал отдельной короткой ниткой снаружи, а сама нитка
-		// прохода шла под ним насквозь: в кадре два рельса в ладони друг от друга.
-		// У настоящей крестовины усовика как отдельной детали нет вовсе — это САМА
-		// нитка, отведённая наружу перед сердечником и возвращающаяся за ним.
+		// # Что здесь было и почему это невозможно
 		//
-		// Выражается это тем же отгибом, что и был, только концы усовика теперь
-		// садятся РОВНО НА НИТКУ (EndFace = in), а нитка на его протяжении
-		// вырезается. Тогда металл идёт непрерывно: нитка — отгиб — рабочая часть с
-		// желобом — отгиб — нитка.
-		wing := RenderTurnoutRail{
-			Owner:   t.ID,
-			Element: a.Element,
-			Kind:    FrogRailWing,
-			Face:    in + side*fr.Flangeway,
-			EndFace: in,
-			Grow:    side,
+		// Усовик считался ниткой СВОЕГО прохода, отведённой наружу на ширину желоба
+		// и лежащей так до самого корня сердечника. Читалось это разумно ровно до
+		// замера: нитки двух проходов ПЕРЕСЕКАЮТСЯ в крестовине, значит и постоянные
+		// выносы от них пересекаются тоже. ЗАМЕР по ST_A — зазор между усовиками:
+		//
+		//	21.00 м   +202 мм
+		//	22.00 м    +92 мм   (горло: 46 + 46 вокруг точки пересечения)
+		//	22.83 м      0 мм   ← два рельса в одном месте
+		//	24.00 м   −129 мм   (дальше они идут перекрещенными)
+		//
+		// Два рельса сквозь друг друга — не приближение, а невозможная вещь, и в
+		// кадре это та самая каша, которую владелец назвал «крестовина неправильная».
+		//
+		// # Как устроено на самом деле
+		//
+		// Усовиков два, и каждый — ОДИН ИЗОГНУТЫЙ РЕЛЬС, идущий ПО КРАЮ всей
+		// крестовины. У горла он плавно переходит с нитки одного прохода на
+		// нитку другого: до горла верхним краем идёт нитка бокового прохода, за
+		// горлом — нитка прямого (и наоборот для нижнего). Ровно этот изгиб виден
+		// на схеме крестовины, которую владелец показал: усовик приходит под углом и
+		// уходит под другим.
+		//
+		// Отсюда две половины на усовик, каждая на своём элементе:
+		//
+		//	ДО ГОРЛА  вынос НАРУЖУ от своей нитки (in + side·flangeway): нитка ещё
+		//	  несёт колесо, и усовик отходит от неё, освобождая желоб;
+		//	ЗА ГОРЛОМ вынос К ОСИ от нитки другого прохода (in − side·flangeway):
+		//	  там колесо уже на сердечнике, а усовик держит гребень снаружи желоба.
+		//
+		// В горловом сечении половины дают ОДНУ И ТУ ЖЕ точку мира и ОДИН И ТОТ ЖЕ
+		// курс: усовик там ГНУТ, а не сломан (правка 2026-08-18, разбор — в
+		// frogWingBends). До неё изгиб стоял точкой, и замер назвал его величину —
+		// 5.175°; владелец показал снимок настоящей крестовины, где тот же угол
+		// размазан по дуге. Дальше грань обязана идти прямо и параллельно
+		// соответствующей грани сердечника — это осталось.
+		//
+		// Прежняя попытка сгладить угол ОДНОЙ биссектрисой на всю половину породила
+		// S-кривую — короткий обратный отвод с 31 на 46 мм, видимый на кадре. Гиб
+		// потому и ограничен длиной дуги: за её пределами закон грани прежний.
+		//
+		// # ГОРЛО — СВОЁ ЧИСЛО, А НЕ СУММА ДВУХ ЖЕЛОБОВ (2026-08-17, вечер)
+		//
+		// Половины стояли на выносе Flangeway, и просвет в переломе получался
+		// сложением: 46 + 46 = 92 мм. ГОСТ 28370-89 даёт для Р65 1/9 горло 62 мм —
+		// на треть у́же, и разница видна глазом: владелец показал кадр и спросил, что
+		// это за загогулины и как по ним проедет поезд.
+		//
+		// Сложение неверно потому, что желоба вдоль сердечника и горло — разные
+		// сечения чертежа. Горло теперь находится по расстоянию между прямыми
+		// рабочими гранями, а не подменяется двумя локальными выносами Throat/2.
+		coreRoot := a.U + FrogPointOffset + fr.CoreLength
+		if coreRoot > length {
+			coreRoot = length
 		}
-		setSpan(&wing, a.U, fr.WingLength, fr.Flare, length)
+		// ПОЛОВИНА ДО ГОРЛА — на этом проходе, наружу от его нитки.
+		//
+		// ОТВОД ИДЁТ ВО ВСЮ ЕЁ ДЛИНУ, а не последние 0.7 м, и это ЗАМЕР, а не вкус.
+		// ГОСТ называет два контрольных сечения переднего отвода: в 50 мм просвет
+		// между усовиками 62 мм, в 400 мм — 65…85 мм. Эти размеры относятся к двум
+		// мировым граням, а не к выносу одной детали от оси её прохода. Именно
+		// смешение этих величин создало прежний клюв.
+		//
+		// ОТСЧИТЫВАЮТСЯ ОНИ ОТ ГОРЛА, А НЕ ОТ МАТЕМАТИЧЕСКОЙ ТОЧКИ (правка
+		// 2026-08-18). Здесь стояло «впереди математической точки», и это было
+		// геометрически невозможно: у острия сердечника просвет между усовиками
+		// равен 46 + ширина острия + 46 ≈ 103 мм, и сойтись до 62 мм за 150 мм
+		// усовики могли бы только уклоном 1:1. Горло стоит в 250…350 мм впереди
+		// точки — у нас замер даёт 0.358 м, — и контрольные сечения отмеряются
+		// назад ОТ НЕГО.
+		//
+		// ЗАМЕР ПО ST_A с новой базой: в 50 мм впереди горла 62.6 мм (норма 62),
+		// в 400 мм — 88.1 мм при норме 65…85. Первое сечение сходится, второе нет:
+		// передний отвод у нас слишком короток, потому что WingApproach и WingFlare
+		// отмеряются от математической точки, а не от горла (разбор — у полей).
+		// ИМЕНА У ПОЛОВИН РАЗНЫЕ, и это не украшение: щелчок по детали в отладочном
+		// слое называет её именем, а две безымянные половины на одном проходе
+		// назывались бы одинаково — показать пальцем стало бы не на что.
+		branch := "diverging"
+		if a.Element == t.ID+mapfmt.PassageStraight {
+			branch = "straight"
+		}
+		// После горла рабочая грань усовика идёт ПРЯМО, параллельно
+		// соответствующей боковой грани сердечника, с полным желобом. Поэтому
+		// точка шва берётся не на половине горла от этой нитки: то прежнее
+		// построение заставляло грань за 98 мм сначала уйти с 31 на 46 мм и
+		// немедленно повернуть обратно. На экране получался хорошо заметный S-клюв.
+		//
+		// Здесь заранее найдена станция, где расстояние между ДВУМЯ прямыми
+		// рабочими гранями равно горлу. Этот усовик до горла лежит на текущем
+		// проходе, а после — на соседнем, поэтому конец его первой половины есть
+		// начало прямой половины СОСЕДНЕГО прохода.
+		other, ok := otherFrogAddress(f, a.Element)
+		if !ok {
+			return nil, fmt.Errorf("у крестовины нет второго прохода для усовика на %s", a.Element)
+		}
+		otherBranch := "diverging"
+		if other.Element == t.ID+mapfmt.PassageStraight {
+			otherBranch = "straight"
+		}
+		bend, ok := bends[a.Element]
+		if !ok {
+			return nil, fmt.Errorf("сопряжение усовика на %s не посчитано", a.Element)
+		}
+		joinU, joinFace := bend.joinU, bend.joinFace
+		before := RenderRailPart{
+			ID:              fmt.Sprintf("%s|wing|%s|to_throat", t.ID, branch),
+			Owner:           t.ID,
+			Element:         a.Element,
+			Kind:            FrogRailWing,
+			Face:            joinFace,
+			EndFaceFrom:     in,
+			EndFaceTo:       joinFace,
+			Grow:            side,
+			ContinuousID:    fmt.Sprintf("%s|wing|%s_to_%s", t.ID, branch, otherBranch),
+			ContinuousOrder: 1,
+		}
+		setSpanTo(&before, bend.beforeFrom, joinU, length)
+		before.FlareFrom = fr.WingApproach + fr.WingFlare
+		// Передний отвод начинается КАСАТЕЛЬНО к соединительному рельсу и приходит
+		// в горло КАСАТЕЛЬНО к своей же второй половине. Ненулевая секущая в начале
+		// давала настоящий угол полного профиля — белый клин перед крестовиной.
+		// Нули на обоих концах давали S-подобную сигмоиду.
+		//
+		// Станций столько, сколько названо нормой: ГОСТ задаёт передний отвод
+		// контрольными сечениями, и закон грани построен по ним (frogWingBends).
+		// Своего закона отвода у модели больше нет — прежний давал в контрольном
+		// сечении 88…91 мм при норме 65…85.
+		before.Plan = bend.beforePlan
+		// ПОЛОВИНА ЗА ГОРЛОМ — на ЭТОМ ЖЕ проходе, но это уже другой усовик: тот,
+		// что до горла шёл по нитке СОСЕДНЕГО прохода. Вынос к оси, потому что
+		// сердечник теперь между ним и осью.
+		// СТОРОНА РОСТА У НЕЁ ОБРАТНАЯ, и это не описка. Тело усовика лежит ПРОЧЬ ОТ
+		// ЖЕЛОБА, а желоб за горлом сменил сторону: сердечник теперь между усовиком и
+		// осью прохода. Оставь сторону прежней — и на самом стыке половин тела
+		// разойдутся, что сборка и сказала числом: общего сечения 39 %.
+		//
+		// # ТРИ ВЫНОСА НА ОДНОЙ ДЕТАЛИ, И ПОТОМУ КОНЦОВ ДВА
+		//
+		// У этой половины разные оба конца, чего одно поле EndFace выразить не могло:
+		//
+		//	НАЧАЛО   шов в горле: рабочий желоб плюс отступ дуги гиба, смычка с
+		//	  первой половиной — курс там общий, потому что рельс один;
+		//	СЕРЕДИНА тот же Flangeway — прямой рабочий желоб вдоль отливки;
+		//	КОНЕЦ    сама нитка — в корне сердечника усовик садится на неё и там
+		//	  кончается: дальше колею ведут отливка и её хвостовые рельсы.
+		//
+		// ХВОСТОВОЙ ОТВОД ОСТАВЛЕН КОРОТКИМ (Flare, 0.25 м), и это НЕ забытое место.
+		// ГОСТовы 700 мм относятся к переднему отводу — тому, которым усовик выходит
+		// из нитки перед горлом. Растяни хвостовой до тех же 700 мм — и желоб пропал
+		// бы на последних 0.7 м из 1.8 м сердечника, то есть ровно там, где норма
+		// ПТЭ требует 46 мм. Чем именно кончается усовик за корнем, модель пока не
+		// знает: пробная редакция уводила его за корень на длину отвода, и сборка
+		// сказала числом — 50 % общего сечения на шве с ниткой, потому что тела у них
+		// растут в разные стороны. Вопрос открыт и стоит отдельного чертежа.
+		after := RenderRailPart{
+			ID:              fmt.Sprintf("%s|wing|%s|from_throat", t.ID, branch),
+			Owner:           t.ID,
+			Element:         a.Element,
+			Kind:            FrogRailWing,
+			Face:            in - side*fr.Flangeway,
+			EndFaceFrom:     in - side*fr.Flangeway,
+			EndFaceTo:       in,
+			Grow:            -side,
+			ContinuousID:    fmt.Sprintf("%s|wing|%s_to_%s", t.ID, otherBranch, branch),
+			ContinuousOrder: 2,
+		}
+		// ГИБ ОБЪЯВЛЕН ОТГИБОМ НАЧАЛА, и это не пересказ плана другими числами.
+		// Сборка проверяет смычку по кусочно-линейному закону граней (Face,
+		// EndFace, Flare), а не по станциям плана: закон обязан называть ту же
+		// точку шва, иначе половины «разойдутся» на отступ дуги — 9 мм по замеру
+		// 2026-08-18, ровно sag.
+		after.EndFaceFrom = bend.afterFace
+		setSpanTo(&after, bend.afterU, coreRoot, length)
+		after.FlareFrom = bend.afterBend
+		after.FlareTo = fr.Flare
+		afterLength := after.To - after.From
+		tailStart := afterLength - fr.Flare
+		if tailStart < 0 {
+			tailStart = 0
+		}
+		after.Plan = smoothTailPlan(afterLength, bend.afterBend, tailStart,
+			after.EndFaceFrom, after.Face, after.EndFaceTo, bend.afterSlope)
 		// КОНТРРЕЛЬС: у ПРОТИВОПОЛОЖНОЙ нитки того же прохода, ВНУТРИ колеи.
 		//
 		// Желоб у него — между ним и рабочей ниткой, поэтому рабочая грань
@@ -195,15 +425,20 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 		// настоящем переводе прикручен к своей нитке сбоку, а не является ею.
 		opp := -in
 		oside := -side // сторона противоположной нитки
-		check := RenderTurnoutRail{
-			Owner:   t.ID,
-			Element: a.Element,
-			Kind:    FrogRailCheck,
-			Face:    opp - oside*fr.CheckFlangeway,
-			EndFace: opp - oside*fr.FlareGap,
-			Grow:    -oside,
+		check := RenderRailPart{
+			ID:          fmt.Sprintf("%s|check|%s", t.ID, branch),
+			Owner:       t.ID,
+			Element:     a.Element,
+			Kind:        FrogRailCheck,
+			Face:        opp - oside*fr.CheckFlangeway,
+			EndFaceFrom: opp - oside*fr.FlareGap,
+			EndFaceTo:   opp - oside*fr.FlareGap,
+			Grow:        -oside,
+			Section:     frogRailSection(FrogRailCheck, tt.Rail.HeadWidth),
 		}
-		setSpan(&check, a.U, fr.CheckLength, fr.Flare, length)
+		setSpan(&check, a.U, fr.CheckLength, length)
+		check.FlareFrom = fr.Flare
+		check.FlareTo = fr.Flare
 		// СЕРДЕЧНИК НАЧИНАЕТСЯ ЗА МАТЕМАТИЧЕСКОЙ ТОЧКОЙ, А НЕ ВОКРУГ НЕЁ.
 		//
 		// Это вторая половина той же ошибки. Отливка клалась симметрично точке
@@ -216,23 +451,27 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 		// то есть у марки 1/9 примерно 0.111·s. Ширину даёт само расхождение граней,
 		// считать её незачем — она получается из геометрии проходов. Отдельно
 		// объявлено только НАЧАЛО (FrogPointOffset) и длина хвоста.
-		casting := RenderTurnoutRail{
-			Owner:   t.ID,
-			Element: a.Element,
-			Kind:    FrogRailCasting,
-			Face:    in,
-			EndFace: in,
-			Grow:    side,
+		casting := RenderRailPart{
+			ID:          fmt.Sprintf("%s|casting|%s", t.ID, branch),
+			Owner:       t.ID,
+			Element:     a.Element,
+			Kind:        FrogRailCasting,
+			Face:        in,
+			EndFaceFrom: in,
+			EndFaceTo:   in,
+			Grow:        side,
+			Section:     frogRailSection(FrogRailCasting, tt.Rail.HeadWidth),
 		}
 		// Не setSpan: тот кладёт отрезок СИММЕТРИЧНО вокруг точки, а сердечник
 		// лежит только за ней.
 		casting.From = a.U + FrogPointOffset
-		casting.To = a.U + FrogPointOffset + 2*fr.CastingLength
-		if casting.To > length {
-			casting.To = length
+		casting.To = coreRoot
+		casting.FlareFrom = 0
+		casting.FlareTo = 0
+		for _, r := range []*RenderRailPart{&before, &after, &check, &casting} {
+			clampFlares(r)
 		}
-		casting.Flare = 0
-		out = append(out, wing, check, casting)
+		out = append(out, before, after, check, casting)
 		// НИТКИ ПОД ОТЛИВКОЙ НЕТ, и это главная правка крестовины 2026-08-16.
 		//
 		// Сердечник заводился как перемычка МЕЖДУ гранями, но сами нитки под ним
@@ -245,18 +484,559 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 		// отведённая), потом сердечник. Границы берутся у них же, чтобы второго
 		// ответа на вопрос «докуда» не завелось.
 		//
-		from := wing.From
-		to := casting.To
-		gaps = append(gaps, RenderTurnoutRailGap{
-			Owner:   t.ID,
-			Element: a.Element,
-			Kind:    GapCasting,
-			Offset:  in,
-			From:    from,
-			To:      to,
+	}
+	return out, nil
+}
+
+// frogThroatGap — ГОРЛО ПО ФАКТУ: расстояние между швами двух усовиков.
+//
+// Меряется по швам, а не по вершинам ломаных: после гиба самое узкое сечение
+// лежит там, где рельсы действительно проходят, — в серединах дуг. Вершины же
+// суть точки пересечения продолженных прямых, и металла в них нет.
+func frogThroatGap(bends map[string]wingBend, f RenderFeature) (float64, error) {
+	if len(f.Addresses) != 2 {
+		return 0, fmt.Errorf("у крестовины %d адресов, а горло образуют два усовика", len(f.Addresses))
+	}
+	a, ok := bends[f.Addresses[0].Element]
+	if !ok {
+		return 0, fmt.Errorf("сопряжение усовика на %s не посчитано", f.Addresses[0].Element)
+	}
+	b, ok := bends[f.Addresses[1].Element]
+	if !ok {
+		return 0, fmt.Errorf("сопряжение усовика на %s не посчитано", f.Addresses[1].Element)
+	}
+	return math.Hypot(a.joinX-b.joinX, a.joinY-b.joinY), nil
+}
+
+// wingBend — СОПРЯЖЕНИЕ ОДНОГО ШВА, названное в терминах обоих проходов.
+//
+// Половина до горла и половина за горлом лежат на разных осях, а касательная в
+// шве у них ОДНА: это один рельс. Поэтому одно и то же мировое направление
+// записано здесь дважды — своим наклоном на каждой оси.
+type wingBend struct {
+	joinU, joinFace float64             // шов половины ДО горла, на её проходе
+	beforeFrom      float64             // где эта половина начинается: подход отмерен ОТ ГОРЛА
+	joinSlope       float64             // наклон в шве — общая касательная, эта ось
+	beforePlan      []RenderPlanStation // закон грани подхода, от начала половины
+	afterU          float64             // шов половины ЗА горлом на этом же проходе
+	afterFace       float64             // её вынос в шве: рабочая грань плюс отступ дуги
+	afterBend       float64             // длина гиба у неё же
+	afterSlope      float64             // та же общая касательная, но её ось
+	joinX, joinY    float64             // шов в мире: по нему и меряется горло
+}
+
+// frogWingBends раскладывает перелом усовика в горле по дуге гиба.
+//
+// # Что здесь чинится
+//
+// Усовик — ГНУТЫЙ рельс. До 2026-08-18 половины сходились в шве точно (зазор
+// 0.000000 м по замеру ST_A), но приходили под разными курсами, и весь угол
+// случался в одном сечении: 5.175°. На кадре это клюв, которого нет ни на одной
+// настоящей крестовине — там тот же угол размазан по дуге.
+//
+// # Почему горло от этого не уезжает
+//
+// Точка шва НЕ ДВИГАЕТСЯ: горло по-прежнему стоит там, где рабочие грани
+// расходятся на Throat, и найдено оно тем же поиском (frogWingThroatShift).
+// Сглаженная грань проходит через ту же точку с той же биссектрисой курсов, а по
+// обе стороны от неё грани расходятся — значит самое узкое сечение остаётся
+// прежним. Сдвигать шов ради «настоящей» дуги, которая срезает вершину, значило
+// бы менять объявленное число ГОСТа ради формы: горло стало бы 82 мм при
+// радиусе 10 м.
+//
+// # Откуда берётся наклон подводящего отвода
+//
+// Он больше не «секущая от нитки до шва»: половина обязана прийти в шов с
+// касательной биссектрисы, а та смотрит уже НАЗАД к оси (у марки 1/9 наклон в
+// шве выходит отрицательным). Отвод поэтому набирает вынос раньше, и его наклон
+// k выводится из двух условий, а не назначается:
+//
+//	подводящий участок    faceA − in = k·A/2   (кубика от нитки: наклон растёт 0→k
+//	                                            без выброса выше k)
+//	участок гиба          join − faceA = (k + s)·L/4  (средний наклон дуги)
+//
+// откуда k = (Δ − s·L/4) / (A/2 + L/4). Величины связаны кругом — курс зависит
+// от k, а k от курса, — и потому считаются итерацией; она сходится за единицы
+// шагов, потому что поправка каждый раз на порядок меньше предыдущей.
+func frogWingBends(els map[string]Element, f RenderFeature, inner map[string]float64,
+	fr mapfmt.TrackFrog, joinShift float64) (map[string]wingBend, error) {
+	if len(f.Addresses) != 2 {
+		return nil, fmt.Errorf("у крестовины %d адресов, а усовиков два", len(f.Addresses))
+	}
+	type half struct {
+		addr         RenderAddress
+		el           Element
+		length       float64
+		in, side     float64
+		apexX, apexY float64 // вершина ломаной в мире
+		afterU       float64 // вершина, названная по этой оси
+		afterFace    float64 // рабочая грань вдоль сердечника
+		afterTail    float64 // докуда за горлом грань обязана быть прямой
+	}
+	halves := make([]half, 0, 2)
+	for _, a := range f.Addresses {
+		el, ok := els[a.Element]
+		if !ok {
+			return nil, fmt.Errorf("проход %s не скомпилирован", a.Element)
+		}
+		in, ok := inner[a.Element]
+		if !ok {
+			return nil, fmt.Errorf("адрес крестовины на элементе %s, который не проход этой стрелки", a.Element)
+		}
+		side := 1.0
+		if in < 0 {
+			side = -1.0
+		}
+		length := el.Plan.Length().Meters()
+		coreRoot := a.U + FrogPointOffset + fr.CoreLength
+		if coreRoot > length {
+			coreRoot = length
+		}
+		afterU := a.U + joinShift
+		halves = append(halves, half{
+			addr: a, el: el, length: length, in: in, side: side,
+			afterU:    afterU,
+			afterFace: in - side*fr.Flangeway,
+			// Хвостовой отгиб гиб не трогает: желоб вдоль сердечника — норма ПТЭ,
+			// и съесть её сопряжением значило бы починить вид ценой размера.
+			afterTail: coreRoot - afterU - fr.Flare,
 		})
 	}
-	return out, gaps, nil
+	// ВЕРШИНА ЛОМАНОЙ — мировая точка грани СОСЕДА: там подводящая грань этого
+	// усовика встречается с его же гранью за горлом. Дуга гиба через эту точку НЕ
+	// проходит — она её срезает, и на сколько именно, считается ниже.
+	for i := range halves {
+		j := 1 - i
+		x, y := threadPointAt(halves[j].el, halves[j].afterFace, halves[j].afterU)
+		halves[i].apexX, halves[i].apexY = x, y
+	}
+	out := make(map[string]wingBend, 2)
+	for i := range halves {
+		j := 1 - i
+		h, o := halves[i], halves[j]
+		// НАРУЖУ ГОРЛА — прочь от вершины второго усовика. Дуга уходит от вершины
+		// в сторону выпуклости, то есть от соседа: пройди она через вершину, желоб
+		// у острия сердечника сузился бы против нормы ПТЭ (замер 2026-08-18 дал
+		// 41.6 мм вместо 46).
+		nx, ny := h.apexX-o.apexX, h.apexY-o.apexY
+		nn := math.Hypot(nx, ny)
+		if nn == 0 {
+			return nil, fmt.Errorf("вершины усовиков совпали — горла нет вовсе")
+		}
+		nx, ny = nx/nn, ny/nn
+		// Первое приближение шва — сама вершина: отступ дуги ещё не посчитан,
+		// а посчитать его не из чего, пока неизвестен угол.
+		joinU, joinFace, err := projectWingJoin(h.el, h.addr.U+joinShift, h.apexX, h.apexY)
+		if err != nil {
+			return nil, fmt.Errorf("шов усовика %s→%s: %w", h.addr.Element, o.addr.Element, err)
+		}
+		afterU, afterFace := o.afterU, o.afterFace
+		// ПОДХОД ОТМЕРЕН ОТ ГОРЛА, А НЕ ОТ МАТЕМАТИЧЕСКОЙ ТОЧКИ (2026-08-18).
+		//
+		// Обе длины переднего отвода — свойства ГОРЛА: от него же ГОСТ отмеряет и
+		// свои контрольные сечения (50 и 400 мм). Пока подход считался от точки,
+		// он выходил 0.74 м вместо 1.1 м, и просвет в контрольном сечении был
+		// 88.1 мм при норме 65…85: усовик не успевал отойти от нитки, а нитки за
+		// эти 400 мм сходятся на 44 мм — угол марки съедал весь запас.
+		from := joinU - fr.WingApproach - fr.WingFlare
+		if from < 0 {
+			from = 0
+		}
+		beforeLen := joinU - from
+		if beforeLen <= 0 {
+			return nil, fmt.Errorf("усовик на %s не имеет подхода к горлу", h.addr.Element)
+		}
+		// КУРС ПОДВОДЯЩЕЙ ГРАНИ — СЕКУЩАЯ ОТ НИТКИ К ШВУ, и это приближение, а не
+		// форма: саму форму задают контрольные сечения ГОСТ, но строятся они ниже,
+		// когда швы ОБОИХ усовиков уже известны. Разница между секущей и настоящей
+		// касательной в шве уходит в угол гиба, то есть в доли миллиметра его
+		// длины.
+		k := (joinFace - h.in) / beforeLen
+		var bendHalf, joinSlope, otherSlope, sag, joinX, joinY float64
+		// Радиус участвует и в отступе дуги, и в проекции шва на обе оси.
+		// Повторяем с тем же запасом, с которым выше сходится размер горла:
+		// смена проекта не должна оставлять микрометровое расхождение половин.
+		for step := 0; step < 20; step++ {
+			d1x, d1y := wingFaceDirection(h.el, joinU, joinFace, k)
+			d2x, d2y := wingFaceDirection(o.el, afterU, afterFace, 0)
+			turn := math.Abs(math.Atan2(d1x*d2y-d1y*d2x, d1x*d2x+d1y*d2y))
+			bendHalf = fr.WingBendRadius * turn / 2
+			// Отступ дуги от вершины: у сопряжения радиусом R с поворотом на turn
+			// он равен R·(1/cos(turn/2) − 1). При марке 1/9 и десяти метрах это
+			// сантиметр — величина того же порядка, что и сам желоб, и потому
+			// молча пренебречь ею нельзя.
+			sag = fr.WingBendRadius * (1/math.Cos(turn/2) - 1)
+			bx, by := d1x+d2x, d1y+d2y
+			n := math.Hypot(bx, by)
+			if n == 0 {
+				return nil, fmt.Errorf("усовик на %s: половины сходятся навстречу друг другу", h.addr.Element)
+			}
+			bx, by = bx/n, by/n
+			// Шов — точка ДУГИ, а не вершины: обе половины начинаются в ней и
+			// названы каждая по своей оси.
+			joinX, joinY = h.apexX+nx*sag, h.apexY+ny*sag
+			px, py := joinX, joinY
+			joinU, joinFace, err = projectWingJoin(h.el, joinU, px, py)
+			if err != nil {
+				return nil, fmt.Errorf("шов усовика %s→%s: %w", h.addr.Element, o.addr.Element, err)
+			}
+			afterU, afterFace, err = projectWingJoin(o.el, afterU, px, py)
+			if err != nil {
+				return nil, fmt.Errorf("шов усовика %s→%s на дальней оси: %w", h.addr.Element, o.addr.Element, err)
+			}
+			joinSlope, err = wingFaceSlope(h.el, joinU, joinFace, bx, by)
+			if err != nil {
+				return nil, fmt.Errorf("усовик на %s: %w", h.addr.Element, err)
+			}
+			otherSlope, err = wingFaceSlope(o.el, afterU, afterFace, bx, by)
+			if err != nil {
+				return nil, fmt.Errorf("усовик на %s: %w", o.addr.Element, err)
+			}
+			from = joinU - fr.WingApproach - fr.WingFlare
+			if from < 0 {
+				from = 0
+			}
+			beforeLen = joinU - from
+			if bendHalf >= beforeLen {
+				return nil, fmt.Errorf("гиб радиусом %.3f м требует %.3f м до горла, а подход усовика на %s длиной %.3f м",
+					fr.WingBendRadius, bendHalf, h.addr.Element, beforeLen)
+			}
+			if bendHalf > o.afterTail {
+				return nil, fmt.Errorf("гиб радиусом %.3f м требует %.3f м за горлом, а прямой желоб вдоль сердечника на %s длиной %.3f м",
+					fr.WingBendRadius, bendHalf, o.addr.Element, o.afterTail)
+			}
+			k = (joinFace - h.in) / beforeLen
+		}
+		b := out[h.addr.Element]
+		b.joinU, b.joinFace = joinU, joinFace
+		b.beforeFrom = from
+		b.joinSlope = joinSlope
+		b.joinX, b.joinY = joinX, joinY
+		out[h.addr.Element] = b
+		// Половина ЗА горлом лежит на проходе СОСЕДА: это второй усовик, и шов у
+		// него тот же самый — потому и записывается здесь, а не считается вторично
+		// на своей итерации.
+		ob := out[o.addr.Element]
+		ob.afterU, ob.afterFace = afterU, afterFace
+		ob.afterBend, ob.afterSlope = bendHalf, otherSlope
+		out[o.addr.Element] = ob
+	}
+	// ЗАКОН ПОДХОДА — ВТОРЫМ ПРОХОДОМ, и это не порядок ради порядка: просвет в
+	// контрольном сечении есть размер между гранями ДВУХ усовиков, а швы обоих
+	// становятся известны только после первого прохода.
+	for i := range halves {
+		j := 1 - i
+		h, o := halves[i], halves[j]
+		hb, ob := out[h.addr.Element], out[o.addr.Element]
+		plan, err := wingApproachPlan(h.el, o.el, h.in, h.side, o.in, o.side,
+			hb.joinU, hb.joinFace, hb.beforeFrom, ob.joinU, hb.joinSlope,
+			fr.WingApproach, fr.WingControl)
+		if err != nil {
+			return nil, fmt.Errorf("подход усовика на %s: %w", h.addr.Element, err)
+		}
+		hb.beforePlan = plan
+		out[h.addr.Element] = hb
+	}
+	return out, nil
+}
+
+// wingApproachPlan строит закон рабочей грани подхода по контрольным сечениям.
+//
+// # Что здесь задано, а что выведено
+//
+// ЗАДАНО нормой: на каком расстоянии впереди горла какой просвет между гранями
+// двух усовиков (mapfmt.TrackFrog.WingControl). ВЫВЕДЕНО: вынос каждой грани от
+// оси своего прохода — его приходится ИСКАТЬ, потому что просвет есть мировое
+// расстояние между точками на двух разных, сходящихся под углом марки осях, и
+// обратной формулы у него нет.
+//
+// Отступ у обеих граней берётся ОДИН. Строго говоря, проходы не равноправны —
+// один прямой, другой кривой, — но норма даёт один размер на сечение, и делить
+// его между усовиками пришлось бы выдуманной пропорцией. Симметрия честнее: она
+// хотя бы названа.
+//
+// Между названными сечениями грань идёт ПРЯМО. Изломы остаются в самих сечениях,
+// где рельс и гнут, а не размазываются кубикой по всему переднему отводу. Только
+// последние 50 мм доводятся до общей касательной половин в шве: там находится
+// собственно горловой гиб, а не длинная декоративная дуга перед крестовиной.
+func wingApproachPlan(hEl, oEl Element, hIn, hSide, oIn, oSide,
+	joinU, joinFace, from, otherJoinU, joinSlope, flare float64,
+	control []mapfmt.WingControlSection) ([]RenderPlanStation, error) {
+	length := joinU - from
+	if length <= 0 {
+		return nil, fmt.Errorf("подход длиной %.3f м", length)
+	}
+	// Просвет между гранями двух усовиков при общем отступе d от их ниток.
+	gap := func(at, d float64) float64 {
+		hx, hy := threadPointAt(hEl, hIn+hSide*d, joinU-at)
+		ox, oy := threadPointAt(oEl, oIn+oSide*d, otherJoinU-at)
+		return math.Hypot(hx-ox, hy-oy)
+	}
+	// Отступ, дающий названный просвет. Половинным делением, а не формулой: у
+	// расстояния между точками на двух кривых осях её нет.
+	offsetFor := func(at, want float64) (float64, error) {
+		lo, hi := 0.0, 0.2
+		if gap(at, lo) > want {
+			return 0, fmt.Errorf("в %.3f м впереди горла нитки уже разошлись на %.4f м при норме %.4f м",
+				at, gap(at, lo), want)
+		}
+		if gap(at, hi) < want {
+			return 0, fmt.Errorf("в %.3f м впереди горла просвет %.4f м не набирается и при выносе %.2f м",
+				at, want, hi)
+		}
+		for k := 0; k < 60; k++ {
+			mid := (lo + hi) / 2
+			if gap(at, mid) < want {
+				lo = mid
+			} else {
+				hi = mid
+			}
+		}
+		return (lo + hi) / 2, nil
+	}
+	// ГДЕ ОТВОД НАЧИНАЕТСЯ. Не с начала детали: впереди этой зоны усовик ЛЕЖИТ НА
+	// СВОЕЙ НИТКЕ и продолжает соединительный рельс без всякого выноса — там
+	// просвет между усовиками равен расхождению ниток, то есть считается маркой.
+	// Уводить грань от нитки раньше значило бы строить отвод там, где норма его не
+	// просит: замер по ST_A показал 88.1 мм при вилке 65…85 мм ровно из-за этого.
+	type node struct {
+		u, face float64
+	}
+	nodes := []node{{0, hIn}}
+	if flare > 0 && flare < length {
+		nodes = append(nodes, node{length - flare, hIn})
+	}
+	// От дальнего сечения к ближнему: станции идут по возрастанию u.
+	for i := len(control) - 1; i >= 0; i-- {
+		c := control[i]
+		u := length - c.At
+		if u <= 0 || u <= nodes[len(nodes)-1].u {
+			// Сечение не помещается в подход. Не отказ: длина подхода — свойство
+			// комплекта, а сечение — норма проверки, и короткий подход честнее
+			// оставить без промежуточной станции, чем выдумать ей место.
+			continue
+		}
+		d, err := offsetFor(c.At, c.Gap)
+		if err != nil {
+			return nil, err
+		}
+		nodes = append(nodes, node{u, hIn + hSide*d})
+	}
+	nodes = append(nodes, node{length, joinFace})
+	// Каждому прямому отрезку даём собственные наклоны на обоих концах.
+	// Повтор станции в месте гиба намеренный: слева клиент дочитывает предыдущий
+	// отрезок, справа начинает следующий, поэтому поворот не расползается по ним.
+	plan := make([]RenderPlanStation, 0, 2*(len(nodes)-1))
+	for i := 0; i+1 < len(nodes); i++ {
+		a, b := nodes[i], nodes[i+1]
+		span := b.u - a.u
+		if span <= 0 {
+			return nil, fmt.Errorf("сечения подхода не возрастают: %.3f после %.3f м", b.u, a.u)
+		}
+		slope := (b.face - a.face) / span
+		endSlope := slope
+		if i == len(nodes)-2 {
+			endSlope = joinSlope
+		}
+		plan = append(plan,
+			RenderPlanStation{U: a.u, Face: a.face, Slope: slope},
+			RenderPlanStation{U: b.u, Face: b.face, Slope: endSlope},
+		)
+	}
+	return plan, nil
+}
+
+// wingFaceDirection — мировой курс рабочей грани в сечении u при наклоне slope
+// по оси элемента. Численно, а не формулой: у грани на кривом проходе курс
+// зависит ещё и от кривизны оси, и второй вывод той же величины разошёлся бы с
+// тем, как её откладывает threadPointAt.
+func wingFaceDirection(el Element, u, face, slope float64) (float64, float64) {
+	const h = 0.01
+	x0, y0 := threadPointAt(el, face-slope*h, u-h)
+	x1, y1 := threadPointAt(el, face+slope*h, u+h)
+	n := math.Hypot(x1-x0, y1-y0)
+	if n == 0 {
+		return 0, 0
+	}
+	return (x1 - x0) / n, (y1 - y0) / n
+}
+
+// wingFaceSlope — обратный вопрос: какой наклон по оси даёт названный мировой
+// курс. Через ту же проекцию, что и шов, чтобы «наклон» значил ровно то же
+// самое в обе стороны.
+func wingFaceSlope(el Element, u, face, dx, dy float64) (float64, error) {
+	const h = 0.01
+	x, y := threadPointAt(el, face, u)
+	u2, face2, err := projectWingJoin(el, u+h, x+dx*h, y+dy*h)
+	if err != nil {
+		return 0, err
+	}
+	if math.Abs(u2-u) < 1e-9 {
+		return 0, fmt.Errorf("курс (%.4f, %.4f) поперёк прохода — наклона грани у него нет", dx, dy)
+	}
+	return (face2 - face) / (u2 - u), nil
+}
+
+// smoothTailPlan отдаёт готовые станции хвостового отвода. Клиент не выбирает
+// ни закон изгиба, ни его подробность: он только строит присланную кривую.
+//
+// Одних трёх станций Эрмита математически хватает, но клиентская тесселяция оси
+// о форме рабочей грани не знает. На 250 мм она оставляла два звена и показывала
+// гладкий закон двумя углами примерно по 0.1 рад. Поэтому сервер материализует
+// закон через сантиметр вместе с точной производной; интерполяция между такими
+// станциями воспроизводит ту же кубику, не меняя длину отвода и конечный вынос.
+func smoothTailPlan(length, bend, start, joinFace, fromFace, toFace, joinSlope float64) []RenderPlanStation {
+	const step = 0.01
+	if length <= 0 {
+		return nil
+	}
+	if start < 0 {
+		start = 0
+	}
+	if start > length {
+		start = length
+	}
+	span := length - start
+	// НАЧАЛО — НЕ ПРЯМАЯ, А ВТОРАЯ ПОЛОВИНА ГИБА (2026-08-18): половина за горлом
+	// выходит из шва по той же дуге, что и половина до него, и лишь потом ложится
+	// на прямой желоб. Вынос на обоих концах гиба один и тот же — сама рабочая
+	// грань, — а курс меняется от биссектрисы к прямой; поэтому грань внутри гиба
+	// отходит от прямого желоба на ~2 мм в сторону сердечника. Это и есть срез
+	// угла гнутым рельсом, и он объявлен: держать желоб 46 мм байт в байт на дуге
+	// нельзя, дуга на то и дуга.
+	plan := []RenderPlanStation{{U: 0, Face: joinFace, Slope: joinSlope}}
+	if bend > 0 && bend < start {
+		plan = append(plan, RenderPlanStation{U: bend, Face: fromFace, Slope: 0})
+	}
+	if start > 0 {
+		plan = append(plan, RenderPlanStation{U: start, Face: fromFace, Slope: 0})
+	}
+	if span <= 0 {
+		return plan
+	}
+	count := int(math.Ceil(span / step))
+	if count < 1 {
+		count = 1
+	}
+	delta := toFace - fromFace
+	for i := 1; i <= count; i++ {
+		t := float64(i) / float64(count)
+		face := fromFace + delta*(3*t*t-2*t*t*t)
+		slope := delta * (6*t - 6*t*t) / span
+		plan = append(plan, RenderPlanStation{
+			U:     start + span*t,
+			Face:  face,
+			Slope: slope,
+		})
+	}
+	return plan
+}
+
+// frogWingThroatShift находит горловое сечение на прямых рабочих гранях
+// усовиков. В математической точке между ними два желоба; впереди они сходятся
+// до размера Throat. Ищется именно расстояние в мире, поэтому кривизна прохода
+// и разные адреса одной точки не превращаются во вторую формулу угла марки.
+func frogWingThroatShift(els map[string]Element, f RenderFeature, inner map[string]float64,
+	flangeway, throat float64) (float64, error) {
+	if len(f.Addresses) != 2 {
+		return 0, fmt.Errorf("у крестовины %d адресов, а горло образуют два усовика", len(f.Addresses))
+	}
+	point := func(a RenderAddress, shift float64) (float64, float64, error) {
+		in, ok := inner[a.Element]
+		if !ok {
+			return 0, 0, fmt.Errorf("проход %s не имеет внутренней нитки", a.Element)
+		}
+		side := 1.0
+		if in < 0 {
+			side = -1
+		}
+		x, y := threadPointAt(els[a.Element], in-side*flangeway, a.U+shift)
+		if math.IsNaN(x) || math.IsNaN(y) {
+			return 0, 0, fmt.Errorf("не удалось отложить рабочую грань на проходе %s", a.Element)
+		}
+		return x, y, nil
+	}
+	gap := func(shift float64) (float64, error) {
+		x0, y0, err := point(f.Addresses[0], shift)
+		if err != nil {
+			return 0, err
+		}
+		x1, y1, err := point(f.Addresses[1], shift)
+		if err != nil {
+			return 0, err
+		}
+		return math.Hypot(x0-x1, y0-y1), nil
+	}
+	hi := 0.0
+	hiGap, err := gap(hi)
+	if err != nil {
+		return 0, err
+	}
+	if hiGap < throat {
+		return 0, fmt.Errorf("в математической точке просвет %.3f м уже меньше горла %.3f м", hiGap, throat)
+	}
+	lo := hi
+	loGap := hiGap
+	for i := 1; i <= 400; i++ {
+		lo = -float64(i) * 0.005
+		loGap, err = gap(lo)
+		if err != nil {
+			return 0, err
+		}
+		if loGap <= throat {
+			break
+		}
+	}
+	if loGap > throat {
+		return 0, fmt.Errorf("рабочие грани усовиков не образуют горло %.3f м на двух метрах перед крестовиной", throat)
+	}
+	for i := 0; i < 60; i++ {
+		mid := (lo + hi) / 2
+		midGap, err := gap(mid)
+		if err != nil {
+			return 0, err
+		}
+		if midGap <= throat {
+			lo = mid
+		} else {
+			hi = mid
+		}
+	}
+	return (lo + hi) / 2, nil
+}
+
+func otherFrogAddress(f RenderFeature, element string) (RenderAddress, bool) {
+	for _, a := range f.Addresses {
+		if a.Element != element {
+			return a, true
+		}
+	}
+	return RenderAddress{}, false
+}
+
+// projectWingJoin переводит мировую точку шва в (u, face) другого прохода.
+// Итерация снимает продольную составляющую до тех пор, пока точка не окажется
+// на нормали оси; после этого поперечная составляющая и есть face.
+func projectWingJoin(el Element, guess, x, y float64) (float64, float64, error) {
+	u := guess
+	for i := 0; i < 12; i++ {
+		ax, ay := threadPointAt(el, 0, u)
+		t := tangentAt(el, u)
+		along := (x-ax)*t.X + (y-ay)*t.Y
+		u += along
+		if math.Abs(along) < 1e-10 {
+			break
+		}
+	}
+	ax, ay := threadPointAt(el, 0, u)
+	t := tangentAt(el, u)
+	nx, ny := -t.Y, t.X
+	face := (x-ax)*nx + (y-ay)*ny
+	rx, ry := threadPointAt(el, face, u)
+	if math.Hypot(rx-x, ry-y) > 1e-6 {
+		return 0, 0, fmt.Errorf("точка не легла на нормаль прохода: остаток %.6f м", math.Hypot(rx-x, ry-y))
+	}
+	return u, face, nil
 }
 
 // setSpan кладёт нитку симметрично вокруг точки крестовины и прижимает её к
@@ -267,10 +1047,19 @@ func frogRails(els map[string]Element, types map[string]mapfmt.TrackType,
 // не помещается целиком, и обрезка честнее отказа — тот же довод, что у остряка
 // (blade.go). Отгиб при этом не растягивается: он свойство конца нитки, а не
 // доля её длины.
-func setSpan(r *RenderTurnoutRail, at, length, flare, elementLength float64) {
+func setSpan(r *RenderRailPart, at, length, elementLength float64) {
 	half := length / 2
-	from := at - half
-	to := at + half
+	setSpanTo(r, at-half, at+half, elementLength)
+}
+
+// setSpanTo кладёт нитку между двумя названными u и прижимает её к элементу.
+//
+// Отдельно от setSpan, потому что вопрос другой: у контррельса есть СВОЯ ДЛИНА и
+// середина, а у усовика её нет — есть начало у горла и конец у корня сердечника
+// (разбор — у mapfmt.TrackFrog.WingApproach). Считать его длину, чтобы тут же
+// поделить пополам, значило бы вернуть ту самую свободу, из-за которой усовик и
+// разъехался с сердечником.
+func setSpanTo(r *RenderRailPart, from, to, elementLength float64) {
 	if from < 0 {
 		from = 0
 	}
@@ -279,10 +1068,22 @@ func setSpan(r *RenderTurnoutRail, at, length, flare, elementLength float64) {
 	}
 	r.From = from
 	r.To = to
-	r.Flare = flare
-	// Отгиб не длиннее половины того, что осталось: иначе два отгиба
-	// перекрылись бы и нитка вывернулась бы серединой наружу.
-	if half := (to - from) / 2; r.Flare > half {
-		r.Flare = half
+}
+
+// clampFlares прижимает отгибы к длине нитки: вдвоём они не длиннее её самой,
+// иначе рабочей части не остаётся и грань выворачивается серединой наружу.
+//
+// ПОСЛЕ раскладки, а не внутри неё: у усовика отгиб только с одного конца, и
+// класть его вместе с отрезком значило бы снова считать концы одинаковыми.
+func clampFlares(r *RenderRailPart) {
+	length := r.To - r.From
+	if length <= 0 {
+		r.FlareFrom, r.FlareTo = 0, 0
+		return
+	}
+	if sum := r.FlareFrom + r.FlareTo; sum > length {
+		k := length / sum
+		r.FlareFrom *= k
+		r.FlareTo *= k
 	}
 }

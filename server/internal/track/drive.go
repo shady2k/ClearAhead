@@ -113,7 +113,7 @@ func buildTurnoutDrives(m *mapfmt.Map, els map[string]Element, rg *RenderGeometr
 		types[c.Types[i].ID] = c.Types[i]
 	}
 	for _, t := range m.Topology.Turnouts {
-		dt, err := m.TurnoutTypeByID(t.TurnoutType)
+		dt, err := mapfmt.TurnoutProjectByID(t.TurnoutType)
 		if err != nil {
 			return fmt.Errorf("track: стрелка %s: %w", mapfmt.Labeled(t.Name, t.ID), err)
 		}

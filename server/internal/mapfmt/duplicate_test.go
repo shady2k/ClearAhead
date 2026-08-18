@@ -51,17 +51,17 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 	straight := func(l float64) Alignments {
 		return Alignments{Horizontal: []HPrim{{Kind: "straight", Length: l}}}
 	}
-	// Боковой проход обязан РАСХОДИТЬСЯ с прямым: два коллинеарных прохода из
-	// одного острия — наложение осей, и карту отвергли бы за него.
-	// Угол — ТОЧНЫЙ arctan(1/9): марка типа и поворот прохода обязаны сойтись
-	// (checkTurnoutTurnAgreement), и округление здесь стало бы отказом.
-	diverging := Alignments{Horizontal: []HPrim{{Kind: "arc", Radius: 200, Angle: 0.1106572212}}}
+	// catalogProjectID — проект из каталога СЕРВЕРА: ссылка нужна ради самой
+	// ссылки, а не ради содержимого — разбор повтора идентификаторов о геометрии
+	// перевода ничего не говорит, но карта без разрешимой ссылки не проходит
+	// вход, и контрольная карта обязана проходить.
+	const catalogProjectID = "r65-1-9-2434"
 
 	// Порты второй стрелки названы иначе даже при одинаковом ID: одинаковые
 	// имена дали бы повтор квалифицированного порта, и карта умерла бы раньше.
 	turnouts := []Turnout{
-		{ID: id1, Name: "SW1", Kind: KindRail, Hand: "right", TurnoutType: dupTurnoutTypeID, Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
-		{ID: id2, Name: "SW2", Kind: KindRail, Hand: "left", TurnoutType: dupTurnoutTypeID, Drive: DriveElectric, Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
+		{ID: id1, Name: "SW1", Kind: KindRail, Hand: "right", TurnoutType: catalogProjectID, Drive: DriveManual, Ports: TurnoutPorts{Common: "C", Straight: "S", Diverging: "D"}},
+		{ID: id2, Name: "SW2", Kind: KindRail, Hand: "left", TurnoutType: catalogProjectID, Drive: DriveElectric, Ports: TurnoutPorts{Common: "C2", Straight: "S2", Diverging: "D2"}},
 	}
 
 	// Идентификаторы шести рёбер — по одному на порт узла PA..PF, метки EA..EF.
@@ -69,10 +69,6 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 	ports := []Port{}
 	edges := []Edge{}
 	edgeGeometry := map[string]Alignments{}
-	turnoutGeometry := map[string]TurnoutGeometry{}
-	for _, t := range turnouts {
-		turnoutGeometry[t.ID] = TurnoutGeometry{Straight: straight(30), Diverging: diverging}
-	}
 	i := 0
 	for _, t := range turnouts {
 		for _, end := range t.PortIDs() {
@@ -94,28 +90,7 @@ func mapWithTwoTurnouts(id1, id2 string) *Map {
 			Turnouts: turnouts,
 			Edges:    edges,
 		},
-		Geometry: Geometry{Turnouts: turnoutGeometry, Edges: edgeGeometry},
-		// Каталог типов устройств — ради ссылки стрелок, а не ради содержимого:
-		// разбор повтора идентификаторов о геометрии перевода ничего не говорит,
-		// но карта без ссылки на проект не проходит вход, и контрольная карта
-		// обязана проходить.
-		Construction: &Construction{TurnoutTypes: []TurnoutType{dupTurnoutType()}},
-	}
-}
-
-const dupTurnoutTypeID = "01a3185c-5099-7242-8242-000099424242"
-
-func dupTurnoutType() TurnoutType {
-	return TurnoutType{
-		ID:        dupTurnoutTypeID,
-		Name:      "проект для разбора повторов",
-		Frog:      "1/9",
-		Switch:    TurnoutSwitch{BladeLengthStraight: 6.5, BladeLengthDiverging: 6.515, Throw: 0.152},
-		BladeRail: TrackRail{Height: 0.140, HeadWidth: 0.07733},
-		FrogSet: TrackFrog{
-			Flangeway: 0.046, CheckFlangeway: 0.044, WingLength: 2.00,
-			CastingLength: 0.90, CheckLength: 4.50, Flare: 0.25, FlareGap: 0.086,
-		},
+		Geometry: Geometry{Edges: edgeGeometry},
 	}
 }
 
@@ -151,8 +126,10 @@ func TestDuplicateTurnoutIsRejected(t *testing.T) {
 func TestDuplicateTurnoutCollapsesPassages(t *testing.T) {
 	m := mapWithTwoTurnouts(uIDSW1, uIDSW1)
 
-	if len(m.Geometry.Turnouts) != 1 {
-		t.Fatalf("геометрия стрелок: записей %d, у двух одноимённых стрелок она одна", len(m.Geometry.Turnouts))
+	// Геометрия проходов строится из каталога по стрелке, и у двух одноимённых
+	// стрелок она СХЛОПЫВАЕТСЯ в одну пару — ключ выравниваний тот же.
+	if n := len(m.AllAlignments()) - len(m.Geometry.Edges); n != 2 {
+		t.Fatalf("проходов в выравниваниях %d, у двух одноимённых стрелок их два", n)
 	}
 	ends := m.PassageEnds()
 	if len(ends) != 2 {

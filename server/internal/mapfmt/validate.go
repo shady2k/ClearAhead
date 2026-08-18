@@ -75,6 +75,19 @@ func Validate(m *Map) error {
 		return fmt.Errorf("mapfmt: map_revision должен быть положительным, получено %d", m.MapRevision)
 	}
 
+	// ССЫЛКА НА ПРОЕКТ ПЕРЕВОДА — ПЕРВЫМ ДЕЛОМ, и с 2026-08-17 это не вкус.
+	//
+	// Раньше её проверял модуль отрисовки, вместе с рецептом решётки: каталог
+	// лежал в карте рядом с типами пути и был такой же частью рецепта. Теперь от
+	// неё зависит САМО СУЩЕСТВОВАНИЕ проходов — их форма приходит из каталога, —
+	// и неразрешимая ссылка означает стрелку без единого прохода.
+	//
+	// Проверь мы её позже, автор получал бы отказ «в порту стрелки проходов 0,
+	// ожидалось 2»: правду о следствии вместо правды о причине.
+	if err := validateTurnoutTypes(m); err != nil {
+		return err
+	}
+
 	ports, err := m.collectPorts()
 	if err != nil {
 		return err
@@ -172,11 +185,6 @@ func (m *Map) checkUniqueIDs() error {
 		}
 		for _, r := range m.Construction.Runs {
 			if err := register("run решётки", r.Name, r.ID); err != nil {
-				return err
-			}
-		}
-		for _, tt := range m.Construction.TurnoutTypes {
-			if err := register("тип устройства", tt.Name, tt.ID); err != nil {
 				return err
 			}
 		}
@@ -293,14 +301,31 @@ func validateAlignments(id string, a Alignments) error {
 
 // AllAlignments возвращает выравнивания всех линейных элементов — рёбер и
 // проходов стрелок — под их ID.
+//
+// Проходы СТРОЯТСЯ, а не читаются: их форма есть свойство марки и лежит в
+// каталоге проектов, а карта даёт только ссылку на проект и рукость. Разбор,
+// почему так, — в шапке turnout_catalog.go.
+//
+// Стрелка с неразрешимой ссылкой ПРОПУСКАЕТСЯ молча, и это не то умолчание,
+// которое проект запрещает: ссылку проверяет validateTurnoutTypes, и до сюда
+// такая карта не доходит. Отдавать отсюда ошибку значило бы завести второе
+// место, отвечающее на тот же вопрос, у метода, который её вернуть не может.
 func (m *Map) AllAlignments() map[string]Alignments {
-	out := make(map[string]Alignments, len(m.Geometry.Edges)+2*len(m.Geometry.Turnouts))
+	out := make(map[string]Alignments, len(m.Geometry.Edges)+2*len(m.Topology.Turnouts))
 	for id, a := range m.Geometry.Edges {
 		out[id] = a
 	}
-	for id, tg := range m.Geometry.Turnouts {
-		out[id+PassageStraight] = tg.Straight
-		out[id+PassageDiverging] = tg.Diverging
+	for _, t := range m.Topology.Turnouts {
+		project, err := TurnoutProjectByID(t.TurnoutType)
+		if err != nil {
+			continue
+		}
+		straight, diverging, err := project.Alignments(t.Hand)
+		if err != nil {
+			continue
+		}
+		out[t.ID+PassageStraight] = straight
+		out[t.ID+PassageDiverging] = diverging
 	}
 	return out
 }
@@ -421,9 +446,9 @@ func (m *Map) collectElements() (map[string]bool, error) {
 			return nil, fmt.Errorf("mapfmt: стрелка %q объявлена дважды", Labeled(t.Name, t.ID))
 		}
 		devs[t.ID] = true
-		if _, ok := m.Geometry.Turnouts[t.ID]; !ok {
-			return nil, fmt.Errorf("mapfmt: у стрелки %s нет геометрии", Labeled(t.Name, t.ID))
-		}
+		// «У стрелки нет геометрии» здесь больше не спрашивается: геометрия
+		// приходит из каталога по ссылке, и вопрос свёлся к тому, разрешается ли
+		// ссылка. На него отвечает validateTurnoutTypes.
 		// Проход не может столкнуться с ребром: разделитель в авторском
 		// идентификаторе запрещён, поэтому ребро с именем SW:straight до сюда
 		// не доходит. Проверка оставлена как страховка на случай, если правило
