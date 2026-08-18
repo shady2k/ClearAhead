@@ -890,14 +890,31 @@ class FrogRail:
 	## приставленным вплотную к первому (слово владельца на кадре 2026-08-16).
 	var widths: PackedFloat64Array = PackedFloat64Array()
 	var sinks: PackedFloat64Array = PackedFloat64Array()
-	## ШИРИНА НАКАТА в каждой точке, метры. Пусто — полоса во всю объявленную
-	## долю головки; ноль в точке — наката там нет вовсе.
+	## ШИРИНА НАКАТА в каждой точке, метры. Пусто — полоса присланной ширины
+	## (`ride_full`) по всей детали; ноль в точке — наката там нет вовсе.
 	##
 	## Переменной она стала потому, что нагрузка передаётся ПОСТЕПЕННО: колесо
 	## переходит на остряк и на сердечник не скачком, и блестящая полоса растёт с
 	## нуля (модель CA-1/9-R65-v1: остряк 1.50…3.00 м, сердечник 0.40…0.80 м от
 	## острия).
 	var rides: PackedFloat64Array = PackedFloat64Array()
+	## ОБЪЯВЛЕННАЯ ШИРИНА ПОЛОСЫ, метры: `ride_width` в корне ответа.
+	##
+	## Своей доли головки у показа больше нет. До 2026-08-18 здесь стояла
+	## RAILHEAD_WIDTH = 0.72 головки, и всякая нитка без станций — то есть весь
+	## перегон — получала 54 мм, тогда как сервер у остряка и сердечника объявлял
+	## 35. Полтора раза разницы сходились в одном кадре на стыке остряка с ниткой.
+	##
+	## Ноль — карта старого сервера: нитка рисуется БЕЗ наката. Подставить сюда
+	## прежнюю долю значило бы вернуть то самое второе число, только тише.
+	var ride_full: float = 0.0
+	## ШИРИНА ФАСКИ с каждой стороны наката, метры: `fillet_width` в корне ответа.
+	##
+	## Приехала оттуда же и в тот же день по слову владельца: «у клиента вообще
+	## такой информации быть не должно, только на сервере». До того стояла здесь
+	## долей головки (0.075) — то есть размером, выраженным отношением к чужому
+	## числу. Ноль — накат без окаймления, как у карты старого сервера.
+	var fillet_full: float = 0.0
 
 	## width_at / sink_at — острожка в точке. Полное сечение, если её не задавали.
 	func width_at(k: int) -> float:
@@ -910,10 +927,10 @@ class FrogRail:
 	func sink_at(k: int) -> float:
 		return 0.0 if k >= sinks.size() else sinks[k]
 
-	## ride_at — ширина наката в точке. Отрицательное значит «не задавали», и тогда
-	## показ берёт свою объявленную долю головки.
+	## ride_at — ширина наката в точке, метры. Станций не прислали — полоса ровно
+	## та, что объявлена в корне ответа: своего числа у показа нет.
 	func ride_at(k: int) -> float:
-		return -1.0 if k >= rides.size() else rides[k]
+		return ride_full if k >= rides.size() else rides[k]
 
 	func ready() -> bool:
 		return axis.size() >= 2 and faces.size() == axis.size() and rail_height_m > 0.0
@@ -1009,6 +1026,11 @@ static func rails(network: Dictionary, by_id: Dictionary,
 	var out: Array[FrogRail] = []
 	var skipped: Array[String] = []
 	var types := types_by_id(network)
+	# ПОЛОСА НАКАТА ОБЪЯВЛЕНА В КОРНЕ ОТВЕТА, одна на весь мир: это след колеса, а
+	# не размер рельса. Читается здесь один раз и раздаётся деталям — второго
+	# места, где показ решал бы, где идёт колесо, не остаётся (разбор — ride.go).
+	var ride_declared := float(network.get("ride_width", 0.0))
+	var fillet_declared := float(network.get("fillet_width", 0.0))
 	var wire := -1
 	for r_raw in (network.get("rails", []) as Array):
 		var r: Dictionary = r_raw as Dictionary
@@ -1054,6 +1076,8 @@ static func rails(network: Dictionary, by_id: Dictionary,
 		rail.continuous_order = int(r.get("continuous_order", 0))
 		rail.part_keys = [rail.key]
 		rail.kind = String(r.get("kind", ""))
+		rail.ride_full = ride_declared
+		rail.fillet_full = fillet_declared
 		rail.axis = axis
 		rail.grow = signf(float(r.get("grow", 1.0)))
 		var face := float(r.get("face", 0.0))
@@ -1148,6 +1172,10 @@ static func _stitch_rail_pair(first: FrogRail, second: FrogRail) -> FrogRail:
 	rail.rail_section = first.rail_section
 	rail.rail_height_m = first.rail_height_m
 	rail.rail_head_width_m = first.rail_head_width_m
+	# Полоса наката принадлежит МИРУ, а не части: сшитый рельс наследует её так
+	# же, как профиль. Без этой строки сшивка молча оставляла бы усовик без наката.
+	rail.ride_full = first.ride_full
+	rail.fillet_full = first.fillet_full
 
 	# Все точки новой оси лежат прямо на рабочей грани, поэтому faces=0. Так
 	# адресация двух чужих элементов заканчивается здесь и не протекает в меш.
@@ -1584,6 +1612,8 @@ static func blades(network: Dictionary, by_id: Dictionary,
 		blade.element_id = eid
 		blade.key = "blade:%d" % wire
 		blade.kind = BLADE
+		blade.ride_full = float(network.get("ride_width", 0.0))
+		blade.fillet_full = float(network.get("fillet_width", 0.0))
 		blade.branch = String(b.get("branch", ""))
 		blade.axis = axis
 		blade.offset_m = float(b.get("offset", 0.0))

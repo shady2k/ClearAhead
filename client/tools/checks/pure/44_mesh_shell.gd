@@ -481,18 +481,24 @@ func _check_frog_model(network: Dictionary, by_id: Dictionary) -> void:
 		_ok("остряк: за 6 м головка полная", narrow_after == 0.0,
 			"наибольшее отклонение: %.4f м" % narrow_after)
 		# НАКАТ НАЧИНАЕТСЯ НЕ С ОСТРИЯ: до 1.5 м колесо идёт по рамному рельсу.
+		#
+		# ШИРИНА СВЕРЯЕТСЯ С ОБЪЯВЛЕННОЙ, А НЕ С ЧИСЛОМ В ПРОВЕРКЕ. Своё число
+		# здесь стояло до 2026-08-18 (0.035) и было третьим ответом на тот же
+		# вопрос: два уже расходились в проводе и в показе.
+		var declared := float(network.get("ride_width", 0.0))
 		var ride_from := INF
 		var ride_full := INF
 		for k in blade.axis.size():
 			var p: TrackGeom.AxisPoint = blade.axis[k]
 			if blade.ride_at(k) > 1e-4:
 				ride_from = minf(ride_from, p.u)
-			if blade.ride_at(k) >= 0.035 - 1e-4:
+			if declared > 0.0 and blade.ride_at(k) >= declared - 1e-4:
 				ride_full = minf(ride_full, p.u)
 		_ok("остряк: накат начинается за полтора метра от острия",
 			ride_from >= 1.5 - 0.02 and ride_from < 3.0, "с %.2f м" % ride_from)
-		_ok("остряк: полная полоса наката 35 мм с трёх метров",
-			ride_full <= 3.0 + 0.5, "с %.2f м" % ride_full)
+		_ok("остряк: полная полоса наката с трёх метров равна объявленной",
+			declared > 0.0 and ride_full <= 3.0 + 0.5,
+			"с %.2f м при объявленных %.4f м" % [ride_full, declared])
 		# ОТВОД: 152 мм в острие, ноль у корня, линейно между ними.
 		blade.set_open(1.0)
 		var at_toe := absf(blade.faces[0] - blade.offset_m)
@@ -505,8 +511,11 @@ func _check_frog_model(network: Dictionary, by_id: Dictionary) -> void:
 	var casting: TrackBuild.FrogRail = null
 	var check: TrackBuild.FrogRail = null
 	var wing: TrackBuild.FrogRail = null
+	var running: TrackBuild.FrogRail = null
 	for r_raw in rails:
 		var r: TrackBuild.FrogRail = r_raw
+		if r.kind == "running" and running == null:
+			running = r
 		match r.kind:
 			TrackBuild.FROG_CASTING: casting = r if casting == null else casting
 			TrackBuild.FROG_CHECK: check = r if check == null else check
@@ -537,3 +546,36 @@ func _check_frog_model(network: Dictionary, by_id: Dictionary) -> void:
 	if wing != null:
 		_ok("усовик: ни подъёма, ни понижения", absf(wing.sink_at(0)) < 1e-9,
 			"понижение %.4f" % wing.sink_at(0))
+	# ПОЛОСА НАКАТА ОДНА НА ВСЕХ, и проверяется это ТАМ, ГДЕ ДЕТАЛИ СТЫКУЮТСЯ.
+	#
+	# Дефект, ради которого проверка заведена (ClearAhead-ax7m.10): у перегонной
+	# нитки полосу выбирал показ своей долей головки — 54 мм, — а сервер у остряка
+	# и сердечника объявлял 35. Оба числа были «правильными» каждое у себя, и
+	# поймать их могло только сравнение между деталями.
+	#
+	# Сердечник берётся В ХВОСТЕ, а не у острия: у острия наката нет по существу,
+	# полоса растёт с нуля за первые 0.8 м.
+	var declared_ride := float(network.get("ride_width", 0.0))
+	_ok("накат: сервер объявил ширину полосы", declared_ride > 0.0,
+		"%.4f м" % declared_ride)
+	# ФАСКА ОБЪЯВЛЕНА ТАМ ЖЕ И МЕТРАМИ. Проверяется отдельно от наката, потому что
+	# уехала она отдельным решением и вернуться долей головки может тоже отдельно.
+	var declared_fillet := float(network.get("fillet_width", 0.0))
+	_ok("фаска: сервер объявил ширину метрами", declared_fillet > 0.0,
+		"%.4f м" % declared_fillet)
+	# ПОЛОСЫ ОБЯЗАНЫ ПОМЕСТИТЬСЯ НА ГОЛОВКЕ. Накат с двумя фасками шире головки
+	# означал бы, что окаймление съело её край: полосы упёрлись бы в выкружку, и
+	# ржавчины между ними не осталось бы вовсе.
+	if running != null and running.rail_head_width_m > 0.0:
+		var taken := declared_ride + 2.0 * declared_fillet
+		_ok("накат с фасками помещается на головке", taken < running.rail_head_width_m,
+			"%.3f м из %.3f м" % [taken, running.rail_head_width_m])
+	if running != null:
+		_ok("накат: у перегонной нитки полоса объявленная",
+			absf(running.ride_at(0) - declared_ride) < 1e-9,
+			"%.4f м против объявленных %.4f м" % [running.ride_at(0), declared_ride])
+	if casting != null and casting.axis.size() > 0:
+		var tail := casting.ride_at(casting.axis.size() - 1)
+		_ok("накат: у сердечника в хвосте полоса та же, что у пути",
+			absf(tail - declared_ride) < 1e-9,
+			"%.4f м против объявленных %.4f м" % [tail, declared_ride])

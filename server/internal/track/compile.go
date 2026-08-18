@@ -324,9 +324,35 @@ type RenderGeometry struct {
 	//
 	// Отдельным списком, а не полем нитки, потому что отливка НЕ НИТКА: у неё две
 	// рабочие грани и одно тело между ними, и вдоль одной оси она не описывается.
-	FrogCores          []RenderFrogCore `json:"frog_cores"`
-	Features           []RenderFeature  `json:"features"`
-	PlacementAlgorithm string           `json:"placement_algorithm"`
+	FrogCores []RenderFrogCore `json:"frog_cores"`
+	Features  []RenderFeature  `json:"features"`
+	// RideWidth — ширина полосы наката поверху головки, метры. Одна на весь мир.
+	//
+	// В КОРНЕ ответа, а не у детали и не у типа пути, потому что это след КОЛЕСА:
+	// поперечный разбег колёсной пары плюс пятно контакта. Рельс другого типа его
+	// не сдвинет, и поле у типа означало бы, что на подъездном пути накат иной по
+	// природе, а не по износу.
+	//
+	// Деталь, у которой полоса меняется ПО ДЛИНЕ — остряк, сердечник, — везёт свои
+	// станции (RenderSectionStation.RideWidth), и они это число замещают: там
+	// колесо принимает деталь постепенно, и это факт о детали.
+	//
+	// Приехало 2026-08-18. До него у нитки без станций ширину выбирал КЛИЕНТ своей
+	// долей головки, и на стыке остряка с ниткой сходились 35 и 54 мм — разбор в
+	// ride.go. Ноль означает карту старого сервера: клиент такую нитку рисует без
+	// наката вовсе, а не подставляет прежнюю долю обратно.
+	RideWidth float64 `json:"ride_width"`
+	// FilletWidth — ширина фаски с КАЖДОЙ стороны наката, метры: полоса между
+	// зеркалом и нетронутой поверхностью.
+	//
+	// Рядом с накатом и по той же причине: она говорит, где след колеса
+	// кончается. В клиенте до 2026-08-18 стояла долей головки (0.075) — то есть
+	// размером, выраженным отношением к чужому числу; разбор — в ride.go.
+	//
+	// Ноль — карта старого сервера: показ рисует накат без окаймления, а не
+	// возвращает прежнюю долю.
+	FilletWidth        float64 `json:"fillet_width"`
+	PlacementAlgorithm string  `json:"placement_algorithm"`
 }
 
 // RenderTurnoutDrive — переводной механизм одной стрелки.
@@ -927,6 +953,8 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 		Rails:              []RenderRailPart{},
 		FrogCores:          []RenderFrogCore{},
 		Features:           []RenderFeature{},
+		RideWidth:          RailRideWidth,
+		FilletWidth:        RailFilletWidth,
 		PlacementAlgorithm: PlacementAlgorithm,
 	}
 

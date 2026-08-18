@@ -4072,5 +4072,7 @@
       ]
     }
   ],
+  "ride_width": 0.035,
+  "fillet_width": 0.006,
   "placement_algorithm": "placement-v1"
 }

@@ -47,11 +47,11 @@ const (
 	// Накат на сердечнике: до CastingRideFrom его нет вовсе, к CastingRideFull
 	// полоса выходит на полную ширину.
 	//
-	// Ширина МЕТРАМИ и головкой не масштабируется — тот же довод, что у наката
-	// остряка: это след колеса, свойство подвижного состава, а не рельса.
-	CastingRideFrom  = 0.40
-	CastingRideFull  = 0.80
-	CastingRideWidth = 0.035
+	// ЗДЕСЬ ТОЛЬКО ГРАНИЦЫ ПО ДЛИНЕ. Сама ширина — общая (RailRideWidth): это
+	// след колеса, а колесо на отливке то же самое. Своё число стояло здесь до
+	// 2026-08-18; разбор, почему их стало одно, — в ride.go.
+	CastingRideFrom = 0.40
+	CastingRideFull = 0.80
 	// CheckLift — насколько верх контррельса ВЫШЕ поверхности катания.
 	CheckLift = 0.020
 )
@@ -70,7 +70,7 @@ func frogRailSection(kind string, head float64) []RenderSectionStation {
 			{U: 0, HeadWidth: head, Sink: CastingSink, RideWidth: 0},
 			{U: CastingRideFrom, HeadWidth: head,
 				Sink: CastingSink * (1 - CastingRideFrom/CastingSinkRun), RideWidth: 0},
-			{U: CastingRideFull, HeadWidth: head, Sink: 0, RideWidth: CastingRideWidth},
+			{U: CastingRideFull, HeadWidth: head, Sink: 0, RideWidth: RailRideWidth},
 		}
 	case FrogRailCheck:
 		// Подъём постоянен по всей длине: контррельс не несёт колесо нигде.

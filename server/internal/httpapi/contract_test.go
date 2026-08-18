@@ -48,6 +48,8 @@ type wireNetwork struct {
 	RailGaps           []wireRailGap      `json:"rail_gaps"`
 	FrogCores          []wireFrogCore     `json:"frog_cores"`
 	Features           []wireFeature      `json:"features"`
+	RideWidth          float64            `json:"ride_width"`
+	FilletWidth        float64            `json:"fillet_width"`
 	PlacementAlgorithm string             `json:"placement_algorithm"`
 }
 

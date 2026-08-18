@@ -133,13 +133,16 @@ const BladeLevelHeadShare = 50.0 / 75.0
 // Накат на остряке: до BladeRideFrom его нет вовсе — колесо идёт по рамному
 // рельсу, — а к BladeRideFull полоса выходит на полную ширину.
 //
-// Ширина наката МЕТРАМИ и не масштабируется головкой: это след колеса, свойство
-// подвижного состава, а не рельса. Головка ýже наката бывает только у острогана,
-// и тогда полосу обрезает само сечение.
+// ЗДЕСЬ ТОЛЬКО ГРАНИЦЫ ПО ДЛИНЕ, а сама ширина — общая для всего мира
+// (RailRideWidth): полоса есть след колеса, и на остряке колесо то же самое.
+// Своё число тут стояло до 2026-08-18 и расходилось с клиентским в полтора раза;
+// разбор — в ride.go.
+//
+// Головка ýже наката бывает только у острогана, и тогда полосу обрезает само
+// сечение.
 const (
-	BladeRideFrom  = 1.5
-	BladeRideFull  = 3.0
-	BladeRideWidth = 0.035
+	BladeRideFrom = 1.5
+	BladeRideFull = 3.0
 )
 
 // bladeSection считает станции сечения остряка для типа пути.
@@ -171,10 +174,10 @@ func bladeSection(rail mapfmt.TrackRail) []RenderSectionStation {
 func bladeRideAt(u float64) float64 {
 	switch {
 	case u >= BladeRideFull:
-		return BladeRideWidth
+		return RailRideWidth
 	case u <= BladeRideFrom:
 		return 0
 	default:
-		return BladeRideWidth * (u - BladeRideFrom) / (BladeRideFull - BladeRideFrom)
+		return RailRideWidth * (u - BladeRideFrom) / (BladeRideFull - BladeRideFrom)
 	}
 }

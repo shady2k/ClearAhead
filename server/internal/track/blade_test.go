@@ -182,8 +182,8 @@ func TestBladeRideStartsAfterToe(t *testing.T) {
 		switch {
 		case s.U <= BladeRideFrom && s.RideWidth != 0:
 			t.Fatalf("на %.2f м накат %.4f, ожидался ноль", s.U, s.RideWidth)
-		case s.U >= BladeRideFull && math.Abs(s.RideWidth-BladeRideWidth) > 1e-9:
-			t.Fatalf("на %.2f м накат %.4f, ожидался полный %.4f", s.U, s.RideWidth, BladeRideWidth)
+		case s.U >= BladeRideFull && math.Abs(s.RideWidth-RailRideWidth) > 1e-9:
+			t.Fatalf("на %.2f м накат %.4f, ожидался полный %.4f", s.U, s.RideWidth, RailRideWidth)
 		}
 	}
 	// Понижение обязано сойти на нет НЕ ПОЗЖЕ, чем колесо встало на остряк:
