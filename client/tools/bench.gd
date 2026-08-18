@@ -87,6 +87,8 @@ var _model := ""
 var _track := false
 var _frog := false
 var _states := {}
+## Величины экземпляра для тела с параметрами: имя -> число.
+var _params := {}
 var _shots: Array[Image] = []
 var _root: Node3D
 var _cam: Camera3D
@@ -109,6 +111,15 @@ func _initialize() -> void:
 				var kv := pair.split("=", false)
 				if kv.size() == 2:
 					_states[kv[0]] = kv[1]
+		elif a.begins_with("--params="):
+			# ВЕЛИЧИНЫ ЭКЗЕМПЛЯРА — ключом, а не из паспорта: стенд нарочно не
+			# поднимает сервер (шапка), а тело с параметрами без них не
+			# собирается вовсе. Числа называет тот, кто зовёт, и они видны в
+			# команде — то же правило, что у --state.
+			for pair in a.substr(9).split(",", false):
+				var kv := pair.split("=", false)
+				if kv.size() == 2:
+					_params[kv[0]] = float(kv[1])
 	if _out == "":
 		print("стенд: нужен ключ --out=<файл.png>")
 		quit(2)
@@ -204,7 +215,7 @@ func _model_subject() -> Node3D:
 	if not (parsed is Dictionary):
 		print("стенд: описание модели не разбирается")
 		return null
-	var built := ModelBuild.build(parsed as Dictionary, {"name": "12"})
+	var built := ModelBuild.build(parsed as Dictionary, {"name": "12"}, _params)
 	if built.failed():
 		print("стенд: тело не собралось: %s" % built.reason)
 		return null

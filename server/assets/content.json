@@ -1,194 +1,246 @@
 {
-  "format_version": 1,
-  "assets": [
-    {
-      "name": "loco_vl80",
-      "file": "vl80.glb",
-      "media_type": "model/gltf-binary",
-      "source_hash": "sha256-aa84b78c2cfbb9eca7551fe3a03e14c5fac66d7da2c97a4082f82c0ca9cdda26",
-      "drop_nodes": [
-        "vl80tk1.002_10",
-        "vl80tk1.003_11"
-      ],
-      "anchor": "rail_top_gauge_center",
-      "scale": 1.0286,
-      "translation": [
-        0,
-        0,
-        8.451
-      ],
-      "cabs": [
-        [
-          0,
-          1.726,
-          6.89
-        ],
-        [
-          0,
-          1.726,
-          -23.197
-        ]
-      ],
-      "attribution": {
-        "title": "Electric Freight Locomotive",
-        "author": "fabirbige — https://sketchfab.com/fabirbige",
-        "source": "https://sketchfab.com/3d-models/electric-freight-locomotive-c6defdc4fa134923aab8591a42bb918a",
-        "license": "CC-BY-4.0",
-        "modified": true,
-        "modifications": "из сцены убраны два кузова (vl80tk1.002, vl80tk1.003), отставленные на 8.15 м вбок и не стоящие ни на чём; постановка задана масштабом 1.0286 и сдвигом каталога — байты геометрии не тронуты"
-      }
-    },
-    {
-      "name": "switch_stand_manual",
-      "file": "switch_stand_manual.model.json",
-      "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-0470165844c1e92babbf8bfdca042986286e3f930f4472a96e247b06c51e72a6",
-      "anchor": "tie_top",
-      "scale": 1.0,
-      "translation": [
-        0,
-        0,
-        0
-      ],
-      "attribution": {
-        "title": "Ручной переводной механизм со стрелочным указателем",
-        "author": "ClearAhead",
-        "source": "собственная работа: обмер по фотографии владельца, показания указателя по ИСИ",
-        "license": "CC0-1.0",
-        "modified": false
-      }
-    },
-    {
-      "name": "switch_stand_electric",
-      "file": "switch_stand_electric.model.json",
-      "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-b4d6aced1f18c3175a853bdc09029d41c0baaffe59023677ed1959182f9ded59",
-      "anchor": "tie_top",
-      "scale": 1.0,
-      "translation": [
-        0,
-        0,
-        0
-      ],
-      "attribution": {
-        "title": "Электропривод стрелки со стрелочным указателем",
-        "author": "ClearAhead",
-        "source": "собственная работа: габарит по СП-6М (оценка), показания указателя по ИСИ",
-        "license": "CC0-1.0",
-        "modified": false
-      }
-    },
-    {
-      "name": "house",
-      "file": "house.model.json",
-      "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-2d85e536b5dd49e1fe69f4ee14a1154929e053d9b1d19ca108d204177a045914",
-      "anchor": "ground",
-      "scale": 1.0,
-      "translation": [
-        0,
-        0,
-        0
-      ],
-      "attribution": {
-        "title": "Жилой дом посёлка: коробка стен и плита кровли",
-        "author": "ClearAhead",
-        "source": "собственная работа: тело перенесено из клиента, где стояло четырьмя константами",
-        "license": "CC0-1.0",
-        "modified": false
-      }
+ "format_version": 1,
+ "assets": [
+  {
+   "name": "loco_vl80",
+   "file": "vl80.glb",
+   "media_type": "model/gltf-binary",
+   "source_hash": "sha256-aa84b78c2cfbb9eca7551fe3a03e14c5fac66d7da2c97a4082f82c0ca9cdda26",
+   "drop_nodes": [
+    "vl80tk1.002_10",
+    "vl80tk1.003_11"
+   ],
+   "anchor": "rail_top_gauge_center",
+   "scale": 1.0286,
+   "translation": [
+    0,
+    0,
+    8.451
+   ],
+   "cabs": [
+    [
+     0,
+     1.726,
+     6.89
+    ],
+    [
+     0,
+     1.726,
+     -23.197
+    ]
+   ],
+   "attribution": {
+    "title": "Electric Freight Locomotive",
+    "author": "fabirbige — https://sketchfab.com/fabirbige",
+    "source": "https://sketchfab.com/3d-models/electric-freight-locomotive-c6defdc4fa134923aab8591a42bb918a",
+    "license": "CC-BY-4.0",
+    "modified": true,
+    "modifications": "из сцены убраны два кузова (vl80tk1.002, vl80tk1.003), отставленные на 8.15 м вбок и не стоящие ни на чём; постановка задана масштабом 1.0286 и сдвигом каталога — байты геометрии не тронуты"
+   }
+  },
+  {
+   "name": "switch_stand_manual",
+   "file": "switch_stand_manual.model.json",
+   "media_type": "application/vnd.clearahead.model+json",
+   "source_hash": "sha256-0470165844c1e92babbf8bfdca042986286e3f930f4472a96e247b06c51e72a6",
+   "anchor": "tie_top",
+   "scale": 1.0,
+   "translation": [
+    0,
+    0,
+    0
+   ],
+   "attribution": {
+    "title": "Ручной переводной механизм со стрелочным указателем",
+    "author": "ClearAhead",
+    "source": "собственная работа: обмер по фотографии владельца, показания указателя по ИСИ",
+    "license": "CC0-1.0",
+    "modified": false
+   }
+  },
+  {
+   "name": "switch_stand_electric",
+   "file": "switch_stand_electric.model.json",
+   "media_type": "application/vnd.clearahead.model+json",
+   "source_hash": "sha256-b4d6aced1f18c3175a853bdc09029d41c0baaffe59023677ed1959182f9ded59",
+   "anchor": "tie_top",
+   "scale": 1.0,
+   "translation": [
+    0,
+    0,
+    0
+   ],
+   "attribution": {
+    "title": "Электропривод стрелки со стрелочным указателем",
+    "author": "ClearAhead",
+    "source": "собственная работа: габарит по СП-6М (оценка), показания указателя по ИСИ",
+    "license": "CC0-1.0",
+    "modified": false
+   }
+  },
+  {
+   "name": "house",
+   "file": "house.model.json",
+   "media_type": "application/vnd.clearahead.model+json",
+   "source_hash": "sha256-2d85e536b5dd49e1fe69f4ee14a1154929e053d9b1d19ca108d204177a045914",
+   "anchor": "ground",
+   "scale": 1.0,
+   "translation": [
+    0,
+    0,
+    0
+   ],
+   "attribution": {
+    "title": "Жилой дом посёлка: коробка стен и плита кровли",
+    "author": "ClearAhead",
+    "source": "собственная работа: тело перенесено из клиента, где стояло четырьмя константами",
+    "license": "CC0-1.0",
+    "modified": false
+   }
+  },
+  {
+   "name": "gondola_12_132",
+   "file": "gondola_12_132.model.json",
+   "media_type": "application/vnd.clearahead.model+json",
+   "source_hash": "sha256-601cc772a878b1d64c9e65fb0c3788817e8bc41e0fbe998c662f3e22f68a357b",
+   "anchor": "rail_top_gauge_center",
+   "scale": 1.0,
+   "translation": [
+    0,
+    0,
+    0
+   ],
+   "attribution": {
+    "title": "Четырёхосный универсальный полувагон модели 12-132",
+    "author": "ClearAhead",
+    "source": "собственная работа: габарит по паспорту вагона (длина по осям автосцепок 13.92 м, база 8.65 м, ширина 3.158 м, высота над УГР 3.78 м); пропорции рамы, бортов, тележек и автосцепок — упрощение, диаметр колеса 950 мм — типовое значение, не паспортное",
+    "license": "CC0-1.0",
+    "modified": false
+   }
+  }
+ ],
+ "stock": [
+  {
+   "id": "VL80",
+   "length": 34.18,
+   "bogie_base": 24.71,
+   "width": 3.63,
+   "height": 5.4,
+   "mass": 192,
+   "max_speed": 110,
+   "resistance": {
+    "a": 1.9,
+    "b": 0.01,
+    "c": 0.0003
+   },
+   "brake": {
+    "shoes": "cast_iron",
+    "braked_axles": 8,
+    "axle_force": 137.3,
+    "air": {
+     "charge": 5.4,
+     "full_service_drop": 1.5,
+     "cylinder_full": 3.8,
+     "service_rate": 0.22,
+     "emergency_rate": 0.9,
+     "charge_rate": 0.6,
+     "leak_rate": 0.02,
+     "main_min": 7.5,
+     "main_max": 9.0,
+     "compressor_rate": 0.2,
+     "cylinder_rate": 0.9,
+     "independent_max": 4.0
     }
-  ],
-  "stock": [
-    {
-      "id": "VL80",
-      "length": 34.18,
-      "bogie_base": 24.71,
-      "width": 3.63,
-      "height": 5.4,
-      "mass": 192,
-      "max_speed": 110,
-      "resistance": {
-        "a": 1.9,
-        "b": 0.01,
-        "c": 0.0003
-      },
-      "brake": {
-        "shoes": "cast_iron",
-        "braked_axles": 8,
-        "axle_force": 137.3,
-        "air": {
-          "charge": 5.4,
-          "full_service_drop": 1.5,
-          "cylinder_full": 3.8,
-          "service_rate": 0.22,
-          "emergency_rate": 0.9,
-          "charge_rate": 0.6,
-          "leak_rate": 0.02,
-          "main_min": 7.5,
-          "main_max": 9.0,
-          "compressor_rate": 0.2,
-          "cylinder_rate": 0.9,
-          "independent_max": 4.0
-        }
-      },
-      "traction": {
-        "adhesive_mass": 192,
-        "continuous_force": 401.1,
-        "continuous_speed": 53.6,
-        "max_force": 900
-      },
-      "controls": {
-        "traction_notches": 33,
-        "notch_rate": 1.0,
-        "keys": {
-          "traction": {
-            "name": "контроллер тяги",
-            "up": [
-              "W",
-              "2"
-            ],
-            "down": [
-              "S",
-              "1"
-            ]
-          },
-          "reverser": {
-            "name": "реверсор (при нулевой тяге)",
-            "up": [
-              "R"
-            ],
-            "down": [
-              "shift+R"
-            ]
-          },
-          "handle": {
-            "name": "кран машиниста № 395 по сектору",
-            "up": [
-              "D"
-            ],
-            "down": [
-              "A"
-            ]
-          },
-          "independent": {
-            "name": "кран вспомогательного тормоза",
-            "up": [
-              "X"
-            ],
-            "down": [
-              "Z"
-            ]
-          },
-          "release": {
-            "name": "экстренная остановка",
-            "up": [
-              "0"
-            ]
-          }
-        }
-      },
-      "appearance": "loco_vl80"
+   },
+   "traction": {
+    "adhesive_mass": 192,
+    "continuous_force": 401.1,
+    "continuous_speed": 53.6,
+    "max_force": 900
+   },
+   "controls": {
+    "traction_notches": 33,
+    "notch_rate": 1.0,
+    "keys": {
+     "traction": {
+      "name": "контроллер тяги",
+      "up": [
+       "W",
+       "2"
+      ],
+      "down": [
+       "S",
+       "1"
+      ]
+     },
+     "reverser": {
+      "name": "реверсор (при нулевой тяге)",
+      "up": [
+       "R"
+      ],
+      "down": [
+       "shift+R"
+      ]
+     },
+     "handle": {
+      "name": "кран машиниста № 395 по сектору",
+      "up": [
+       "D"
+      ],
+      "down": [
+       "A"
+      ]
+     },
+     "independent": {
+      "name": "кран вспомогательного тормоза",
+      "up": [
+       "X"
+      ],
+      "down": [
+       "Z"
+      ]
+     },
+     "release": {
+      "name": "экстренная остановка",
+      "up": [
+       "0"
+      ]
+     }
     }
-  ]
+   },
+   "appearance": "loco_vl80"
+  },
+  {
+   "id": "PV12132",
+   "length": 13.92,
+   "bogie_base": 8.65,
+   "width": 3.158,
+   "height": 3.78,
+   "freight": {
+    "tare": 24.0,
+    "payload": 70.0,
+    "axles": 4
+   },
+   "max_speed": 120,
+   "resistance": {
+    "a": 1.0,
+    "b": 0.042,
+    "c": 0.00016
+   },
+   "resistance_loaded": {
+    "base": 0.7,
+    "k0": 3.0,
+    "k1": 0.1,
+    "k2": 0.0025,
+    "empty_below_q0": 6.0
+   },
+   "brake": {
+    "shoes": "cast_iron",
+    "braked_axles": 4,
+    "axle_force_empty": 34.32,
+    "axle_force_loaded": 68.65
+   },
+   "appearance": "gondola_12_132"
+  }
+ ]
 }

@@ -1,0 +1,521 @@
+{
+ "format_version": 1,
+ "model": "gondola_12_132",
+ "params": [
+  "length",
+  "width",
+  "height",
+  "bogie_base"
+ ],
+ "axes": "x_right_y_up_z_back",
+ "units": "m",
+ "angles": "deg",
+ "materials": {
+  "body": {
+   "colour": "#6b5a4b",
+   "roughness": 0.85,
+   "metallic": 0.1
+  },
+  "steel": {
+   "colour": "#3a3d42",
+   "roughness": 0.8,
+   "metallic": 0.3
+  }
+ },
+ "parts": [
+  {
+   "name": "frame",
+   "shape": "box",
+   "material": "steel",
+   "at": [
+    0,
+    {
+     "by": "height",
+     "factor": 0.3,
+     "offset": 0.0
+    },
+    0
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 1.0,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.1,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 1.0,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "side_left",
+   "shape": "box",
+   "material": "body",
+   "at": [
+    {
+     "by": "width",
+     "factor": 0.46,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.66,
+     "offset": 0.0
+    },
+    0
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 0.08,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.55,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 1.0,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "side_right",
+   "shape": "box",
+   "material": "body",
+   "at": [
+    {
+     "by": "width",
+     "factor": -0.46,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.66,
+     "offset": 0.0
+    },
+    0
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 0.08,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.55,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 1.0,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "end_front",
+   "shape": "box",
+   "material": "body",
+   "at": [
+    0,
+    {
+     "by": "height",
+     "factor": 0.66,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 0.46,
+     "offset": 0.0
+    }
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 1.0,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.55,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 0.08,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "end_back",
+   "shape": "box",
+   "material": "body",
+   "at": [
+    0,
+    {
+     "by": "height",
+     "factor": 0.66,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": -0.46,
+     "offset": 0.0
+    }
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 1.0,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.55,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 0.08,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "floor",
+   "shape": "box",
+   "material": "body",
+   "at": [
+    0,
+    {
+     "by": "height",
+     "factor": 0.38,
+     "offset": 0.0
+    },
+    0
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 0.92,
+     "offset": 0.0
+    },
+    {
+     "by": "height",
+     "factor": 0.03,
+     "offset": 0.0
+    },
+    {
+     "by": "length",
+     "factor": 0.98,
+     "offset": 0.0
+    }
+   ]
+  },
+  {
+   "name": "bogie_front",
+   "shape": "box",
+   "material": "steel",
+   "at": [
+    0,
+    0.62,
+    {
+     "by": "bogie_base",
+     "factor": 0.5,
+     "offset": 0.0
+    }
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 0.86,
+     "offset": 0.0
+    },
+    0.36,
+    2.4
+   ]
+  },
+  {
+   "name": "bogie_back",
+   "shape": "box",
+   "material": "steel",
+   "at": [
+    0,
+    0.62,
+    {
+     "by": "bogie_base",
+     "factor": -0.5,
+     "offset": 0.0
+    }
+   ],
+   "size": [
+    {
+     "by": "width",
+     "factor": 0.86,
+     "offset": 0.0
+    },
+    0.36,
+    2.4
+   ]
+  },
+  {
+   "name": "wheel_0_0",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": 0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": 0.5,
+     "offset": -0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_0_1",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": 0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": 0.5,
+     "offset": 0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_1_0",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": -0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": 0.5,
+     "offset": -0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_1_1",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": -0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": 0.5,
+     "offset": 0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_2_0",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": 0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": -0.5,
+     "offset": -0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_2_1",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": 0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": -0.5,
+     "offset": 0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_3_0",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": -0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": -0.5,
+     "offset": -0.85
+    }
+   ]
+  },
+  {
+   "name": "wheel_3_1",
+   "shape": "cylinder",
+   "material": "steel",
+   "axis": "x",
+   "sides": 16,
+   "radius": 0.475,
+   "height": {
+    "by": "width",
+    "factor": 0.06,
+    "offset": 0.0
+   },
+   "at": [
+    {
+     "by": "width",
+     "factor": -0.36,
+     "offset": 0.0
+    },
+    0.475,
+    {
+     "by": "bogie_base",
+     "factor": -0.5,
+     "offset": 0.85
+    }
+   ]
+  },
+  {
+   "name": "coupler_front",
+   "shape": "box",
+   "material": "steel",
+   "at": [
+    0,
+    1.06,
+    {
+     "by": "length",
+     "factor": 0.5,
+     "offset": -0.3
+    }
+   ],
+   "size": [
+    0.34,
+    0.3,
+    0.6
+   ]
+  },
+  {
+   "name": "coupler_back",
+   "shape": "box",
+   "material": "steel",
+   "at": [
+    0,
+    1.06,
+    {
+     "by": "length",
+     "factor": -0.5,
+     "offset": 0.3
+    }
+   ],
+   "size": [
+    0.34,
+    0.3,
+    0.6
+   ]
+  }
+ ]
+}

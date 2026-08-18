@@ -1830,7 +1830,17 @@ func _load_stock_meshes() -> void:
 		var bytes: PackedByteArray = blob.bytes
 		if bytes.is_empty():
 			continue
-		var why := RollingStock.show_mesh(u, bytes, asset)
+		# РОД ВИДА ОБЪЯВЛЯЕТ КАТАЛОГ, а не расширение файла и не первые байты:
+		# описание тела разбирается ModelBuild, запечённая сцена — glTF.
+		var why := ""
+		if String(asset.get("media_type", "")) == MODEL_MEDIA_TYPE:
+			var parsed: Variant = JSON.parse_string(bytes.get_string_from_utf8())
+			if parsed is Dictionary:
+				why = RollingStock.show_body(u, parsed as Dictionary, asset)
+			else:
+				why = "описание тела не разобралось как объект"
+		else:
+			why = RollingStock.show_mesh(u, bytes, asset)
 		if why != "":
 			errors.append("вид %s единицы %s: %s" % [u.appearance, u.id, why])
 			continue

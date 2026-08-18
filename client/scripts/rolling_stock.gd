@@ -252,6 +252,15 @@ static func cabs_of(asset: Dictionary) -> Dictionary:
 ## Возвращает пустую строку при успехе и причину при отказе. Отказ здесь не
 ## фатален: коробка остаётся, и это по-прежнему верное положение верной машины —
 ## просто без её вида.
+##
+## # ДВА РОДА ВИДА, и разбирает их не эта функция
+##
+## Вид приезжает либо запечённым glTF (локомотив: чужая работа под CC-BY), либо
+## ОПИСАНИЕМ ТЕЛА — тем же форматом, которым сервер описывает дом и переводной
+## механизм (полувагон: своя работа под CC0). Что именно доехало, объявляет
+## каталог полем media_type, и спрашивает его ВЫЗЫВАЮЩИЙ: угадывать род по
+## первым байтам значило бы завести второй ответ на вопрос, на который каталог
+## уже ответил.
 static func show_mesh(u: Unit, bytes: PackedByteArray, asset: Dictionary) -> String:
 	var doc := GLTFDocument.new()
 	var state := GLTFState.new()
@@ -261,7 +270,31 @@ static func show_mesh(u: Unit, bytes: PackedByteArray, asset: Dictionary) -> Str
 	var scene := doc.generate_scene(state)
 	if scene == null:
 		return "glTF разобран, но сцена не собралась"
+	return _wear(u, scene, asset)
 
+
+## show_body — ставит вид, ОПИСАННЫЙ ТЕЛОМ, вместо коробки.
+##
+## Габарит НЕ дублируется в файле тела: длину, ширину, высоту и базу шкворней
+## машина уже получила паспортом, и тело собирается ими как параметрами
+## экземпляра — ровно так же, как дом собирается своими. Иначе у габарита стало
+## бы два источника, и разошлись бы они на первой же правке паспорта.
+static func show_body(u: Unit, doc: Dictionary, asset: Dictionary) -> String:
+	var built := ModelBuild.build(doc, {}, {
+		"length": u.length_m,
+		"width": u.width_m,
+		"height": u.height_m,
+		"bogie_base": u.bogie_base_m,
+	})
+	if built.root == null:
+		return built.reason
+	return _wear(u, built.root, asset)
+
+
+## _wear — общая половина обоих показов: поставить собранный узел по каталогу и
+## убрать коробку. Своя копия у каждого рода вида означала бы, что постановка
+## (масштаб, сдвиг, снос коробки) делается двумя способами.
+static func _wear(u: Unit, scene: Node3D, asset: Dictionary) -> String:
 	var holder := Node3D.new()
 	holder.name = "look"
 	# ПОСТАНОВКА — из каталога, и порядок объявлен там же: сначала масштаб,

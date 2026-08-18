@@ -536,13 +536,17 @@ cab-probe: client-import
 BENCH_OUT ?= /tmp/bench.png
 MODEL     ?= switch_stand_manual
 STATE     ?=
+## PARAMS — величины экземпляра для тела с параметрами (полувагон, дом):
+##   make bench MODEL=gondola_12_132 PARAMS=length=13.92,width=3.158,height=3.78,bogie_base=8.65
+## Стенд сервера не поднимает, поэтому числа называет тот, кто зовёт.
+PARAMS    ?=
 TRACK     ?=
 FROG      ?=
 OUT       ?= $(BENCH_OUT)
 bench: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --script res://tools/bench.gd -- \
 		--out=$(OUT) $(if $(FROG),--frog,$(if $(TRACK),--track,--model=$(MODEL))) \
-		$(if $(STATE),--state=$(STATE))
+		$(if $(STATE),--state=$(STATE)) $(if $(PARAMS),--params=$(PARAMS))
 
 turnout-probe: client-import
 	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \

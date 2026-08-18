@@ -220,6 +220,15 @@ type UnitState struct {
 	// показывать нечего, а пустая запись под видом стрелки была бы стрелкой,
 	// которой нет.
 	Ahead *AheadTurnout `json:"ahead,omitempty"`
+	// LoadT — груз в машине, тонны. Отсутствует у машины, которая груза не
+	// возит: у неё его не бывает, и ноль под его видом означал бы порожний
+	// вагон там, где вагона нет вовсе.
+	//
+	// ЕДЕТ, потому что клиенту его показывать: гружёный и порожний полувагон
+	// снаружи одинаковы, а ведут себя по-разному, и человек, глядящий на путь,
+	// обязан различать их не по памяти. Массу при этом клиент не считает —
+	// тонны груза он показывает как есть.
+	LoadT *float64 `json:"load,omitempty"`
 	// Air — ДАВЛЕНИЯ пневматики. Отсутствует у машины без тормозной магистрали:
 	// у неё их не существует, и нули под их видом были бы приборами, которые
 	// врут. Отдельно от Controls, потому что это СЛЕДСТВИЕ, а не орган:
@@ -235,7 +244,7 @@ type UnitState struct {
 func (m Match) States(net *track.CompiledNetwork) ([]UnitState, error) {
 	out := make([]UnitState, 0, len(m.Units))
 	for _, u := range m.Units {
-		st := UnitState{ID: u.ID, Name: u.Name, Type: u.Type, At: u.At}
+		st := UnitState{ID: u.ID, Name: u.Name, Type: u.Type, At: u.At, LoadT: u.LoadT}
 		if mo, ok := m.MotionOf(u.ID); ok {
 			el, ok := net.Elements[mo.Element]
 			if !ok {
