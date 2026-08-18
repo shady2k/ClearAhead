@@ -323,6 +323,11 @@ func (m *Match) Uncouple(consistID, afterUnitID, newID string) (Consist, Consist
 	return head, tail, nil
 }
 
+// ConsistByID — сцеп по имени. Наружу его открыл канал: ответ на расцепку
+// несёт ОБЕ части, и вторую в партии находят именно по имени, которое команда
+// сама и назвала.
+func (m Match) ConsistByID(id string) (Consist, bool) { return m.consistByID(id) }
+
 func (m Match) consistByID(id string) (Consist, bool) {
 	for _, c := range m.Consists {
 		if c.ID == id {
@@ -339,4 +344,30 @@ func (m *Match) removeConsist(id string) {
 			return
 		}
 	}
+}
+
+// NeighbourConsist — сцеп, стоящий ВПЛОТНУЮ к этому, любым из двух концов.
+//
+// Заведён командой сцепки и в ней же объясняется: игрок цепляется с тем, во что
+// упёрся, и «с кем» в команде нет вовсе — назови клиент соседа, он назвал бы
+// факт о мире, на который отвечает геометрия.
+//
+// Ищется перебором сцепов партии, и это не расточительство: сцепов на станции
+// единицы, а команда сцепки случается раз в маневровый рейс, а не пять раз за
+// тик. Появится сотня — появится и индекс, но не раньше, чем будет что мерить.
+//
+// Двух соседей разом эта функция не различает: если состав стоит между двумя
+// другими, вернётся первый по порядку партии. Названо честно, потому что
+// однажды это придётся решать — вопросом «каким концом цеплять», который
+// сегодня игрок задать не может.
+func (m Match) NeighbourConsist(net *track.CompiledNetwork, c Consist) (Consist, bool) {
+	for _, other := range m.Consists {
+		if other.ID == c.ID {
+			continue
+		}
+		if _, _, err := m.touching(net, c, other); err == nil {
+			return other, true
+		}
+	}
+	return Consist{}, false
 }

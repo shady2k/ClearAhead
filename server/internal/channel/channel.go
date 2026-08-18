@@ -226,6 +226,17 @@ func (h *Handler) newMux(st *connState) *rpc.Mux {
 		func(ctx context.Context, req protocol.TurnoutRequest) (any, error) {
 			return h.setTurnout(ctx, req)
 		})
+	// ТРЕТЬЯ И ЧЕТВЁРТАЯ ДОМЕННЫЕ КОМАНДЫ — сцепка и расцепка (В4,
+	// ClearAhead-xj9). Первые команды, меняющие не состояние машины и не
+	// положение устройства, а ТО, ЧТО СЧИТАЕТСЯ ОДНИМ ТЕЛОМ.
+	rpc.Register[protocol.CoupleRequest](m, MethodCouple,
+		func(ctx context.Context, req protocol.CoupleRequest) (any, error) {
+			return h.couple(ctx, req)
+		})
+	rpc.Register[protocol.UncoupleRequest](m, MethodUncouple,
+		func(ctx context.Context, req protocol.UncoupleRequest) (any, error) {
+			return h.uncouple(ctx, req)
+		})
 	return m
 }
 
@@ -234,6 +245,12 @@ const MethodSetControls = "controls.set"
 
 // MethodSetTurnout — имя команды перевода стрелки на проводе.
 const MethodSetTurnout = "turnout.set"
+
+// MethodCouple, MethodUncouple — имена команд сцепки и расцепки на проводе.
+const (
+	MethodCouple   = "consist.couple"
+	MethodUncouple = "consist.uncouple"
+)
 
 // setControls — обработчик первой доменной команды.
 //
@@ -336,6 +353,74 @@ func turnoutGoal(m match.Match, id string) string {
 		return mv.To
 	}
 	return m.TurnoutAt(id)
+}
+
+// couple — обработчик сцепки.
+//
+// Устроен как прочие доменные команды: правка кладётся в очередь движка и ждёт
+// тика, потому что мир принадлежит движку.
+//
+// ОТВЕТ НАЗЫВАЕТ СОСТАВ ЦЕЛИКОМ, а не «сцепилось». Веха просит «явную таблицу
+// преобразования»: после сцепки прежних сцепов не существует, и клиент обязан
+// узнать не только новое имя, но и ПОРЯДОК машин в нём — иначе он не сможет ни
+// показать поезд, ни назвать единицу для расцепки.
+func (h *Handler) couple(ctx context.Context, req protocol.CoupleRequest) (any, error) {
+	done := h.e.Submit(command.Couple{
+		Unit:    req.Unit(),
+		Consist: req.Consist(),
+		Net:     h.net,
+	})
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	snap := h.e.Snapshot()
+	c, ok := snap.Match.ConsistOf(req.Unit())
+	if !ok {
+		return nil, fmt.Errorf("channel: единица %s после сцепки не в сцепе", req.Unit())
+	}
+	return consistResult{Consist: c}, nil
+}
+
+// uncouple — обработчик расцепки.
+//
+// Ответ несёт ОБЕ части: расцепка рождает вторую, и клиент, узнавший только
+// свою, не смог бы показать оставленный на пути состав.
+func (h *Handler) uncouple(ctx context.Context, req protocol.UncoupleRequest) (any, error) {
+	done := h.e.Submit(command.Uncouple{Unit: req.Unit(), Consist: req.Consist()})
+	select {
+	case err := <-done:
+		if err != nil {
+			return nil, err
+		}
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	snap := h.e.Snapshot()
+	kept, ok := snap.Match.ConsistOf(req.Unit())
+	if !ok {
+		return nil, fmt.Errorf("channel: единица %s после расцепки не в сцепе", req.Unit())
+	}
+	parted, ok := snap.Match.ConsistByID(req.Consist())
+	if !ok {
+		return nil, fmt.Errorf("channel: отцепленная часть %s не найдена", req.Consist())
+	}
+	return uncoupleResult{Consist: kept, Parted: parted}, nil
+}
+
+// consistResult — ответ на сцепку: получившийся состав целиком.
+type consistResult struct {
+	Consist match.Consist `json:"consist"`
+}
+
+// uncoupleResult — ответ на расцепку: обе части.
+type uncoupleResult struct {
+	Consist match.Consist `json:"consist"`
+	Parted  match.Consist `json:"parted"`
 }
 
 // turnoutResult — ответ на команду перевода стрелки.

@@ -445,6 +445,11 @@ func TestServerConstantsMatchContract(t *testing.T) {
 	if _, ok := doc.Methods[channel.MethodSetTurnout]; !ok {
 		t.Fatalf("договор не объявляет команду %s: %v", channel.MethodSetTurnout, doc.Methods)
 	}
+	for _, name := range []string{channel.MethodCouple, channel.MethodUncouple} {
+		if _, ok := doc.Methods[name]; !ok {
+			t.Fatalf("договор не объявляет команду %s: %v", name, doc.Methods)
+		}
+	}
 }
 
 // TestWrongRegionIsNotFound — адрес несуществующего региона обязан отвечать
