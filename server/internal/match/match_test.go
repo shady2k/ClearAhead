@@ -39,7 +39,7 @@ func station(t *testing.T) *track.CompiledNetwork {
 	return cn
 }
 
-// set собирает набор контента с одним типом длиной 34.18 м — тем же, что боевой.
+// set собирает набор контента с одним типом длиной 32.84 м — тем же, что боевой.
 func set(t *testing.T) *content.Set {
 	t.Helper()
 	dir := t.TempDir()
@@ -57,7 +57,7 @@ func set(t *testing.T) *content.Set {
 				"license": "CC0-1.0", "modified": false},
 		}},
 		"stock": []any{map[string]any{
-			"id": "VL80", "length": 34.18, "bogie_base": 24.71, "width": 3.63, "height": 5.4,
+			"id": "VL80", "length": 32.84, "bogie_base": 24.71, "width": 3.24, "height": 5.1,
 			"mass": 192.0, "max_speed": 110.0,
 			"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
 			"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3},
@@ -108,7 +108,7 @@ func setWithWagon(t *testing.T) *content.Set {
 		}},
 		"stock": []any{
 			map[string]any{
-				"id": "VL80", "length": 34.18, "bogie_base": 24.71, "width": 3.63, "height": 5.4,
+				"id": "VL80", "length": 32.84, "bogie_base": 24.71, "width": 3.24, "height": 5.1,
 				"mass": 192.0, "max_speed": 110.0,
 				"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
 				"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3},
@@ -125,9 +125,9 @@ func setWithWagon(t *testing.T) *content.Set {
 				"appearance": "vid",
 			},
 			map[string]any{
-				"id": "GON", "length": 13.92, "bogie_base": 8.65, "width": 3.158, "height": 3.78,
-				"max_speed": 120.0,
-				"freight":   map[string]any{"tare": 24.0, "payload": 70.0, "axles": 4},
+				"id": "GON", "length": 13.92, "bogie_base": 8.65, "width": 3.158, "height": 3.80,
+				"max_speed":  120.0,
+				"freight":    map[string]any{"tare": 24.0, "payload": 70.0, "axles": 4},
 				"resistance": map[string]any{"a": 1.0, "b": 0.042, "c": 0.00016},
 				"resistance_loaded": map[string]any{"base": 0.7, "k0": 3.0, "k1": 0.1, "k2": 0.0025,
 					"empty_below_q0": 6.0},
@@ -224,8 +224,8 @@ func TestPlacementRefusals(t *testing.T) {
 			delete(at(d), "direction")
 		}},
 		{"не помещается концом", "не помещается", func(d map[string]any) {
-			// E_MAIN длиной 230 м; машина 34.18 м серединой на 220-м метре
-			// вылезает за конец на 5 с лишним метров.
+			// E_MAIN длиной 230 м; машина 32.84 м серединой на 220-м метре
+			// вылезает за конец на 6 с лишним метров.
 			at(d)["u"] = 220.0
 		}},
 		{"не помещается началом", "не помещается", func(d map[string]any) {
@@ -276,7 +276,7 @@ func TestUnitsTouchingEndsAllowed(t *testing.T) {
 	d["units"] = append(d["units"].([]any), map[string]any{
 		"id": loco2ID, "name": "LOCO_2", "type": "VL80",
 		// Ровно длина машины дальше: хвост первой и голова второй в одной точке.
-		"at": map[string]any{"element": seedmap.StationMain, "u": 134.18, "direction": "forward"},
+		"at": map[string]any{"element": seedmap.StationMain, "u": 132.84, "direction": "forward"},
 	})
 	if _, err := Start("M1", write(t, d), station(t), set(t)); err != nil {
 		t.Fatalf("машины впритык отвергнуты: %v", err)

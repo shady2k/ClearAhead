@@ -79,7 +79,7 @@ func testSet(t *testing.T) *content.Set {
 				"license": "CC0-1.0", "modified": false},
 		}},
 		"stock": []any{map[string]any{
-			"id": "VL80", "length": 34.18, "bogie_base": 24.71, "width": 3.63, "height": 5.4,
+			"id": "VL80", "length": 32.84, "bogie_base": 24.71, "width": 3.24, "height": 5.1,
 			"mass": 192.0, "max_speed": 110.0,
 			"resistance": map[string]any{"a": 1.9, "b": 0.01, "c": 0.0003},
 			"brake":      map[string]any{"shoes": "cast_iron", "braked_axles": 8, "axle_force": 137.3},

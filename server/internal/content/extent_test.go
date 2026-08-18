@@ -29,12 +29,27 @@ func bodyDoc(length, width, height float64) []byte {
 	return raw
 }
 
-// setWithBody — набор, у которого вид паспорта описан ТЕЛОМ, а не запечённым
-// glTF: только такой вид и можно обмерить на сервере.
+// setWithBody — набор одной СОГЛАСОВАННОЙ машины: паспорт и тело названы одними
+// числами. Вид описан ТЕЛОМ, а не запечённым glTF: только такой вид и можно
+// обмерить на сервере.
 func setWithBody(t *testing.T, length, width, height float64) (*Set, error) {
 	t.Helper()
-	body := bodyDoc(length, width, height)
+	return setOf(t, length, width, height, length, width, height)
+}
+
+// setOf — набор, у которого паспорт и тело названы РАЗНЫМИ числами. Нужен ровно
+// для того, чтобы проверять расхождение: у согласованной машины его не бывает.
+func setOf(t *testing.T, passLen, passWid, passHgt, bodyLen, bodyWid, bodyHgt float64) (*Set, error) {
+	t.Helper()
+	body := bodyDoc(bodyLen, bodyWid, bodyHgt)
 	doc := goodDoc(t, body)
+	stock := doc["stock"].([]any)[0].(map[string]any)
+	stock["length"] = passLen
+	stock["width"] = passWid
+	stock["height"] = passHgt
+	// База шкворней внутри машины — иначе отказ придёт раньше проверки габарита,
+	// и тест мерил бы не то, что задумал.
+	stock["bogie_base"] = passLen * 0.6
 	doc["assets"] = []any{map[string]any{
 		"name": "loco_x", "file": "x.model.json", "media_type": ModelMediaType,
 		"source_hash": Addr(hashOf(body)),
@@ -65,11 +80,11 @@ func TestBodyMustMatchPassportOutline(t *testing.T) {
 	}{
 		{"длиннее паспорта", 10.5, 3.0, 4.0, "длина"},
 		{"короче паспорта", 9.6, 3.0, 4.0, "длина"},
-		{"шире паспорта", 10.0, 3.4, 4.0, "ширина"},
+		{"шире паспорта", 10.0, 3.3, 4.0, "ширина"},
 		{"выше паспорта", 10.0, 3.0, 4.3, "высота"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := setWithBody(t, c.l, c.w, c.h)
+			_, err := setOf(t, 10.0, 3.0, 4.0, c.l, c.w, c.h)
 			if err == nil {
 				t.Fatalf("тело %v × %v × %v принято при паспорте 10 × 3 × 4", c.l, c.w, c.h)
 			}
@@ -83,10 +98,10 @@ func TestBodyMustMatchPassportOutline(t *testing.T) {
 // ДОПУСК ЕСТЬ, И ОН МАЛ. Полсантиметра — описка в размере детали; миллиметр —
 // сложение шестидесяти литералов, и отвергать его значило бы отвергать верное.
 func TestBodyToleranceAcceptsMillimetreAndRefusesCentimetre(t *testing.T) {
-	if _, err := setWithBody(t, 10.0+0.001, 3.0, 4.0); err != nil {
+	if _, err := setOf(t, 10.0, 3.0, 4.0, 10.0+0.001, 3.0, 4.0); err != nil {
 		t.Fatalf("расхождение в миллиметр отвергнуто: %v", err)
 	}
-	if _, err := setWithBody(t, 10.0+0.02, 3.0, 4.0); err == nil {
+	if _, err := setOf(t, 10.0, 3.0, 4.0, 10.0+0.02, 3.0, 4.0); err == nil {
 		t.Fatal("расхождение в два сантиметра принято")
 	}
 }
@@ -129,28 +144,33 @@ func TestShippedWagonBodyIsMeasured(t *testing.T) {
 	}
 }
 
-// ГАБАРИТ 1-Т СТОРОЖИТСЯ, НО К БОЕВОМУ НАБОРУ ЕЩЁ НЕ ПРИМЕНЁН.
+// ГАБАРИТ 1-Т СТОРОЖИТ БОЕВОЙ НАБОР, а не только фикстуру.
 //
-// Тест проверяет ОБЕ половины правды: проверка ловит машину сверх габарита — и
-// боевой набор её сегодня НЕ проходит, потому что габарит ВЛ80 в паспорте это
-// замер чужого меша, а не числа машины (ClearAhead-w4q). Второе утверждение
-// стоит здесь нарочно: в тот день, когда паспорт ВЛ80 получит числа из
-// источника, этот тест покраснеет и потребует включить проверку в Load — то
-// есть напомнит о себе сам, а не забудется.
+// Тест написан 2026-08-18 наоборот — он ТРЕБОВАЛ, чтобы боевой набор габарит не
+// проходил, потому что габарит ВЛ80 был замером чужого меша (3.63 × 5.40 м) и в
+// очертание 1-Т не вписывался. Это был будильник: покраснеть в тот день, когда
+// у паспорта появятся числа машины. Он и покраснел — в тот же день, через час,
+// когда владелец прислал 32.84 × 3.24 × 5.10 (ClearAhead-w4q закрыта).
+//
+// Теперь он сторожит обратное: боевой набор габарит ПРОХОДИТ, а машина сверх
+// очертания — отказ загрузки.
 func TestLoadingGaugeRefusesOversizeStock(t *testing.T) {
-	set, err := setWithBody(t, 10.0, 3.0, 4.0)
-	if err != nil {
-		t.Fatalf("набор: %v", err)
+	if err := shipped(t).CheckLoadingGauge(); err != nil {
+		t.Fatalf("боевой набор не вписывается в габарит 1-Т: %v", err)
 	}
-	if err := set.CheckLoadingGauge(); err != nil {
-		t.Fatalf("машина 3.0 × 4.0 м не прошла габарит 1-Т: %v", err)
+	if _, err := setWithBody(t, 10.0, 3.0, 4.0); err != nil {
+		t.Fatalf("машина 3.0 × 4.0 м отвергнута, хотя в габарит вписывается: %v", err)
 	}
-	if _, err := setWithBody(t, 10.0, 3.5, 4.0); err == nil {
-		t.Log("шире габарита: тело сошлось с паспортом, и это верно — габарит проверяет другая функция")
+	// Шире предела — отказ ЗАГРУЗКИ, а не отдельный вызов проверки: набор с
+	// такой машиной не собирается вовсе.
+	_, err := setWithBody(t, 10.0, GaugeTWidthM+0.01, 4.0)
+	if err == nil {
+		t.Fatal("машина шире габарита 1-Т загружена")
 	}
-
-	if err := shipped(t).CheckLoadingGauge(); err == nil {
-		t.Fatal("боевой набор прошёл габарит 1-Т — значит паспорт ВЛ80 получил числа машины: " +
-			"пора закрывать ClearAhead-w4q и звать CheckLoadingGauge из Load")
+	if !strings.Contains(err.Error(), "1-Т") {
+		t.Fatalf("отказ не назвал габарит: %v", err)
+	}
+	if _, err := setWithBody(t, 10.0, 3.0, GaugeTHeightM+0.01); err == nil {
+		t.Fatal("машина выше габарита 1-Т загружена")
 	}
 }

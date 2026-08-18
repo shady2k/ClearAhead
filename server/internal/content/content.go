@@ -120,6 +120,12 @@ func Load(dir string) (*Set, error) {
 	if err := set.checkStockBodies(); err != nil {
 		return nil, err
 	}
+	// ГАБАРИТ ПОДВИЖНОГО СОСТАВА — предел ГОСТ, и он проверяется здесь же:
+	// машина сверх очертания 1-Т по сети не обращается, и набор, объявивший
+	// такую, собран неверно.
+	if err := set.CheckLoadingGauge(); err != nil {
+		return nil, err
+	}
 	set.Hash = set.digest()
 	return set, nil
 }

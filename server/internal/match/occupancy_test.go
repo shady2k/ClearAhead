@@ -141,7 +141,7 @@ func TestOccupancyDropsTheAbandonedElement(t *testing.T) {
 	m, net := twoUnits(t, 20, 150)
 	w := track.NewTopology(net).At(func(string) string { return track.BranchStraight })
 	mo, _ := m.MotionOf(loco1ID)
-	// Уводим первое тело целиком на проход стрелки: 20 − 17.09 = 2.91 м до
+	// Уводим первое тело целиком на проход стрелки: 20 − 16.42 = 3.58 м до
 	// границы, плюс вся длина машины.
 	moved, err := slideSpan(mo.Span, w, -metres(t, 40))
 	if err != nil {
@@ -223,10 +223,10 @@ func TestPlacementRefusesOverlapWithMessage(t *testing.T) {
 // «можно» проходит по одному микрометру, и обе её стороны надо назвать.
 func TestPlacementAllowsTouchingBodies(t *testing.T) {
 	doc := good()
-	// 150 и 150 + 34.18: концы сходятся ровно.
+	// 150 и 150 + 32.84: концы сходятся ровно.
 	doc["units"] = append(doc["units"].([]any), map[string]any{
 		"id": loco2ID, "name": "LOCO_2", "type": "VL80",
-		"at": map[string]any{"element": seedmap.StationMain, "u": 184.18, "direction": "forward"},
+		"at": map[string]any{"element": seedmap.StationMain, "u": 182.84, "direction": "forward"},
 	})
 	m, err := Start("M1", write(t, doc), station(t), set(t))
 	if err != nil {
