@@ -78,6 +78,11 @@ func _run() -> void:
 		pure_ctx.tree = self
 		pure_ctx.report = report
 		pure_ctx.offline = true
+		# ПРАВИЛО ЗЕМЛИ СТАВИТСЯ ЯВНО, как это делает мир по манифесту: без него
+		# TerrainMesh.build отказывает. Проверка, строящая землю, обязана объявить
+		# правило так же, как боевой клиент, — иначе она мерила бы землю, которой
+		# в игре не бывает.
+		TerrainMesh.ground = GroundRule.from_manifest(CheckContext.GROUND_FIXTURE)
 		await _run_dir(PURE_DIR, pure_ctx, report)
 		title = "чистые"
 
@@ -101,6 +106,10 @@ func _run() -> void:
 		live_ctx.region = region
 		live_ctx.api = api
 		live_ctx.net = api.net
+		# У живых проверок правило приезжает МАНИФЕСТОМ, а не фикстурой: они на то
+		# и живые, чтобы поймать сервер, который правило перестал слать.
+		var live_man := await live_ctx.manifest()
+		TerrainMesh.ground = GroundRule.from_manifest(live_man.get("ground", {}) as Dictionary)
 		await _run_dir(LIVE_DIR, live_ctx, report)
 		title = "с сервером" if only == "live" else "чистые и с сервером"
 

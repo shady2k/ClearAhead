@@ -19,7 +19,11 @@ extends RefCounted
 ## пятнадцати — густота разреженной опушки, ниже этого трава стоит редкой щёткой,
 ## а её цена та же (подробность — в шапке world.gd, у константы GRASS_MIN_CLOSURE,
 ## до выноса поля в отдельный файл).
-const GRASS_MIN_CLOSURE := 4
+## ПОРОГ СОМКНУТОСТИ УЕХАЛ НА СЕРВЕР 2026-08-18: `ground.grass_min_closure` в
+## манифесте. Здесь стояло 4, и рядом, строкой ниже по коду, вторым экземпляром
+## жило правило «на песке и голой почве травы нет» — то же самое, что
+## terrain_mesh.gd держал списком NO_UNDERSTORY. Одно правило мира, написанное в
+## клиенте дважды; теперь оно приезжает и читается в одном месте (GroundRule).
 const GRASS_FAR := 200.0        # м — радиус круга посадки, всегда один
 const GRASS_BASE := 0.22        # м — базовая ячейка посадки: 20 ячеек на м²
 ## [радиус кольца, ШАГ по базовой сетке целым числом, доля занятых ячеек].
@@ -405,9 +409,7 @@ func cover_cell(job_at: Dictionary, g: Dictionary, i: int, j: int) -> void:
 	var packed := cover[k]
 	var cls := packed >> 4
 	var closure := packed & 0x0f
-	if closure < GRASS_MIN_CLOSURE:
-		return
-	if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
+	if not TerrainMesh.ground.grassy_enough(cls, closure):
 		return
 	var forest: PackedByteArray = g["forest"]
 	# Ячейка со стволом травой не засевается: под елью её не видно, а пучков она

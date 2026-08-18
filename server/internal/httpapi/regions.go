@@ -138,6 +138,17 @@ type regionManifest struct {
 
 	Chunks chunkRule `json:"chunks"`
 
+	// Ground — правило земли: пороги, по которым покров и уклон превращаются в
+	// вид земли. Разбор и сами числа — chunk.GroundRule.
+	//
+	// В МАНИФЕСТЕ, а не в чанке: правило одно на регион, а чанков тысячи, и
+	// повторять его в каждом значило бы платить за него на каждой клетке. Тот же
+	// довод, что у правила подробности рядом.
+	//
+	// Ради того же следующего запроса, что и всё остальное здесь: без порога
+	// клиент не может нарисовать ПЕРВЫЙ же полученный чанк, не выдумав числа.
+	Ground chunk.GroundRule `json:"ground"`
+
 	// ProjectionHead — голова проекций региона: какая версия мира текущая и
 	// из чего она собрана (журнал, сеть, рецепт). Без неё клиенту нечего
 	// подставить в /worlds/{v}/... — ровно тот следующий запрос, ради
@@ -340,6 +351,7 @@ func (a *regionAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			MaxLevel:      reg.Rule.MaxLevel,
 			AxisStepM:     terrain.AxisStepM,
 		},
+		Ground: chunk.Ground,
 		Domain: reg.Domain,
 		Frame:  frameJSON(reg.Frame),
 	}

@@ -50,9 +50,12 @@ const TESS_MAX_ANG_RAD := 0.05
 ## — его свойство (Driver.EYE_H = 1.66 над подошвой), а не свойство камеры. Две
 ## копии одного числа разошлись бы при первой же правке роста.
 
-## Порог сомкнутости, ниже которого трава не появляется вовсе, перенесён в
-## grass_field.gd (GrassField.GRASS_MIN_CLOSURE) вместе со всей травой — она
-## живёт поколениями, и растительность пользуется числом поля.
+## Порог сомкнутости, ниже которого трава не появляется вовсе, УЕХАЛ НА СЕРВЕР
+## 2026-08-18 (`ground` в манифесте, GroundRule). До того он кочевал по клиенту:
+## сперва жил здесь, потом «перенесён в grass_field.gd вместе со всей травой», а
+## на деле остался в обоих местах и завёлся в третьем — тут же, в посеве по
+## чанку. Три копии одного правила мира, и переезд между файлами их не убавлял, а
+## плодил: правило мира не имеет в клиенте правильного места.
 
 ## ТРАВА САЖАЕТСЯ ВОКРУГ ТОЧКИ ВЗГЛЯДА, А НЕ ПО ВСЕЙ ЗАГРУЖЕННОЙ ЗЕМЛЕ.
 ##
@@ -145,7 +148,7 @@ const BUFFER_STOP_LENGTH_RATIO := 0.33
 ## дважды. Теперь расхождение имён — ОТКАЗ на экране, а не тихий ноль:
 ## пропавшее известное поле кричит, а незнакомое новое называется отдельно.
 const MANIFEST_FIELDS := ["region", "epoch", "revision", "network_model_hash", "network_hash",
-	"chunks", "projection_head"]
+	"chunks", "ground", "projection_head"]
 const NETWORK_FIELDS := ["region", "revision", "elements", "structures", "track_types",
 	"construction_runs", "features", "placement_algorithm"]
 const ELEMENT_FIELDS := ["id", "name", "kind", "start", "primitives", "profile", "role"]
@@ -929,6 +932,23 @@ func _load_world() -> void:
 		_refresh_ui()
 		return
 	stats["rule"] = rule.rule_text()
+
+	# ПРАВИЛО ЗЕМЛИ — вторым правилом манифеста и по тому же закону, что первое:
+	# без него нельзя нарисовать ПЕРВЫЙ же чанк, не выдумав порога. До 2026-08-18
+	# пороги были константами клиента, и решение s6v (п. 6), требовавшее их в
+	# контракте, полтора месяца стояло невыполненным.
+	var ground_raw: Dictionary = man.get("ground", {}) as Dictionary
+	var ground := GroundRule.from_manifest(ground_raw)
+	var ground_missing := ground.missing(ground_raw)
+	if not ground_missing.is_empty():
+		_fail("манифест не содержит правила земли: нет полей %s — где кончается луг и начинается осыпь, неизвестно"
+			% ", ".join(ground_missing))
+		_refresh_ui()
+		return
+	TerrainMesh.ground = ground
+	stats["ground_rule"] = "осыпь %.2f…%.2f, трава от сомкнутости %d, без низового яруса: %s" % [
+		ground.scarp_slope_lo, ground.scarp_slope_hi, ground.grass_min_closure,
+		str(ground.no_understory)]
 
 	# ДАЛЬНОСТЬ ВЗГЛЯДА НАЗНАЧАЕТСЯ ЗДЕСЬ, и с этой строки правило знает не
 	# только что сервер хранит, но и сколько у него спросят. Просьба переводится
@@ -2792,8 +2812,8 @@ func _load_terrain(rule: ChunkRule, axis: PackedVector2Array, bbox: Rect2) -> vo
 	# вовсе, и это надо видеть числом, а не искать глазами на снимке.
 	stats["steep_vertices"] = steep
 	stats["steep_share"] = float(steep) / maxf(1.0, float(verts))
-	stats["steep_rule"] = "уклон %.2f…%.2f (решение художника)" % [
-		TerrainMesh.SCARP_SLOPE_LO, TerrainMesh.SCARP_SLOPE_HI]
+	stats["steep_rule"] = "уклон %.2f…%.2f (правило земли, манифест)" % [
+		TerrainMesh.ground.scarp_slope_lo, TerrainMesh.ground.scarp_slope_hi]
 	stats["decode_usec_total"] = decode_usec
 	stats["decode_usec_per_chunk"] = float(decode_usec) / maxf(1.0, float(got))
 	stats["decode_ns_per_sample"] = float(decode_usec) * 1000.0 / maxf(1.0,
@@ -4312,9 +4332,7 @@ func _veg_tile(state: Dictionary, g: Dictionary, ballast: Dictionary) -> void:
 			var packed := cover[k]
 			var cls := packed >> 4
 			var closure := packed & 0x0f
-			if closure < GrassFieldScript.GRASS_MIN_CLOSURE:
-				continue
-			if cls == TerrainMesh.SURFACE_SAND or cls == TerrainMesh.SURFACE_BARE_SOIL:
+			if not TerrainMesh.ground.grassy_enough(cls, closure):
 				continue
 			# Ячейка со стволом травой не засевается: под елью её не видно, а
 			# пучков она стоит столько же.

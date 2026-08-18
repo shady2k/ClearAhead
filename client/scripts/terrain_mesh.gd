@@ -37,18 +37,26 @@ extends RefCounted
 ## (медиана 0.087, 90-й процентиль 0.144, а откосы земляных работ сервера — 1:1.5,
 ## то есть ровно 0.667): полка ниже 0.20 остаётся ровной, а срез под путём
 ## наливается грунтом полностью.
-## ПОРОГИ ПОДНЯТЫ ДО СПАЙКОВЫХ 2026-08-12, после сличения с запущенным эталоном.
-## Стояло 0.20…0.50 — ВТРОЕ раньше, чем у спайка (`SCARP_SLOPE 0.62`, полнота на
-## 1.03). Прежний довод «полка ниже 0.20 остаётся ровной» опирался на замер
-## уклонов (медиана 0.087, 90-й процентиль 0.144) и потому казался безопасным:
-## числом покрашено и правда мало, 0.6 % вершин. Но красились при этом не откосы,
-## а ПОДЪЁМЫ ПРИРОДНОЙ ЗЕМЛИ, и на кадре это добавляло бурого там, где у эталона
-## ровный луг. Откосы земляных работ (1:1.5, то есть 0.667) в новый порог
-## по-прежнему попадают — ради них он и заведён.
-const SCARP_SLOPE_LO := 0.62
-const SCARP_SLOPE_HI := 1.03
+## ПОРОГИ УЕХАЛИ НА СЕРВЕР 2026-08-18 и стали `ground` в манифесте региона
+## (GroundRule, разбор — там и в server/internal/chunk/ground.go). Здесь стояли
+## SCARP_SLOPE_LO = 0.62 и SCARP_SLOPE_HI = 1.03.
+##
+## ОТМЕНЁН И ДОВОД ВЫШЕ. Написанное над этой строкой — «оба порога и оба цвета —
+## решение художника, второй клиент вправе взять другие, и мир от этого не
+## изменится» — верно ровно наполовину, и неверная половина стоила полутора
+## месяцев: решение ClearAhead-s6v (п. 6) требовало порог в контракте, а клиент
+## рядом объяснял, почему порогу место здесь. Цвет остаётся художнику. Порог
+## говорит, ГДЕ кончается луг, — это факт о месте, и два клиента с разными
+## порогами покажут разный мир, а не разный вкус.
+##
+## Замер, которым числа выбраны, не выброшен, а переехал вместе с ними: он в
+## chunk.Ground, в шапке `Откуда числа`.
 ## Потолок подмешки грунта на крутизне: даже отвесный срез не вытесняет покров
 ## целиком. Тот же приём и то же число, что у трёх подмешек класса ниже.
+## ПРАВИЛО ЗЕМЛИ, поставленное миром из манифеста. Пока не поставлено, build
+## отказывает: рисовать «как обычно» значило бы вернуть сюда своё число.
+static var ground: GroundRule = null
+
 const SCARP_TINT_MAX := 0.90
 const C_GROUND := Color(0.62, 0.62, 0.60)
 const C_SCARP := Color(0.44, 0.37, 0.26)
@@ -112,7 +120,10 @@ const C_NO_CLOSURE := COVER_COLOURS[SURFACE_BARE_SOIL]
 ## `return chunk.SurfaceSand, 0`).
 ##
 ## Ноль здесь означает «вопрос неприменим», а не «травы нет совсем мало».
-const NO_UNDERSTORY := [SURFACE_SAND, SURFACE_BARE_SOIL]
+## ГДЕ НИЗОВОГО ЯРУСА НЕТ — тоже с сервера (`ground.no_understory`), с
+## 2026-08-18. Здесь стоял свой список [SURFACE_SAND, SURFACE_BARE_SOIL], и
+## второй его экземпляр жил в grass_field.gd отдельным `if` по тем же двум
+## классам: одно правило мира, написанное в клиенте дважды.
 
 
 ## cover_colour — цвет по классу и сомкнутости.
@@ -192,7 +203,7 @@ static func cover_colour(cover_class: int, closure: int, tone: float = 1.0) -> C
 	# Плешины низового покрова — поверх любого класса и с тем же потолком. У песка
 	# и голой почвы сомкнутость не определена (NO_UNDERSTORY), и второй раз
 	# подмешивать грунт им нечем: вопрос неприменим, а не «травы совсем мало».
-	if not (cover_class in NO_UNDERSTORY):
+	if ground.has_understory(cover_class):
 		var bare := (1.0 - clampf(float(closure) / 15.0, 0.0, 1.0)) * BARE_TINT
 		c = c.lerp(COVER_COLOURS[SURFACE_BARE_SOIL], bare)
 	return c
@@ -232,7 +243,7 @@ static func cover_grassy(cover_class: int, closure: int, scarp: float) -> float:
 	# Плешины низового покрова — поверх любого класса. У песка и голой почвы
 	# сомкнутость не определена (NO_UNDERSTORY), второй раз их гасить нечем.
 	var bare := 0.0
-	if not (cover_class in NO_UNDERSTORY):
+	if ground.has_understory(cover_class):
 		bare = (1.0 - clampf(float(closure) / 15.0, 0.0, 1.0)) * BARE_TINT
 	return clampf((1.0 - displaced) * (1.0 - bare), 0.0, 1.0)
 
@@ -250,8 +261,7 @@ static func cover_grassy(cover_class: int, closure: int, scarp: float) -> float:
 ## над присланным, каким была: обнажённый грунт на срезе не отменяется тем, что
 ## по паспорту здесь луг.
 static func slope_colour(slope: float, base: Color = C_GROUND) -> Color:
-	var t := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO), 0.0, 1.0)
-	return base.lerp(C_SCARP, t * SCARP_TINT_MAX)
+	return base.lerp(C_SCARP, ground.scarp_at(slope) * SCARP_TINT_MAX)
 
 
 ## decode — ТЕЛО ЧАНКА В ОТСЧЁТЫ, и больше ничего.
@@ -377,6 +387,11 @@ static func sag(h: PackedFloat32Array, n: int, stride: int) -> float:
 static func build(h: PackedFloat32Array, base_z_m: float, level: int, cx: int, cz: int, rule: ChunkRule,
 		cover: PackedByteArray = PackedByteArray(),
 		quadrant: int = -1, skirt_m: float = 0.0) -> Dictionary:
+	# ПРАВИЛО ЗЕМЛИ ОБЯЗАНО БЫТЬ ПОСТАВЛЕНО. Отказ, а не «нарисуем как обычно»:
+	# умолчание здесь неотличимо от исправной работы — земля выйдет правдоподобной
+	# и неверной, и искать это пришлось бы глазами на снимке.
+	if ground == null:
+		return {"ok": false, "error": "правило земли не поставлено: TerrainMesh.ground пуст"}
 	var n := rule.samples
 	var count := n * n
 	if h.size() != count:
@@ -501,8 +516,7 @@ static func build_band(h: PackedFloat32Array, base_z_m: float, level: int, cx: i
 			# полю не нужен, а правило названо в шапке.
 			var slope := sqrt(dzdx * dzdx + dzdy * dzdy)
 			var base := C_GROUND
-			var scarp := clampf((slope - SCARP_SLOPE_LO) / (SCARP_SLOPE_HI - SCARP_SLOPE_LO),
-				0.0, 1.0) * SCARP_TINT_MAX
+			var scarp := ground.scarp_at(slope) * SCARP_TINT_MAX
 			var grassy := 0.0
 			if has_cover:
 				var ci := mini(i, cover_cells - 1)
@@ -515,7 +529,7 @@ static func build_band(h: PackedFloat32Array, base_z_m: float, level: int, cx: i
 			var c := slope_colour(slope, base).srgb_to_linear()
 			c.a = grassy
 			cols.append(c)
-			if slope >= SCARP_SLOPE_LO:
+			if slope >= ground.scarp_slope_lo:
 				steep += 1
 	var face := PackedVector3Array()
 	face.resize((j_hi - j_lo) * (i1 - i0) * 6)
