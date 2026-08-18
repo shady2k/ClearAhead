@@ -99,40 +99,149 @@ func (w *World) Advance(m *match.Match, dt units.SimTime) error {
 	// ней поедут. Обратный порядок дал бы машину, прошедшую по стрелке за миг до
 	// того, как остряк встал.
 	m.AdvanceTurnouts(dt)
-	for _, u := range m.Units {
-		if err := w.advanceUnit(m, u, dt); err != nil {
+	// ДВИЖУТСЯ СЦЕПЫ, А НЕ ЕДИНИЦЫ. Одиночная машина — сцеп из одной (В4,
+	// match/consist.go): второго пути «единица сама по себе» нет нарочно, иначе
+	// сцепка меняла бы не связь между машинами, а способ их считать.
+	for _, c := range m.Consists {
+		if err := w.advanceConsist(m, c, dt); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// advanceUnit двигает одну машину.
-func (w *World) advanceUnit(m *match.Match, u match.Unit, dt units.SimTime) error {
-	mo, ok := m.MotionOf(u.ID)
-	if !ok {
-		// Единица без состояния физики — не поломка: так выглядит то, что не
-		// катится вовсе. Сегодня таких нет, но заводить их будут не здесь.
-		return nil
-	}
-	st, ok := w.set.StockType(u.Type)
-	if !ok {
-		return fmt.Errorf("sim: единица %s: тип %s исчез из набора", u.ID, u.Type)
-	}
-	loco, isLoco := st.Locomotive()
-	controls, hasControls := m.ControlsOf(u.ID)
-	if !isLoco || !hasControls || st.Controls == nil {
-		// Вагон катится только когда его толкают, а толкать сегодня нечем:
-		// сцепов нет (В4). Стоящий вагон — законное состояние, а не пропуск.
-		return nil
-	}
+// member — единица сцепа со всем, что нужно её посчитать: паспорт, состояние
+// физики, органы, пневматика, позиция контроллера.
+//
+// Собирается ОДИН РАЗ на тик, а не на каждом подшаге: паспорт и органы за тик не
+// меняются, а искать их пять раз по картам партии значило бы платить за это в
+// горячем пути.
+type member struct {
+	mem  match.Member
+	unit match.Unit
+	st   content.StockType
+	// loco — паспорт в домене. У машины с грузом это паспорт ПРИ ЭТОМ ГРУЗЕ:
+	// масса, сопротивление и тормозное нажатие у гружёного вагона другие
+	// (content.StockType.AtLoad), и взять здесь порожний значило бы возить
+	// семьдесят тонн бесплатно.
+	loco physics.Locomotive
+	mo   match.Motion
 
-	// ПОДШАГИ. Остаток тика, не делящийся на шаг, доезжает последним подшагом:
-	// выбросить его значило бы терять модельное время, а мир, теряющий время,
-	// перестаёт быть воспроизводимым.
-	air, hasAir := st.AirBrake()
-	state, hasState := m.AirOf(u.ID)
-	notch, hasNotch := m.NotchOf(u.ID)
+	controls    match.Controls
+	hasControls bool
+	air         brake.Spec
+	hasAir      bool
+	state       brake.State
+	hasState    bool
+	notch       int
+	hasNotch    bool
+	// dirU — знак, переводящий ход сцепа B → A в рост u ПОД ЭТОЙ ЕДИНИЦЕЙ.
+	// Пересчитывается после каждого движения: ось под единицей переворачивается
+	// на встречном элементе.
+	dirU int64
+}
+
+// gather собирает членов сцепа. Единица без состояния физики пропускается — так
+// выглядит то, что не катится вовсе.
+func (w *World) gather(m *match.Match, c match.Consist) ([]*member, error) {
+	out := make([]*member, 0, len(c.Members))
+	for _, mem := range c.Members {
+		u, ok := m.UnitOf(mem.UnitID)
+		if !ok {
+			return nil, fmt.Errorf("sim: сцеп %s: единицы %s в партии нет", c.ID, mem.UnitID)
+		}
+		mo, ok := m.MotionOf(u.ID)
+		if !ok {
+			continue
+		}
+		st, ok := w.set.StockType(u.Type)
+		if !ok {
+			return nil, fmt.Errorf("sim: единица %s: тип %s исчез из набора", u.ID, u.Type)
+		}
+		loco, err := passportAt(st, u)
+		if err != nil {
+			return nil, err
+		}
+		e := &member{mem: mem, unit: u, st: st, loco: loco, mo: mo}
+		e.controls, e.hasControls = m.ControlsOf(u.ID)
+		e.air, e.hasAir = st.AirBrake()
+		e.state, e.hasState = m.AirOf(u.ID)
+		e.notch, e.hasNotch = m.NotchOf(u.ID)
+		e.dirU = dirU(mem, mo.Facing)
+		out = append(out, e)
+	}
+	return out, nil
+}
+
+// passportAt — паспорт единицы в домене с учётом её груза.
+func passportAt(st content.StockType, u match.Unit) (physics.Locomotive, error) {
+	if _, freighted := st.Freighted(); !freighted || u.LoadT == nil {
+		loco, _ := st.Locomotive()
+		return loco, nil
+	}
+	loco, err := st.AtLoad(*u.LoadT)
+	if err != nil {
+		return physics.Locomotive{}, fmt.Errorf("sim: единица %s: %w", u.ID, err)
+	}
+	return loco, nil
+}
+
+// dirA — знак, которым ход сцепа B → A ложится на СОБСТВЕННУЮ ось единицы
+// (её ход B → A). Здесь только поворот в сцепе: ось единицы не зависит от того,
+// каким элементом она сегодня накрыта.
+//
+// Отдельно от dirU НЕ ради симметрии, а потому что это разные вопросы, и
+// смешать их стоило часа: наращивание отрезка (track.Span.GrowA) работает в
+// оси ЕДИНИЦЫ, а силы и скорость — в росте u ЭЛЕМЕНТА. Подставь один знак
+// вместо другого — и машина, стоящая против роста u, поедет не в ту сторону.
+func dirA(mem match.Member) units.Distance {
+	if mem.Flipped {
+		return -1
+	}
+	return 1
+}
+
+// dirU — знак, которым ход сцепа B → A ложится на рост u под единицей.
+//
+// Два переворота, и оба обязательны: поворот единицы В СЦЕПЕ (её назначает
+// сцепка и он не меняется до расцепки) и поворот единицы НА ЭЛЕМЕНТЕ (его
+// меняет всякий въезд на встречный элемент). Разбор — у match.Consist.UnitSpeed,
+// где та же пара знаков переводит скорость.
+func dirU(mem match.Member, facing netloc.Direction) int64 {
+	d := int64(1)
+	if mem.Flipped {
+		d = -d
+	}
+	if facing == netloc.DirReverse {
+		d = -d
+	}
+	return d
+}
+
+// advanceConsist двигает один сцеп.
+//
+// # Почему шаг общий, а силы по единицам
+//
+// Сцеп жёсток: расстояние между сцепленными машинами не меняется, значит
+// скорость у них одна и пройденный путь один. А вот СИЛЫ у каждой свои, и
+// сложить их иначе как по единицам нельзя: у стометрового состава голова уже на
+// подъёме, хвост ещё на площадке, а середина в кривой, которой не касаются
+// концы. «Средний уклон под составом» пришлось бы выдумать.
+//
+// Отсюда порядок подшага: пневматика и контроллеры — по единицам, силы — по
+// единицам, сложение — одно, ускорение — одно, движение — всем на одну и ту же
+// величину.
+func (w *World) advanceConsist(m *match.Match, c match.Consist, dt units.SimTime) error {
+	ms, err := w.gather(m, c)
+	if err != nil {
+		return err
+	}
+	if len(ms) == 0 {
+		return nil
+	}
+	// СТОЯЩИЙ СЦЕП БЕЗ ТЯГИ И БЕЗ УКЛОНА НИКУДА НЕ ДЕНЕТСЯ, но проверять это
+	// здесь нельзя: уклон толкает и стоящего, а тормоз держит. Поэтому шаг
+	// делается всегда, а дешевизна берётся тем, что интегратор не аллоцирует.
 
 	left := dt
 	for left > 0 {
@@ -140,32 +249,36 @@ func (w *World) advanceUnit(m *match.Match, u match.Unit, dt units.SimTime) erro
 		if left < step {
 			step = left
 		}
-		// ПНЕВМАТИКА — ПЕРВОЙ В ПОДШАГЕ, и порядок здесь не безразличен: тормозная
-		// сила берётся из давления цилиндра, а оно меняется этим же подшагом.
-		// Посчитай силу раньше — и тормоз отставал бы на шаг от собственной
-		// причины, то есть на 20 мс от каждого движения ручки.
-		if hasAir && hasState {
-			state = brake.Step(state, air, controls.Handle, controls.Independent, step)
-		}
-		// КОНТРОЛЛЕР ИДЁТ К ЗАДАНИЮ СВОИМ ТЕМПОМ — тоже до сил, и по той же
-		// причине, что пневматика: сила тяги берётся из ПОЗИЦИИ, а она меняется
-		// этим же подшагом.
-		if hasNotch {
-			notch = stepNotch(notch, controls.Traction, st, step)
+		for _, e := range ms {
+			// ПНЕВМАТИКА — ПЕРВОЙ В ПОДШАГЕ, и порядок здесь не безразличен:
+			// тормозная сила берётся из давления цилиндра, а оно меняется этим же
+			// подшагом. Посчитай силу раньше — и тормоз отставал бы на шаг от
+			// собственной причины, то есть на 20 мс от каждого движения ручки.
+			if e.hasAir && e.hasState {
+				e.state = brake.Step(e.state, e.air, e.controls.Handle, e.controls.Independent, step)
+			}
+			// КОНТРОЛЛЕР ИДЁТ К ЗАДАНИЮ СВОИМ ТЕМПОМ — тоже до сил, и по той же
+			// причине, что пневматика.
+			if e.hasNotch {
+				e.notch = stepNotch(e.notch, e.controls.Traction, e.st, step)
+			}
 		}
 		var err error
-		mo, err = w.integrate(m, u, st, loco, controls, state, notch, mo, step)
+		c, err = w.integrate(m, c, ms, step)
 		if err != nil {
 			return err
 		}
 		left -= step
 	}
-	m.SetMotion(u.ID, mo)
-	if hasAir && hasState {
-		m.SetAir(u.ID, state)
-	}
-	if hasNotch {
-		m.SetNotch(u.ID, notch)
+	m.SetConsist(c)
+	for _, e := range ms {
+		m.SetMotion(e.unit.ID, e.mo)
+		if e.hasAir && e.hasState {
+			m.SetAir(e.unit.ID, e.state)
+		}
+		if e.hasNotch {
+			m.SetNotch(e.unit.ID, e.notch)
+		}
 	}
 	return nil
 }
@@ -205,50 +318,83 @@ func stepNotch(milli, want int, st content.StockType, dt units.SimTime) int {
 	return max(milli-step, target)
 }
 
-// integrate — один шаг физики.
-func (w *World) integrate(m *match.Match, u match.Unit, st content.StockType,
-	loco physics.Locomotive, c match.Controls, air brake.State, notchMilli int,
-	mo match.Motion, dt units.SimTime) (match.Motion, error) {
-	el, ok := w.net.Elements[mo.Element]
-	if !ok {
-		return mo, fmt.Errorf("sim: единица %s: элемента %s нет в сети", u.ID, mo.Element)
+// integrate — ОДИН ШАГ ФИЗИКИ СЦЕПА: сложить силы, получить одно ускорение,
+// пройти один путь.
+//
+// # Что складывается и в какой системе отсчёта
+//
+// Силы каждой единицы считаются вдоль роста u ЕЁ элемента (forces), а
+// складываются вдоль хода СЦЕПА B → A: множитель dirU и есть перевод между
+// ними. Без него локомотив, стоящий в составе задом, вычитался бы вместо того
+// чтобы прибавляться, — и состав с двумя одинаковыми машинами по концам не
+// тронулся бы вовсе.
+//
+// # Предел скорости — по САМОЙ ТИХОХОДНОЙ машине состава
+//
+// Конструкционная скорость есть предел прочности экипажной части, и он у
+// каждой машины свой; состав идёт по меньшему. Взять предел локомотива значило
+// бы разогнать порожний полувагон до ста десяти.
+func (w *World) integrate(m *match.Match, c match.Consist, ms []*member, dt units.SimTime) (match.Consist, error) {
+	var total units.Force
+	var mass units.Mass
+	maxSpeed := units.Speed(0)
+	traction := false
+
+	for _, e := range ms {
+		el, ok := w.net.Elements[e.mo.Element]
+		if !ok {
+			return c, fmt.Errorf("sim: единица %s: элемента %s нет в сети", e.unit.ID, e.mo.Element)
+		}
+		grade, radius, err := el.AlignmentAt(e.mo.S)
+		if err != nil {
+			return c, fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
+		}
+		// СКОРОСТЬ ЕДИНИЦЫ — СЛЕДСТВИЕ СКОРОСТИ СЦЕПА. Пишется здесь, до сил,
+		// потому что силы её и спрашивают: тормоз и сопротивление направлены
+		// против движения, а тяга зависит от того, как быстро машина уходит от
+		// собственной характеристики.
+		e.mo.Speed = c.UnitSpeed(e.mem, e.mo.Facing)
+		force, slipping := w.forces(e, grade, radius)
+		e.mo.Slipping = slipping
+		total += units.Force(e.dirU) * force
+		mass += e.loco.Mass
+		if maxSpeed == 0 || e.loco.MaxSpeed < maxSpeed {
+			maxSpeed = e.loco.MaxSpeed
+		}
+		if e.notch > 0 && e.controls.Reverser != match.ReverserNeutral {
+			traction = true
+		}
 	}
-	grade, radius, err := el.AlignmentAt(mo.S)
-	if err != nil {
-		return mo, fmt.Errorf("sim: единица %s: %w", u.ID, err)
+	if mass <= 0 {
+		return c, fmt.Errorf("sim: сцеп %s: суммарная масса %d — делить не на что", c.ID, mass)
 	}
 
-	speed := mo.Speed
-	force, slipping := w.forces(loco, st, c, air, notchMilli, mo, grade, radius)
-	mo.Slipping = slipping
-
+	speed := c.Speed
 	// Δv = F·dt/m. Единицы сходятся сами: ньютон на килограмм — это м/с², а
 	// микрометры в секунду на микросекунду — те же м/с². Множителей нет и не
 	// нужно, и это довод в пользу выбранных шкал, а не совпадение.
-	dv := units.Speed(divRound(int64(force)*int64(dt), int64(loco.Mass)))
-	next := speed + dv
+	next := speed + units.Speed(divRound(int64(total)*int64(dt), int64(mass)))
 
 	// ТОРМОЗ НЕ УМЕЕТ ПОЕХАТЬ НАЗАД. Если за шаг сила сменила знак скорости, а
-	// тяги нет, машина ОСТАНОВИЛАСЬ: продолжать интегрировать значило бы
-	// разогнать её обратно тормозом, и на длинном стоянии она поехала бы сама.
-	if speed != 0 && sign(next) != sign(speed) && c.Traction == 0 {
+	// тяги нет ни у одной машины состава, сцеп ОСТАНОВИЛСЯ: продолжать
+	// интегрировать значило бы разогнать его обратно тормозом, и на длинном
+	// стоянии он поехал бы сам.
+	if speed != 0 && sign(next) != sign(speed) && !traction {
 		next = 0
 	}
-	// Конструкционная скорость — предел машины, а не предел мира: превысить её
-	// физика не даёт, потому что паспорт не даёт.
-	if next > loco.MaxSpeed {
-		next = loco.MaxSpeed
+	if next > maxSpeed {
+		next = maxSpeed
 	}
-	if next < -loco.MaxSpeed {
-		next = -loco.MaxSpeed
+	if next < -maxSpeed {
+		next = -maxSpeed
 	}
 
 	// Путь считается по СРЕДНЕЙ скорости шага, а не по конечной: при постоянном
 	// ускорении это точное решение, а не приближение, и стоит оно одного
 	// сложения.
 	ds := units.Distance(divRound((int64(speed)+int64(next))*int64(dt), 2*int64(units.Second)))
-	mo.Speed = next
-	return w.move(m, u, mo, ds)
+	c.Speed = next
+	return w.move(m, c, ms, ds)
 }
 
 // forces — сумма сил вдоль РОСТА u элемента.
@@ -264,11 +410,14 @@ func (w *World) integrate(m *match.Match, u match.Unit, st content.StockType,
 //	           physics.Resist складывает все три, считая, что едут вперёд, и на
 //	           заднем ходу знак уклона перевернулся бы вместе с остальными — то
 //	           есть машина катилась бы в горку сама.
-func (w *World) forces(loco physics.Locomotive, st content.StockType, c match.Controls,
-	air brake.State, notchMilli int, mo match.Motion, grade int64,
-	radius units.Distance) (units.Force, bool) {
+func (w *World) forces(e *member, grade int64, radius units.Distance) (units.Force, bool) {
 	var total units.Force
 	var slipping bool
+	// Локальные имена — чтобы тело функции осталось прежним: оно не про сцеп, а
+	// про ОДНУ машину, и таким и должно быть. Сложение по составу живёт этажом
+	// выше (integrate), и смешивать их в одном теле значило бы получить функцию,
+	// у которой два предмета.
+	loco, st, c, air, notchMilli, mo := e.loco, e.st, e.controls, e.state, e.notch, e.mo
 
 	// ТЯГА. Направление: куда смотрит машина на этом элементе, помноженное на
 	// реверсор. Нулевой реверсор тяги не даёт вовсе — цепь не собрана, и это
@@ -346,72 +495,93 @@ func (w *World) forces(loco physics.Locomotive, st content.StockType, c match.Co
 // не там, где середина.
 //
 // Цена слепоты платилась у упора: конец машины ловился через ПОЛДЛИНЫ от точки
-// отсчёта. Для одиночного локомотива это совпадало с правдой, для состава — нет,
-// и приближение было объявлено вслух («у длинного состава конец окажется не
-// там»). Приближения больше нет: у машины есть отрезок, и в упор встаёт тот его
-// конец, который до упора дошёл, — независимо от того, где середина и сколько
-// элементов тело накрывает.
+// отсчёта. Для одиночного локомотива это совпадало с правдой, для состава — нет.
+// Приближения больше нет: у машины есть отрезок, и в упор встаёт тот его конец,
+// который до упора дошёл.
 //
 // # Переход по-прежнему отдан ПОРТУ, а не координате
 //
 // Конец элемента — это порт, и в нём сходится то, что сходится. Смотреть на
 // «следующий элемент по списку» нельзя: у стрелки их два, и какой из них
-// следующий, решает положение остряка. Спрашивает теперь наращивание отрезка
+// следующий, решает положение остряка. Спрашивает наращивание отрезка
 // (track.Span.GrowA) — и ЗАПИСЫВАЕТ ответ визитом: переставленный после этого
 // остряк пути, по которому тело уже проехало, не меняет.
 //
-// # Остаток пути не теряется, и теперь это не про перенос
+// # СЦЕП ДВИГАЕТСЯ ЦЕЛИКОМ ИЛИ НЕ ДВИГАЕТСЯ ВОВСЕ (В4)
 //
-// Прежняя петля переносила остаток вручную и могла его потерять. Наращивание
-// отрезка идёт по расстоянию: сколько просили, столько и прошли, а границы
-// элементов внутри — его забота. Терять нечего.
-func (w *World) move(m *match.Match, u match.Unit, mo match.Motion, ds units.Distance) (match.Motion, error) {
+// Двигать членов по очереди нельзя ни в каком порядке. Двинь хвост первым — он
+// упрётся в собственную голову; двинь голову — она уедет от хвоста, и в тот миг,
+// когда мир посмотрят (а его смотрят между подшагами), состав окажется
+// разорванным. Поэтому два прохода: сначала СПРАШИВАЕМ у каждого, сколько он
+// может пройти, берём МЕНЬШЕЕ, и только потом двигаем всех на него. Меньшее и
+// есть физика сцепа: упор под головой останавливает весь состав, включая тот
+// хвост, перед которым пути ещё километр.
+func (w *World) move(m *match.Match, c match.Consist, ms []*member, ds units.Distance) (match.Consist, error) {
 	if ds == 0 {
-		return mo, nil
+		return c, nil
 	}
-	// ЗНАК ВДОЛЬ СОБСТВЕННОЙ ОСИ МАШИНЫ (ход B → A). Facing — направление того
-	// визита, в котором лежит точка отсчёта, то есть ровно ответ на вопрос
-	// «совпадает ли здесь рост u с ходом B → A».
-	dA := ds
-	if mo.Facing == netloc.DirReverse {
-		dA = -ds
+	// ПЕРВЫЙ ПРОХОД: сколько может каждый. Отрезки-кандидаты сохраняются — при
+	// свободном пути второго счёта не будет вовсе, а это обычный случай.
+	cand := make([]track.Span, len(ms))
+	limit := abs(ds)
+	for i, e := range ms {
+		sp, moved, err := w.slide(m, c, e, dirA(e.mem)*ds)
+		if err != nil {
+			return c, err
+		}
+		cand[i] = sp
+		if moved < limit {
+			limit = moved
+		}
 	}
-	sp, moved, err := w.slide(m, u, mo.Span, dA)
-	if err != nil {
-		return mo, err
+	if limit == 0 {
+		// Никто не сдвинулся: упор, край карты, стрелка не по ходу или чужое
+		// тело. Для физики это одно и то же — сцеп встал.
+		c.Speed = 0
+		return c, nil
 	}
-	if moved != abs(dA) {
-		// УПОР либо ЧУЖОЙ ОТРЕЗОК. Дальше пути нет — тупик, край карты, стрелка
-		// не по нашему ходу или стоящее впереди тело. Скорость гасится:
-		// продолжать движение значило бы ехать сквозь то, чего нет или чего
-		// трогать нельзя.
-		//
-		// Четыре события сведены в одно НАРОЧНО, как и раньше у обхода портов:
-		// для физики это одно и то же — тело встаёт. Рассказывать о них игроку
-		// будет тот, кто станет рассказывать (ClearAhead-yqbv), и по своим
-		// данным, а не по этой ветке.
-		mo.Speed = 0
+	if limit < abs(ds) {
+		// ВТОРОЙ ПРОХОД нужен только когда кто-то уткнулся: остальные обязаны
+		// пройти столько же, сколько он, а не столько, сколько могли.
+		c.Speed = 0
+		short := units.Distance(sign64(int64(ds))) * limit
+		for i, e := range ms {
+			sp, _, err := w.slide(m, c, e, dirA(e.mem)*short)
+			if err != nil {
+				return c, err
+			}
+			cand[i] = sp
+		}
 	}
-	if moved == 0 {
-		return mo, nil
+	// ПРИМЕНЕНИЕ — отдельным проходом, после того как все кандидаты посчитаны:
+	// пока считаем, мир не меняется, и ни один член не видит соседа наполовину
+	// переехавшим.
+	for i, e := range ms {
+		if len(cand[i]) == 0 {
+			continue
+		}
+		if err := e.mo.SetSpan(cand[i]); err != nil {
+			return c, fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
+		}
+		// Ось под единицей могла перевернуться (встречный элемент). Знак её
+		// скорости — следствие скорости сцепа, и пересчитывается он вместе с
+		// направлением, а не переворачивается вручную: сцеп едет как ехал,
+		// перевернулась координата под машиной.
+		e.dirU = dirU(e.mem, e.mo.Facing)
+		e.mo.Speed = c.UnitSpeed(e.mem, e.mo.Facing)
 	}
-	facingBefore := mo.Facing
-	if err := mo.SetSpan(sp); err != nil {
-		return mo, fmt.Errorf("sim: единица %s: %w", u.ID, err)
+	return c, nil
+}
+
+// sign64 — знак целого: ±1, ноль даёт ноль.
+func sign64(v int64) int64 {
+	switch {
+	case v > 0:
+		return 1
+	case v < 0:
+		return -1
 	}
-	if mo.Facing != facingBefore {
-		// Оси элементов встречны: машина едет так же, а координата под точкой
-		// отсчёта перевернулась — вместе с ней переворачивается и знак скорости.
-		//
-		// Здесь была ошибка, и её поймал тест стрелки: знак переворачивался
-		// всякий раз при входе концом, а не тогда, когда перевернулась ось.
-		// Машина разворачивалась на месте и уезжала обратно к упору
-		// (TestTurnoutDecidesTheBranch показал её на 230 м вместо стрелки).
-		// Теперь переворот привязан к тому, что и вправду перевернулось: к
-		// направлению визита под точкой отсчёта.
-		mo.Speed = -mo.Speed
-	}
-	return mo, nil
+	return 0
 }
 
 // slide — сдвинуть отрезок на dA вдоль хода B → A (знак значим).
@@ -425,10 +595,15 @@ func (w *World) move(m *match.Match, u match.Unit, mo match.Motion, ds units.Dis
 // границы и не сжимается у упора. Наращивание без усечения дало бы состав,
 // растущий с каждым тиком, — и это не выдумка про запас, а первое, что вышло бы
 // при перестановке двух строк.
-func (w *World) slide(m *match.Match, u match.Unit, sp track.Span, dA units.Distance) (track.Span, units.Distance, error) {
+func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Distance) (track.Span, units.Distance, error) {
+	u, sp := e.unit, e.mo.Span
 	walk := w.top.At(m.TurnoutAt)
 	toA := dA > 0
 	want := abs(dA)
+	// СВОИ ПРОПУСКАЮТСЯ ЦЕЛЫМ СЦЕПОМ, а не по одной единице: сцепленные машины
+	// стоят вплотную, и сосед по составу — не препятствие, а часть того же тела.
+	// Разбор — у match.ConflictExcept.
+	own := c.Has
 
 	// ГЕОМЕТРИЯ ПЕРВОЙ: сколько позволяет сама сеть.
 	cand, got, err := shift(sp, walk, toA, want)
@@ -438,7 +613,7 @@ func (w *World) slide(m *match.Match, u match.Unit, sp track.Span, dA units.Dist
 	if got == 0 {
 		return sp, 0, nil
 	}
-	if _, _, busy := m.Conflict(u.ID, cand); !busy {
+	if _, _, busy := m.ConflictExcept(own, cand); !busy {
 		return cand, got, nil
 	}
 
@@ -460,7 +635,7 @@ func (w *World) slide(m *match.Match, u match.Unit, sp track.Span, dA units.Dist
 		if err != nil {
 			return nil, 0, fmt.Errorf("sim: единица %s: %w", u.ID, err)
 		}
-		if _, _, b := m.Conflict(u.ID, try); b {
+		if _, _, b := m.ConflictExcept(own, try); b {
 			hi = mid
 			continue
 		}

@@ -151,6 +151,10 @@ func worldOn(t *testing.T, element string, u float64, facing netloc.Direction) (
 		t.Fatalf("начальное состояние: %v", err)
 	}
 	m.SetMotion(locoID, mo)
+	// СЦЕП ЗАВОДИТСЯ ВМЕСТЕ С МАШИНОЙ, как и в настоящей партии (match.place):
+	// движется сцеп, а не единица, и машина без сцепа никуда не поедет — это не
+	// придирка фикстуры, а тот самый инвариант В4.
+	m.SetConsist(match.Single(locoID))
 	m.Controls = map[string]match.Controls{locoID: match.StoppedWithAir()}
 	// ПНЕВМАТИКА ЗАВОДИТСЯ ЗАРЯЖЕННОЙ, как и в настоящей партии (match.Load):
 	// без неё магистраль пуста, распределитель держит полное нажатие, и машина
@@ -899,6 +903,7 @@ func slowWorld(t *testing.T, u float64) (*World, *match.Match) {
 		t.Fatalf("начальное состояние: %v", err)
 	}
 	m.SetMotion(locoID, mo)
+	m.SetConsist(match.Single(locoID))
 	m.Controls = map[string]match.Controls{locoID: match.StoppedWithAir()}
 	if st, ok := s.StockType("VL80"); ok {
 		if air, ok := st.AirBrake(); ok {

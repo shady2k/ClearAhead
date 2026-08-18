@@ -153,9 +153,24 @@ func (m *Match) RebuildOccupancy() Occupancy {
 // Отдаёт ССЫЛКУ и МЕСТО: отказ обязан называть, кто и где, а не только «занято».
 // Отказ, у которого нет места, заставляет искать его глазами по всей карте.
 func (m Match) Conflict(unitID string, sp track.Span) (OccupationRef, netloc.IntervalS, bool) {
+	return m.ConflictExcept(func(id string) bool { return id == unitID }, sp)
+}
+
+// ConflictExcept — то же, но пропускаются ВСЕ единицы, названные предикатом.
+//
+// Заведено сцепом (В4) и без него было бы формой без потребителя. Единицы
+// одного сцепа стоят вплотную и двигаются одним движением; спроси у каждой
+// «свободно ли впереди», пропуская только её саму, — и она упрётся в соседа по
+// собственному составу, то есть состав не тронется никогда. Пропускать надо
+// СЦЕП ЦЕЛИКОМ: внутри него взаимное положение задано сцепкой, а не занятостью,
+// и проверять там нечего.
+//
+// Предикатом, а не множеством: у сцепа единицы уже перечислены, и строить из
+// них map на каждом подшаге значило бы платить аллокацией в горячем пути.
+func (m Match) ConflictExcept(skip func(unitID string) bool, sp track.Span) (OccupationRef, netloc.IntervalS, bool) {
 	for _, iv := range sp {
 		for _, ref := range m.Occupied[iv.Element] {
-			if ref.Unit == unitID {
+			if skip(ref.Unit) {
 				continue
 			}
 			busy, ok := ref.Interval(m)
