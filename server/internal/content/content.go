@@ -115,6 +115,11 @@ func Load(dir string) (*Set, error) {
 	if err := set.loadModels(); err != nil {
 		return nil, err
 	}
+	// ГАБАРИТ СВЕРЯЕТСЯ ПОСЛЕ ОБОИХ, и порядок вынужденный: сверять тело с
+	// паспортом можно, только когда разобраны и паспорта, и тела.
+	if err := set.checkStockBodies(); err != nil {
+		return nil, err
+	}
 	set.Hash = set.digest()
 	return set, nil
 }
