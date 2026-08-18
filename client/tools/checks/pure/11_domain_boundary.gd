@@ -91,6 +91,10 @@ const CLIENT_OWNS := [
 	# Потолок хранения объявляет сервер, дальность взгляда — настройка клиента.
 	"GRASS_FAR", "GRASS_CHUNK", "GRASS_BUDGET_US", "GRASS_WARM", "GRASS_REPLAN",
 	"REBUILD_BUDGET_US", "FPS_PROBE_FRAMES", "CHANNEL_HELLO_WAIT_S",
+	# Слои тверди: какое тело кому мешает. Мир не знает о них ничего — сервер
+	# присылает габариты и отметки, а делёж «мир отдельно, тела отдельно» заведён
+	# ради камеры, то есть ради глаза игрока (разбор — у World.SOLID_LAYER_WORLD).
+	"SOLID_LAYER_WORLD", "SOLID_LAYER_BODY",
 	# Порядок слоёв в кадре: чем перекрывать что при совпадении отметок.
 	"PRIO_BALLAST", "PRIO_PLATFORM", "PRIO_SLEEPER", "PRIO_RAIL", "PRIO_LINE",
 	"PRIO_FROG",

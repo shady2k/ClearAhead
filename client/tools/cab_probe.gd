@@ -255,7 +255,7 @@ func _check_ride(w: Node) -> void:
 			still += 1
 		last_pos = machine.global_position
 		if orbit_ride != null:
-			orbit_gap = maxf(orbit_gap, orbit_ride.focus.distance_to(machine.global_position))
+			orbit_gap = maxf(orbit_gap, _focus_gap(orbit_ride, machine))
 		var seq := int(w.stats.get("channel_seq", 0))
 		if seq != last_seq:
 			var now := Time.get_ticks_usec()
@@ -571,10 +571,27 @@ func _check_camera(w: Node) -> void:
 		_press(KEY_V)
 		await process_frame
 		await process_frame
-	var to_machine := orbit.focus.distance_to(machine.global_position)
-	var to_person := orbit.focus.distance_to((w._driver as Node3D).global_position)
-	_ok("обзор наведён на машину", to_machine < 0.5, "до машины %.2f м" % to_machine)
-	_ok("а не на человека", to_machine <= to_person, "до человека %.2f м" % to_person)
+	var to_machine := _focus_gap(orbit, machine)
+	var to_person := _plan_gap(orbit.focus, (w._driver as Node3D).global_position)
+	_ok("обзор наведён на машину", to_machine < 0.5, "до машины %.2f м в плане" % to_machine)
+	_ok("а не на человека", to_machine <= to_person, "до человека %.2f м в плане" % to_person)
+
+
+## _focus_gap — НА МАШИНЕ ЛИ ФОКУС, метры В ПЛАНЕ.
+##
+## В плане, а не в пространстве, и это не ослабление проверки. Точка взгляда
+## обзорного вида поднята в СЕРЕДИНУ КУЗОВА (Driver._orbit_focus, разбор там же:
+## кадру — прицел, упору камеры в землю — луч, выходящий из воздуха), а узел
+## машины стоит на головке рельса. Разница по высоте между ними ЗАКОННА и равна
+## полувысоте паспорта; уход в сторону — нет, и мерить надо его. До 2026-08-18
+## здесь стояло расстояние в пространстве, и подъём фокуса оно прочитало как
+## «камера потеряла машину на 2.55 м».
+func _focus_gap(orbit: OrbitCamera, machine: Node3D) -> float:
+	return _plan_gap(orbit.focus, machine.global_position)
+
+
+func _plan_gap(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
 
 
 ## _settled — дождаться, пока нажатие превратится в команду, а команда вернётся

@@ -209,7 +209,7 @@ PORTS_ARG := $(if $(PORTS),--ports)
 # position '-9000'». Снимок не делался вовсе, а виноватым выглядел клиент.
 COMMA := ,
 
-.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe stock-probe bench
+.PHONY: help dev dev-bin dev-check dev-shot serve test test-go build fmt client client-check client-check-live client-fixtures client-shot client-import walk-probe stock-probe camera-probe bench
 
 help:
 	@echo 'ClearAhead — цели разработки'
@@ -230,6 +230,7 @@ help:
 	@echo '  make walk-probe         ходит ли человек: стоит, идёт, вертит головой, всходит на путь'
 	@echo '  make stock-probe        стоит ли машина на рельсах: пять чисел против присланных'
 	@echo '  make turnout-probe      доходит ли клавиша до остряка: подошёл, нажал, указатель повернулся'
+	@echo '  make camera-probe       не лезет ли камера под землю: перебор углов с упором и без'
 	@echo '  make client-fixtures    переснять снимок сети с живого сервера'
 	@echo '  make client-shot        снимок экрана в $(SHOT), окно за экраном'
 	@echo
@@ -505,6 +506,26 @@ cab-probe: client-import
 		--script res://tools/cab_probe.gd -- \
 		--server=$(SERVER_URL) --region=$(REGION) --role=driver --board $(PROBE_REACH_ARG)
 
+
+
+## camera-probe — НЕ ОКАЗЫВАЕТСЯ ЛИ КАМЕРА ВНУТРИ ЗЕМЛИ. Сервер должен быть уже
+## поднят.
+##
+## Зачем зонд, а не снимок: кадр, снятый из-под земли, ВЫГЛЯДИТ КАК КАДР —
+## покров односторонний, и снизу вместо него видна нижняя полусфера неба цвета
+## дымки. Отличить это от вида на пологий склон можно глазом, но не автоматом:
+## цвет тот же, что у горизонта. Зонд меряет геометрию — где глаз и где под ним
+## твердь, — и гоняет перебор дважды: с упором камеры в землю и без него.
+##
+## PROBE_SHOT здесь даёт ПАРУ снимков худшего места (…_off.png и …_on.png): одним
+## кадром починку не показать, нужны оба с одной точки.
+##
+##   make camera-probe PROBE_SHOT=$(CURDIR)/shots/camera.png
+camera-probe: client-import
+	$(GODOT) --path $(CLIENT) --position -9000,-9000 --resolution 1280x720 \
+		--script res://tools/camera_probe.gd -- \
+		--server=$(SERVER_URL) --region=$(REGION) --role=driver --driver-view=orbit \
+		$(PROBE_REACH_ARG) $(PROBE_SHOT_ARG)
 
 ## turnout-probe — ДОХОДИТ ЛИ КЛАВИША ДО ОСТРЯКА. Сервер должен быть уже поднят.
 ##

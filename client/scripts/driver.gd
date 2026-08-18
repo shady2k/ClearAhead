@@ -220,6 +220,11 @@ class Post extends RefCounted:
 	## кто прислал габарит. Ноль означает «габарита нет», и тогда выход не
 	## отступает от борта вовсе — заметно и объяснимо.
 	var half_width := 0.0
+	## height — высота машины, метры, оттуда же и по той же причине: обзорная
+	## камера вертится вокруг СЕРЕДИНЫ КУЗОВА, а не вокруг отметки узла (та лежит
+	## на головке рельса). Ноль означает «габарита нет», и тогда камера смотрит на
+	## уровень рельса — как и было до того, как высоту стали спрашивать.
+	var height := 0.0
 
 	func at() -> Vector3:
 		return node.to_global(local)
@@ -389,7 +394,7 @@ func stand(elements: Array[TrackGeom.Element], cam: OrbitCamera, view: String) -
 	# принадлежат игроку, и переключение вида не вправе их сбрасывать. Меняется
 	# только фокус — он всегда там, где стоит человек.
 	if _camera != null:
-		_camera.configure(global_position, ORBIT_FRAME_M,
+		_camera.configure(_orbit_focus(), ORBIT_FRAME_M,
 			ORBIT_AZIMUTH_DEG, ORBIT_ELEV_DEG, false)
 	_apply_mode(_mode, false)
 	return {"ok": true, "element": el.id, "u": u, "lat": START_LAT_M,
@@ -1150,10 +1155,16 @@ func _process(_delta: float) -> void:
 ## Берётся УЗЕЛ МАШИНЫ из поста, а не координаты человека: человек стоит на полу
 ## кабины, то есть у конца машины, а её узел — это её начало отсчёта, середина
 ## между автосцепками (netloc.Point).
+##
+## И В ОБОИХ СЛУЧАЯХ ТОЧКА ПОДНЯТА НАД ЗЕМЛЁЙ — до середины кузова у машины, до
+## середины роста у человека. Кадру это выправляет прицел (в подошвы и под колёса
+## смотреть незачем), а упору камеры в землю даёт луч, выходящий ИЗ ВОЗДУХА:
+## пущенный от самой поверхности, он идёт по касательной к ней и преграду впереди
+## то ловит, то нет.
 func _orbit_focus() -> Vector3:
 	if _post != null and _post.node != null:
-		return _post.node.global_position
-	return global_position
+		return _post.node.global_position + Vector3.UP * (_post.height * 0.5)
+	return global_position + Vector3.UP * (BODY_H * 0.5)
 
 
 ## frame_self — вернуть обзорному виду КАДР ПО ЧЕЛОВЕКУ.
@@ -1167,7 +1178,7 @@ func _orbit_focus() -> Vector3:
 func frame_self() -> void:
 	if _camera == null:
 		return
-	_camera.configure(global_position, ORBIT_FRAME_M,
+	_camera.configure(_orbit_focus(), ORBIT_FRAME_M,
 		_camera.azimuth_deg, _camera.elev_deg, false)
 
 

@@ -233,6 +233,15 @@ const FOG_TARGET_AT_REACH := 0.80
 ## бы ступеньку ровно на линии горизонта, то есть там, где её виднее всего.
 const FOG_COLOUR := Color(0.72, 0.80, 0.88)
 
+## СЛОИ ТВЕРДИ — их два, и делит их вопрос «кому это мешает».
+##
+## МИР (земля, путь, платформы, дома) не двигается, и о него спотыкается всё:
+## человек ходит, камера отступает. ТЕЛА (машины и сам человек) мешают только
+## человеку — сквозь борт не ходят, — а камере не мешают вовсе: она вокруг них и
+## вращается. Разбор цены — у OrbitCamera.WORLD_SOLID_MASK.
+const SOLID_LAYER_WORLD := 1
+const SOLID_LAYER_BODY := 2
+
 var _env: Environment
 ## Дальность, из которой посчитана дымка, и последний применённый отступ камеры.
 ## Отступ хранится затем, что зум меняет его каждым щелчком: пересчитывать дымку
@@ -3188,12 +3197,45 @@ func _build_solid() -> void:
 	# только он.
 	meshes.append_array(_terrain_solid)
 	for mi in meshes:
-		mi.create_trimesh_collision()
+		_solidify(mi, SOLID_LAYER_WORLD)
 		bodies += 1
 		tris += _mesh_tris(mi.mesh)
+	# ПОДВИЖНОЙ СОСТАВ — ТВЕРДЬ ДРУГОГО СЛОЯ, и делит их не удобство, а то, кому
+	# они мешают. Человеку мешают оба: сквозь борт машины не ходят. Камере —
+	# только мир: камера, спотыкающаяся о машину, вокруг которой сама же и
+	# вращается, подтягивалась бы к её борту всякий раз, а о чужую — прыгала бы при
+	# каждом встречном поезде (разбор — у OrbitCamera.WORLD_SOLID_MASK).
+	if _stock_root != null:
+		# По ДЕТЯМ, а не по самому узлу: обход пропускает _stock_root целиком (иначе
+		# состав попал бы в мировую твердь), и вызов на нём отдал бы пустой список.
+		# Стоило это трёх тел, потерянных молча, — счёт в отчёте их и поймал.
+		for child in _stock_root.get_children():
+			for mi in _solid_meshes(child):
+				_solidify(mi, SOLID_LAYER_BODY)
+				bodies += 1
+				tris += _mesh_tris(mi.mesh)
 	stats["solid_bodies"] = bodies
 	stats["solid_triangles"] = tris
 	stats["solid_ms"] = float(Time.get_ticks_usec() - t0) / 1000.0
+	# ТВЕРДЬ ЕСТЬ — камере разрешено её спрашивать. Раньше нельзя: до этой строки
+	# луч не встретил бы ничего, и упор в землю молча не работал бы.
+	if camera is OrbitCamera:
+		(camera as OrbitCamera).set_solid(true)
+
+
+## _solidify — тело из меша на объявленном слое.
+##
+## Слой выставляется ПОСЛЕ create_trimesh_collision, потому что тело она создаёт
+## сама и наружу не отдаёт: его приходится искать среди детей меша. Своё тело
+## руками (ConcavePolygonShape3D из get_faces) обошлось бы без поиска и стоило бы
+## разворота всей геометрии в новый массив — сотни тысяч треугольников земли
+## ради одного числа.
+func _solidify(mi: MeshInstance3D, layer: int) -> void:
+	mi.create_trimesh_collision()
+	for c in mi.get_children():
+		var body := c as StaticBody3D
+		if body != null:
+			body.collision_layer = layer
 
 
 ## _solid_meshes — обход поддерева: MeshInstance3D, кроме глади воды и РЕЛЬЕФА.
@@ -3210,7 +3252,7 @@ func _solid_meshes(node: Node) -> Array[MeshInstance3D]:
 	# предмет мира, а метка поверх него. Твердь из булавок дала бы человеку
 	# невидимую ступеньку у каждого стыка — и она стояла бы там, когда слой
 	# выключен, то есть неизвестно откуда.
-	if node == _water_node or node == _terrain_node or node == _ports_node:
+	if node == _water_node or node == _terrain_node or node == _ports_node or node == _stock_root:
 		return out
 	var mi := node as MeshInstance3D
 	if mi != null and mi.mesh != null:
@@ -3259,6 +3301,12 @@ func _tune_shadows_for_walking() -> void:
 func _spawn_driver(elements: Array[TrackGeom.Element]) -> void:
 	_driver = Driver.new()
 	_driver.name = "Driver"
+	# СЛОИ ОБЪЯВЛЯЕТ МИР, а не человек себе сам: делёж тверди надвое — правило
+	# мира (см. SOLID_LAYER_WORLD), и второе его место в человеке разошлось бы с
+	# первым при первой же правке. Человек — ТЕЛО, а ходит по обоим слоям: по
+	# земле и по бортам машин.
+	_driver.collision_layer = SOLID_LAYER_BODY
+	_driver.collision_mask = SOLID_LAYER_WORLD | SOLID_LAYER_BODY
 	world.add_child(_driver)
 	_driver.settled.connect(_on_driver_settled)
 	var placed: Dictionary = _driver.stand(elements, camera as OrbitCamera, driver_view)
@@ -3339,9 +3387,11 @@ func _stock_posts() -> Array[Driver.Post]:
 			p.node = u.node
 			p.local = u.cabs[i]
 			p.index = i
-			# ГАБАРИТ ИЗ ПАСПОРТА: по нему человек находит борт, у которого выйдет.
-			# Клиент его не выдумывает — ширина приезжает набором контента.
+			# ГАБАРИТ ИЗ ПАСПОРТА: по нему человек находит борт, у которого выйдет,
+			# и середину кузова, вокруг которой обзорная камера вертится, пока он
+			# сидит. Клиент его не выдумывает — габарит приезжает набором контента.
 			p.half_width = u.width_m * 0.5
+			p.height = u.height_m
 			out.append(p)
 	return out
 
@@ -3414,7 +3464,15 @@ func _look_at_machine(unit_id: String) -> void:
 			continue
 		# Возвышение небольшое: сверху машина читается пятном, а с уровня земли
 		# видно и её саму, и путь, по которому она поедет.
-		orbit.configure(u.node.global_position, maxf(u.length_m * 1.5, 40.0),
+		#
+		# ТОЧКА ВЗГЛЯДА ПОДНЯТА В СЕРЕДИНУ КУЗОВА, а не оставлена на отметке
+		# узла — тот стоит на уровне головки рельса (netloc.Point). Половина
+		# паспортной высоты нужна дважды: кадр перестаёт целиться машине под
+		# колёса, а упор в землю получает луч, выходящий ИЗ ВОЗДУХА, а не из самой
+		# поверхности. Луч, пущенный по касательной прямо от земли, преграду
+		# впереди то ловит, то нет — и упор срабатывал бы через раз.
+		orbit.configure(u.node.global_position + Vector3.UP * (u.height_m * 0.5),
+			maxf(u.length_m * 1.5, 40.0),
 			orbit.azimuth_deg, 14.0, false)
 		return
 
