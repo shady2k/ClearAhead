@@ -341,7 +341,10 @@ func _model(kind: String) -> Dictionary:
 		if not (parsed is Dictionary):
 			continue
 		var doc := parsed as Dictionary
-		if String(doc.get("device", "")) == kind:
+		# ПАСПОРТ МЕХАНИЗМА — СВОИМ БЛОКОМ с 2026-08-18: формат тела перестал быть
+		# стрелочным, и род привода лежит в drive, а не в корне модели.
+		var drive: Variant = doc.get("drive", null)
+		if drive is Dictionary and String((drive as Dictionary).get("device", "")) == kind:
 			return doc
 	return {}
 

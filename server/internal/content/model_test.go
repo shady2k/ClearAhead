@@ -38,14 +38,14 @@ func TestShippedModelsParse(t *testing.T) {
 	kinds := map[string]bool{}
 	for _, name := range []string{"switch_stand_manual", "switch_stand_electric"} {
 		m := shippedModel(t, name)
-		if !mapfmt.KnownDrive(m.Device) {
-			t.Fatalf("модель %s объявила механизм %q", name, m.Device)
+		if !mapfmt.KnownDrive(m.Drive.Device) {
+			t.Fatalf("модель %s объявила механизм %q", name, m.Drive.Device)
 		}
-		if kinds[m.Device] {
-			t.Fatalf("механизм %s объявлен двумя моделями", m.Device)
+		if kinds[m.Drive.Device] {
+			t.Fatalf("механизм %s объявлен двумя моделями", m.Drive.Device)
 		}
-		kinds[m.Device] = true
-		if m.Title == "" {
+		kinds[m.Drive.Device] = true
+		if m.Drive.Title == "" {
 			t.Fatalf("модель %s не назвала устройство человеку", name)
 		}
 	}
@@ -170,8 +170,24 @@ func TestBrokenModelIsRefused(t *testing.T) {
 	}{
 		{"версия формата", "версия формата", func(d map[string]any) { d["format_version"] = 2.0 }},
 		{"чужие оси", "соглашение об осях", func(d map[string]any) { d["axes"] = "z_up" }},
-		{"неизвестный механизм", "род механизма", func(d map[string]any) { d["device"] = "гидравлический" }},
-		{"без имени устройства", "не названо имя устройства", func(d map[string]any) { d["title"] = "" }},
+		{"неизвестный механизм", "род механизма", func(d map[string]any) {
+			d["drive"].(map[string]any)["device"] = "гидравлический"
+		}},
+		{"без имени устройства", "не названо имя устройства", func(d map[string]any) {
+			d["drive"].(map[string]any)["title"] = ""
+		}},
+		// ПАРАМЕТР ЭКЗЕМПЛЯРА, КОТОРОГО МОДЕЛЬ НЕ ОБЪЯВЛЯЛА. Опечатка в имени
+		// привязки иначе означала бы часть без размера, собранную молча.
+		{"привязка к необъявленному параметру", "модель не объявляет", func(d map[string]any) {
+			first(d)["size"] = []any{
+				map[string]any{"by": "ширина", "factor": 1.0, "offset": 0.0}, 0.1, 0.1}
+		}},
+		// ПРИВЯЗКА БЕЗ FACTOR. Пропуск неотличим от «умножить на ноль»: часть
+		// схлопнулась бы в точку, и поймать это можно было бы только глазом.
+		{"привязка без множителя", "без factor", func(d map[string]any) {
+			d["params"] = []any{"width"}
+			first(d)["size"] = []any{map[string]any{"by": "width", "offset": 0.0}, 0.1, 0.1}
+		}},
 		{"имя файла не то", "лежит не под тем ассетом", func(d map[string]any) { d["model"] = "другое" }},
 		{"неизвестная форма", "форма", func(d map[string]any) { first(d)["shape"] = "шар" }},
 		{"краска не объявлена", "в палитре модели не объявлена", func(d map[string]any) {
@@ -279,13 +295,16 @@ func TestDriveRodStretchesToTheBlade(t *testing.T) {
 		var far float64
 		var scan func(p *Part, at float64)
 		scan = func(p *Part, at float64) {
-			pos := at + p.At[axis]
+			// ТЕЛО ПРИВОДА ЖЁСТКОЕ: у него нет параметров экземпляра, и всякое
+			// число здесь обязано быть литералом. Привязка означала бы, что
+			// проверка меряет тело, размера которого ещё нет.
+			pos := at + lit(t, name, p.At[axis])
 			half := 0.0
 			switch {
 			case p.Shape == ShapeCylinder && p.Axis == rod.Stretch.Axis:
-				half = p.Height / 2
+				half = lit(t, name, p.Height) / 2
 			case p.Shape == ShapeBox && len(p.Size) > axis:
-				half = p.Size[axis] / 2
+				half = lit(t, name, p.Size[axis]) / 2
 			}
 			if pos+half > far {
 				far = pos + half
@@ -315,4 +334,16 @@ func axisIndex(a string) int {
 		return 2
 	}
 	return -1
+}
+
+
+// lit — литерал числа тела. Отказ, если число привязано к параметру экземпляра:
+// у жёстких тел таких быть не может, и молчаливый ноль спрятал бы ошибку данных.
+func lit(t *testing.T, model string, v Value) float64 {
+	t.Helper()
+	n, ok := v.Literal()
+	if !ok {
+		t.Fatalf("модель %s: число привязано к параметру %q, а ожидался литерал", model, v.By)
+	}
+	return n
 }

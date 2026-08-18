@@ -170,54 +170,33 @@ type Model struct {
 	// означало бы, что файл положили не под тем ассетом, и поймать это иначе
 	// нечем.
 	Name string `json:"model"`
-	// Device — ЧЬЁ ЭТО ТЕЛО: род переводного механизма (mapfmt.DriveManual,
-	// DriveElectric).
+	// Params — какие ВЕЛИЧИНЫ ЭКЗЕМПЛЯРА тело умеет принимать: "width", "depth",
+	// "height" у дома, пусто у жёсткой вещи вроде переводного механизма.
 	//
-	// # Почему объявляет сам файл, а не перечень рядом с ассетами
+	// ОБЪЯВЛЯЮТСЯ, а не выводятся из употребления, и это не формальность: имя
+	// параметра пишется в каждой привязке, и опечатка в нём иначе означала бы
+	// молчаливо неразрешимую ссылку — часть без размера. Здесь она отказ.
+	Params []string `json:"params,omitempty"`
+	// Drive — ПАСПОРТ ПЕРЕВОДНОГО МЕХАНИЗМА: род, имя человеку, время перевода.
 	//
-	// Перечень «род → вид» здесь был, и владелец спросил ровно то, что следовало:
-	// «а зачем Devices? почему они не могут быть ассетом?». Незачем. Ассет и так
-	// есть у каждого тела, а связь с родом — это факт О ТЕЛЕ, и место ему в файле
-	// тела. Отдельная запись рядом была третьей сущностью, которую пришлось бы
-	// держать в согласии с двумя другими.
+	// # Почему отдельным блоком, а не полями тела
 	//
-	// Клиент ищет тело ПО ЭТОМУ ПОЛЮ: карта говорит «механизм ручной», клиент
-	// берёт модель, у которой device = manual. Никакого соглашения об именах
-	// файлов, никакого вывода на стороне клиента.
-	Device string `json:"device"`
-	// Title — как устройство называется человеку: «ручной перевод»,
-	// «электропривод». Показывает пульт.
+	// До 2026-08-18 эти три поля лежали в корне модели, и формат из-за них был
+	// НЕ ОБЩИМ, а стрелочным: ParseModel отказывал, если device не известный род
+	// привода, требовал throw_seconds в диапазоне, а loadModels индексировал
+	// модели map[device]. Дом в такой формат не кладётся — он не разберётся, а
+	// разобравшись, не найдётся: искать умели только по роду привода.
 	//
-	// ЗДЕСЬ, А НЕ В КЛИЕНТЕ, по тому же доводу, что и всё остальное в этом файле:
-	// до 2026-08-15 обе строки были зашиты в turnout_panel.gd, и второй клиент
-	// назвал бы то же устройство иначе.
-	Title string `json:"title"`
-	// ThrowSeconds — СКОЛЬКО ИДЁТ ОСТРЯК при переводе этим механизмом, секунды
-	// модельного времени.
+	// Разделение проведено по вопросу, на который поле отвечает. ТЕЛО отвечает
+	// «какой вещь формы»; ПАСПОРТ — «что это за вещь в игре». У дома паспорта
+	// нет вовсе, и это не пропуск: дом не устройство.
 	//
-	// # Почему число механизма живёт в файле тела
-	//
-	// Потому что это свойство РОДА МЕХАНИЗМА, а файл тела и есть единственная
-	// запись о роде: он же объявляет device и title. Завести перечень «род →
-	// время» рядом значило бы третью сущность в согласии с двумя другими —
-	// ровно то, от чего отказались, когда убирали Devices.
-	//
-	// Это НЕ размер тела: время перевода читает физика партии, а не показ.
-	// Соседство с примитивами тут кажется случайным, но альтернатива хуже: у
-	// рода механизма нет другого дома, а карта повторяла бы одно число у каждой
-	// стрелки и рано или поздно разошлась бы сама с собой.
-	//
-	// ЧИСЛА ПРЕДВАРИТЕЛЬНЫЕ, и первая же пара оказалась вдвое великоватой:
-	// владелец сказал «стрелка очень медленно переключается» (2026-08-16) про
-	// 4 с у ручного и 2.5 с у электрического. Порядок был выбран на глаз, и на
-	// глаз же поправлен: ручной перевод — одно резкое движение рычага, около
-	// секунды; электропривод ведёт остряк размеренно, около двух.
-	//
-	// РУЧНОЙ БЫСТРЕЕ ЭЛЕКТРИЧЕСКОГО, и это не описка: рукой дёргают, привод
-	// доводит. Прежняя пара утверждала обратное и была неверна вдвойне.
-	//
-	// Норм за этими числами нет. Появится источник — поменяются вместе с ним.
-	ThrowSeconds float64 `json:"throw_seconds"`
+	// Блок есть — проверяется целиком (род известен, время в диапазоне, имя
+	// названо). Блока нет — не проверяется ничего, и тело остаётся телом.
+	Drive *DriveSpec `json:"drive,omitempty"`
+
+	// params — Params множеством, для разрешения привязок. Заполняется разбором.
+	params map[string]bool
 	Axes         string  `json:"axes"`
 	Units        string  `json:"units"`
 	Angles       string  `json:"angles"`
@@ -226,6 +205,30 @@ type Model struct {
 	// расходятся в оттенке.
 	Materials map[string]Material `json:"materials"`
 	Parts     []Part              `json:"parts"`
+}
+
+// DriveSpec — паспорт переводного механизма: то, что делает тело УСТРОЙСТВОМ.
+type DriveSpec struct {
+	// Device — ЧЕЙ род: mapfmt.DriveManual, DriveElectric.
+	//
+	// Клиент ищет тело ПО ЭТОМУ ПОЛЮ: карта говорит «механизм ручной», клиент
+	// берёт модель, у которой drive.device = manual. Никакого соглашения об
+	// именах файлов, никакого вывода на стороне клиента.
+	Device string `json:"device"`
+	// Title — как устройство называется человеку: «ручной перевод»,
+	// «электропривод». Показывает пульт. Здесь, а не в клиенте: до 2026-08-15
+	// обе строки были зашиты в turnout_panel.gd, и второй клиент назвал бы то же
+	// устройство иначе.
+	Title string `json:"title"`
+	// ThrowSeconds — СКОЛЬКО ИДЁТ ОСТРЯК при переводе этим механизмом, секунды
+	// модельного времени. Это НЕ размер тела: число читает физика партии, а не
+	// показ. Соседство с примитивами кажется случайным, но альтернатива хуже: у
+	// рода механизма нет другого файла, а заводить его ради одного числа значило
+	// бы вернуть перечень «род → свойства», от которого отказались.
+	//
+	// ЧИСЛА ПРЕДВАРИТЕЛЬНЫЕ. Норм за ними нет; ручной быстрее электрического, и
+	// это не описка: рукой дёргают, привод ведёт остряк с постоянной скоростью.
+	ThrowSeconds float64 `json:"throw_seconds"`
 }
 
 // Material — краска. Цвет в sRGB, потому что в нём его читает человек; перевод в
@@ -240,7 +243,7 @@ type Material struct {
 type Part struct {
 	Name  string     `json:"name,omitempty"`
 	Shape string     `json:"shape,omitempty"`
-	At    [3]float64 `json:"at"`
+	At    [3]Value `json:"at"`
 	// Rotate — постоянный поворот части, градусы по осям X, Y, Z.
 	//
 	// Части этой модели поворачиваются ВОКРУГ ОДНОЙ ОСИ, и порядок применения
@@ -248,15 +251,18 @@ type Part struct {
 	// данных, и оно проверяется: две ненулевые оси разом — отказ, потому что
 	// порядок Эйлера у рендеров разный, и молча выбрать свой значит нарисовать
 	// разное.
-	Rotate    [3]float64 `json:"rotate,omitempty"`
-	Material  string     `json:"material,omitempty"`
-	Size      []float64  `json:"size,omitempty"`
-	Radius    float64    `json:"radius,omitempty"`
-	Bottom    float64    `json:"bottom,omitempty"`
-	Top       float64    `json:"top,omitempty"`
-	Height    float64    `json:"height,omitempty"`
-	Thickness float64    `json:"thickness,omitempty"`
-	Sides     int        `json:"sides,omitempty"`
+	Rotate   [3]float64 `json:"rotate,omitempty"`
+	Material string     `json:"material,omitempty"`
+	// РАЗМЕРЫ И ПОЛОЖЕНИЕ — Value: литерал либо привязка к параметру экземпляра
+	// (model_value.go). До 2026-08-18 это были голые float64, и телом могла быть
+	// только жёсткая вещь.
+	Size      []Value `json:"size,omitempty"`
+	Radius    Value   `json:"radius,omitempty"`
+	Bottom    Value   `json:"bottom,omitempty"`
+	Top       Value   `json:"top,omitempty"`
+	Height    Value   `json:"height,omitempty"`
+	Thickness Value   `json:"thickness,omitempty"`
+	Sides     int     `json:"sides,omitempty"`
 	Axis      string     `json:"axis,omitempty"`
 	Mark      *Mark      `json:"mark,omitempty"`
 	Label     *Label     `json:"label,omitempty"`
@@ -361,19 +367,38 @@ func ParseModel(name string, raw []byte) (*Model, error) {
 		return nil, fmt.Errorf("content: модель %s: в файле записано имя %q — файл лежит не под тем ассетом",
 			name, m.Name)
 	}
-	if !mapfmt.KnownDrive(m.Device) {
-		return nil, fmt.Errorf("content: модель %s: род механизма %q неизвестен; знаю %v",
-			name, m.Device, mapfmt.Drives)
+	// ПАСПОРТ ПРОВЕРЯЕТСЯ, КОГДА ОН ЕСТЬ. Тело без паспорта — не поломка, а дом:
+	// у него нет ни рода механизма, ни времени перевода, и требовать их значило
+	// бы объявить, что телом бывает только устройство.
+	if m.Drive != nil {
+		if !mapfmt.KnownDrive(m.Drive.Device) {
+			return nil, fmt.Errorf("content: модель %s: род механизма %q неизвестен; знаю %v",
+				name, m.Drive.Device, mapfmt.Drives)
+		}
+		if !(m.Drive.ThrowSeconds >= MinThrowSeconds && m.Drive.ThrowSeconds <= MaxThrowSeconds) {
+			return nil, fmt.Errorf("content: модель %s: время перевода %v с вне [%v, %v] — "+
+				"это свойство рода механизма, и выдумывать его нельзя",
+				name, m.Drive.ThrowSeconds, MinThrowSeconds, MaxThrowSeconds)
+		}
+		if m.Drive.Title == "" {
+			return nil, fmt.Errorf("content: модель %s: не названо имя устройства (title) — "+
+				"пульту нечего показать человеку", name)
+		}
 	}
-	if !(m.ThrowSeconds >= MinThrowSeconds && m.ThrowSeconds <= MaxThrowSeconds) {
-		return nil, fmt.Errorf("content: модель %s: время перевода %v с вне [%v, %v] — "+
-			"мгновенный перевод это прыжок остряка, а минутный не механизм",
-			name, m.ThrowSeconds, MinThrowSeconds, MaxThrowSeconds)
+	// ПАРАМЕТРЫ ЭКЗЕМПЛЯРА: имена объявляются здесь, привязки частей ссылаются
+	// только на объявленные. Пустое имя и повтор — отказ: и то и другое делает
+	// ссылку неразрешимой или двусмысленной.
+	params := map[string]bool{}
+	for _, pn := range m.Params {
+		if pn == "" {
+			return nil, fmt.Errorf("content: модель %s: пустое имя параметра", name)
+		}
+		if params[pn] {
+			return nil, fmt.Errorf("content: модель %s: параметр %q объявлен дважды", name, pn)
+		}
+		params[pn] = true
 	}
-	if m.Title == "" {
-		return nil, fmt.Errorf("content: модель %s: не названо имя устройства (title) — "+
-			"пульту нечего показать человеку", name)
-	}
+	m.params = params
 	if m.Axes != AxesXRightYUpZBack {
 		return nil, fmt.Errorf("content: модель %s: соглашение об осях %q неизвестно, знаю %q",
 			name, m.Axes, AxesXRightYUpZBack)
@@ -417,9 +442,9 @@ func ParseModel(name string, raw []byte) (*Model, error) {
 func (m Model) checkPart(model, path string, p Part) error {
 	at := path + "/" + p.Name
 	where := fmt.Sprintf("content: модель %s: часть %s", model, at)
-	for i, v := range p.At {
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return fmt.Errorf("%s: at[%d] = %v", where, i, v)
+	for i := range p.At {
+		if err := m.checkValue(where, fmt.Sprintf("at[%d]", i), p.At[i], false); err != nil {
+			return err
 		}
 	}
 	turns := 0
@@ -453,17 +478,20 @@ func (m Model) checkPart(model, path string, p Part) error {
 		if len(p.Size) != 3 {
 			return fmt.Errorf("%s: у ящика size из %d чисел, ожидалось три", where, len(p.Size))
 		}
-		for i, v := range p.Size {
-			if !(v > 0) || math.IsInf(v, 0) {
-				return fmt.Errorf("%s: size[%d] = %v, ожидалось положительное конечное", where, i, v)
+		for i := range p.Size {
+			if err := m.checkValue(where, fmt.Sprintf("size[%d]", i), p.Size[i], true); err != nil {
+				return err
 			}
 		}
 	case ShapeCylinder:
 		if err := checkAxis(where, p.Axis); err != nil {
 			return err
 		}
-		if !(p.Radius > 0) || !(p.Height > 0) {
-			return fmt.Errorf("%s: цилиндр radius = %v, height = %v", where, p.Radius, p.Height)
+		if err := m.checkValue(where, "radius", p.Radius, true); err != nil {
+			return err
+		}
+		if err := m.checkValue(where, "height", p.Height, true); err != nil {
+			return err
 		}
 		if p.Sides < 3 {
 			return fmt.Errorf("%s: цилиндр в %d граней — меньше трёх граней не бывает", where, p.Sides)
@@ -472,9 +500,13 @@ func (m Model) checkPart(model, path string, p Part) error {
 		if err := checkAxis(where, p.Axis); err != nil {
 			return err
 		}
-		if !(p.Bottom > 0) || !(p.Top > 0) || !(p.Height > 0) {
-			return fmt.Errorf("%s: усечённый конус bottom = %v, top = %v, height = %v",
-				where, p.Bottom, p.Top, p.Height)
+		for _, d := range []struct {
+			field string
+			v     Value
+		}{{"bottom", p.Bottom}, {"top", p.Top}, {"height", p.Height}} {
+			if err := m.checkValue(where, d.field, d.v, true); err != nil {
+				return err
+			}
 		}
 		if p.Sides < 3 {
 			return fmt.Errorf("%s: конус в %d граней — меньше трёх граней не бывает", where, p.Sides)
@@ -483,13 +515,13 @@ func (m Model) checkPart(model, path string, p Part) error {
 		if len(p.Size) != 2 {
 			return fmt.Errorf("%s: у щитка size из %d чисел, ожидалось два", where, len(p.Size))
 		}
-		for i, v := range p.Size {
-			if !(v > 0) || math.IsInf(v, 0) {
-				return fmt.Errorf("%s: size[%d] = %v, ожидалось положительное конечное", where, i, v)
+		for i := range p.Size {
+			if err := m.checkValue(where, fmt.Sprintf("size[%d]", i), p.Size[i], true); err != nil {
+				return err
 			}
 		}
-		if !(p.Thickness > 0) {
-			return fmt.Errorf("%s: толщина щитка %v", where, p.Thickness)
+		if err := m.checkValue(where, "thickness", p.Thickness, true); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("%s: форма %q неизвестна; знаю %q, %q, %q, %q и группу без формы",
@@ -555,6 +587,30 @@ func (m Model) checkPart(model, path string, p Part) error {
 	return nil
 }
 
+// checkValue проверяет число части: литерал — на конечность и знак, привязку —
+// на разрешимость имени параметра.
+//
+// ЗНАК ПРИВЯЗКИ НЕ ПРОВЕРЯЕТСЯ ЗДЕСЬ, и это не пропуск: её значение появляется
+// вместе с экземпляром, и «ширина минус два метра» законна ровно до тех пор,
+// пока дома шире двух метров. Проверка стоит там, где число становится
+// известным, — при сборке тела.
+func (m Model) checkValue(where, field string, v Value, mustPositive bool) error {
+	if !v.finite() {
+		return fmt.Errorf("%s: %s = %v — не конечное число", where, field, v)
+	}
+	if v.Bound() {
+		if !m.params[v.By] {
+			return fmt.Errorf("%s: %s привязано к параметру %q, которого модель не объявляет; знает %v",
+				where, field, v.By, m.Params)
+		}
+		return nil
+	}
+	if mustPositive && !v.positive() {
+		return fmt.Errorf("%s: %s = %v, ожидалось положительное конечное", where, field, v.Const)
+	}
+	return nil
+}
+
 func (m Model) checkMark(where string, k Mark) error {
 	if len(k.Polygons) == 0 {
 		return fmt.Errorf("%s: знак без единого контура — рисовать нечего", where)
@@ -606,6 +662,7 @@ func checkAxis(where, axis string) error {
 // бы от порядка записей.
 func (s *Set) loadModels() error {
 	s.models = map[string]*Model{}
+	s.drives = map[string]*Model{}
 	for _, a := range s.Assets {
 		if a.MediaType != ModelMediaType {
 			continue
@@ -618,11 +675,20 @@ func (s *Set) loadModels() error {
 		if err != nil {
 			return err
 		}
-		if prev, dup := s.models[m.Device]; dup {
-			return fmt.Errorf("content: у механизма %s два тела: %s и %s — какое из них верное, набор не решает",
-				m.Device, prev.Name, m.Name)
+		if prev, dup := s.models[m.Name]; dup {
+			return fmt.Errorf("content: два тела под именем %s: %s и %s", m.Name, prev.Name, m.Name)
 		}
-		s.models[m.Device] = m
+		s.models[m.Name] = m
+		// ВТОРОЙ ИНДЕКС — только у тел с паспортом механизма: карта называет род
+		// привода, а не имя ассета. Тело без паспорта ищут по имени, и второго
+		// ключа у него нет.
+		if m.Drive != nil {
+			if prev, dup := s.drives[m.Drive.Device]; dup {
+				return fmt.Errorf("content: у механизма %s два тела: %s и %s — какое из них верное, набор не решает",
+					m.Drive.Device, prev.Name, m.Name)
+			}
+			s.drives[m.Drive.Device] = m
+		}
 	}
 	return nil
 }
@@ -633,7 +699,13 @@ func (s *Set) loadModels() error {
 // получает те же байты по адресу ассета и разбирает их сам — сервер модель ему
 // не пересказывает.
 func (s *Set) ModelOf(kind string) (*Model, bool) {
-	m, ok := s.models[kind]
+	m, ok := s.drives[kind]
+	return m, ok
+}
+
+// BodyOf — тело по ИМЕНИ модели: так его спрашивают вещи без паспорта (дом).
+func (s *Set) BodyOf(name string) (*Model, bool) {
+	m, ok := s.models[name]
 	return m, ok
 }
 
@@ -644,9 +716,9 @@ func (s *Set) ModelOf(kind string) (*Model, bool) {
 // и отвечать на него подстановкой нельзя: стрелка с выдуманным временем
 // перевода переводилась бы не так, как объявлено.
 func (s *Set) DriveThrow(kind string) (float64, bool) {
-	m, ok := s.models[kind]
+	m, ok := s.drives[kind]
 	if !ok {
 		return 0, false
 	}
-	return m.ThrowSeconds, true
+	return m.Drive.ThrowSeconds, true
 }

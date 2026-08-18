@@ -144,9 +144,6 @@ const WORLD_DEBT := {
 	"BUSH_H_MAX": "ClearAhead-yfu3", "BUSH_LOW_SHARE": "ClearAhead-yfu3",
 	# Размер пучка травы: у пучка есть место в мире, в отличие от узора рассева.
 	"GRASS_QUAD_W": "ClearAhead-yfu3", "GRASS_MESH_H": "ClearAhead-yfu3",
-	# Тело постройки: насколько сидит в земле, свес и толщина крыши.
-	"BUILDING_SINK": "ClearAhead-yfu3", "ROOF_OVERHANG": "ClearAhead-yfu3",
-	"ROOF_THICKNESS": "ClearAhead-yfu3", "ROOF_SEAT": "ClearAhead-yfu3",
 	# Река: насколько лента утоплена относительно уреза.
 	"WATER_SINK": "ClearAhead-yfu3",
 	# Клетка маски, которой трава вычитается под балластом. Правило «где трава не

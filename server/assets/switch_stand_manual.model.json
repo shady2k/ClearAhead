@@ -1,9 +1,11 @@
 {
   "format_version": 1,
   "model": "switch_stand_manual",
-  "device": "manual",
-  "title": "ручной перевод",
-  "throw_seconds": 1.0,
+  "drive": {
+    "device": "manual",
+    "title": "ручной перевод",
+    "throw_seconds": 1.0
+  },
   "axes": "x_right_y_up_z_back",
   "units": "m",
   "angles": "deg",

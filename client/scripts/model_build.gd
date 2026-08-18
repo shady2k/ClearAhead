@@ -70,6 +70,13 @@ class Built extends RefCounted:
 	## Отдельно от pivots, потому что это другая связь с миром: pivot берёт
 	## строку и поворачивает, stretch берёт число и задаёт размер.
 	var stretches := {}
+	## materials — палитра собранного тела: имя краски -> материал движка.
+	##
+	## Открыта наружу затем, что ЦВЕТ — зона рендера (та же граница, по которой
+	## он выбирает цвет луга и блеск воды), и разнообразие экземпляров живёт
+	## здесь: двенадцать домов одного тела красятся по-своему, не заводя
+	## двенадцати описаний. Тело объявляет краску, показ вправе её увести.
+	var materials := {}
 	## reason — почему не собралось. Пусто — собралось.
 	var reason := ""
 
@@ -137,7 +144,11 @@ class Built extends RefCounted:
 ## labels — тексты для надписей: имя состояния -> строка. Текст в модели не
 ## лежит (номер стрелки — факт о станции), и щиток без текста остаётся чистым
 ## щитком, а не получает выдуманный номер.
-static func build(doc: Dictionary, labels: Dictionary) -> Built:
+## params — ВЕЛИЧИНЫ ЭКЗЕМПЛЯРА: {"width": 17.2, "depth": 21.0, "height": 14.1}.
+## Пусто у жёсткой вещи (переводной механизм). Тело, объявившее параметр,
+## которого не прислали, НЕ СОБИРАЕТСЯ: часть без размера нарисовать нечем, а
+## подстановка дала бы предмет, которого никто не описывал.
+static func build(doc: Dictionary, labels: Dictionary, params: Dictionary = {}) -> Built:
 	var out := Built.new()
 	if int(doc.get("format_version", 0)) != FORMAT_VERSION:
 		out.reason = "версия формата модели %s, клиент читает %d" % [
@@ -154,11 +165,43 @@ static func build(doc: Dictionary, labels: Dictionary) -> Built:
 	var mats := _materials(doc.get("materials", {}) as Dictionary)
 	out.root = Node3D.new()
 	out.root.name = String(doc.get("model", "model"))
+	out.materials = mats
 	for raw in (doc.get("parts", []) as Array):
-		var node := _part(raw as Dictionary, mats, labels, out)
+		var node := _part(raw as Dictionary, mats, labels, out, params)
 		if node != null:
 			out.root.add_child(node)
 	return out
+
+
+## _num — ЧИСЛО ТЕЛА: литерал либо привязка к величине экземпляра.
+##
+## Привязка — {by, factor, offset}, и считается она как параметр × factor +
+## offset. Больше в формате ничего нет и не будет: всё сложнее — язык в файле
+## данных, у которого заводится свой порядок вычисления, а у порядка —
+## расхождение между двумя рендерами (разбор — server/internal/content/model_value.go).
+##
+## Непришедший параметр — ОТКАЗ СБОРКИ, а не ноль: часть без размера схлопнется в
+## точку, и предмет будет выглядеть исправным ровно до тех пор, пока на него не
+## посмотрят вплотную.
+static func _num(v: Variant, params: Dictionary, out: Built) -> float:
+	if v is Dictionary:
+		var b := v as Dictionary
+		var key := String(b.get("by", ""))
+		if not params.has(key):
+			out.reason = "величина %s экземпляру не прислана" % key
+			return 0.0
+		return float(params[key]) * float(b.get("factor", 0.0)) + float(b.get("offset", 0.0))
+	return float(v)
+
+
+## _vec3p — тройка чисел тела, каждое своим разрешением.
+static func _vec3p(raw: Variant, params: Dictionary, out: Built) -> Vector3:
+	if not (raw is Array):
+		return Vector3.ZERO
+	var a := raw as Array
+	if a.size() < 3:
+		return Vector3.ZERO
+	return Vector3(_num(a[0], params, out), _num(a[1], params, out), _num(a[2], params, out))
 
 
 ## _materials — палитра описания в материалы движка.
@@ -179,10 +222,11 @@ static func _materials(raw: Dictionary) -> Dictionary:
 
 
 ## _part — часть описания в узел сцены. Рекурсивно, вместе с детьми.
-static func _part(p: Dictionary, mats: Dictionary, labels: Dictionary, out: Built) -> Node3D:
+static func _part(p: Dictionary, mats: Dictionary, labels: Dictionary, out: Built,
+		params: Dictionary) -> Node3D:
 	var node := Node3D.new()
 	node.name = String(p.get("name", "part"))
-	var at := _vec3(p.get("at", []))
+	var at := _vec3p(p.get("at", []), params, out)
 	node.position = at
 	var rot := _vec3(p.get("rotate", []))
 	# Постоянный поворот. Описание разрешает только одну ненулевую ось (сервер
@@ -195,19 +239,22 @@ static func _part(p: Dictionary, mats: Dictionary, labels: Dictionary, out: Buil
 		"":
 			pass
 		SHAPE_BOX:
-			node.add_child(_box(_vec3(p.get("size", [])), mat))
+			node.add_child(_box(_vec3p(p.get("size", []), params, out), mat))
 		SHAPE_CYLINDER:
-			node.add_child(_cylinder(float(p.get("radius", 0.0)), float(p.get("radius", 0.0)),
-				float(p.get("height", 0.0)), int(p.get("sides", 12)), String(p.get("axis", "y")), mat))
+			var cr := _num(p.get("radius", 0.0), params, out)
+			node.add_child(_cylinder(cr, cr,
+				_num(p.get("height", 0.0), params, out), int(p.get("sides", 12)),
+				String(p.get("axis", "y")), mat))
 		SHAPE_FRUSTUM:
 			# Радиус у многогранника движка — половина ДИАГОНАЛИ, а описание даёт
 			# СТОРОНУ: у четырёхгранной станины это разные числа.
 			var k: float = 1.0 if int(p.get("sides", 12)) > 8 else sqrt(2.0)
-			node.add_child(_cylinder(float(p.get("top", 0.0)) * k / 2.0,
-				float(p.get("bottom", 0.0)) * k / 2.0, float(p.get("height", 0.0)),
+			node.add_child(_cylinder(_num(p.get("top", 0.0), params, out) * k / 2.0,
+				_num(p.get("bottom", 0.0), params, out) * k / 2.0,
+				_num(p.get("height", 0.0), params, out),
 				int(p.get("sides", 12)), String(p.get("axis", "y")), mat))
 		SHAPE_PLATE:
-			_plate(node, p, mats, labels, mat)
+			_plate(node, p, mats, labels, mat, params, out)
 		_:
 			# Неизвестная форма НЕ ПРОПУСКАЕТСЯ МОЛЧА: предмет, у которого не
 			# нарисовалась половина, выглядит исправным.
@@ -235,7 +282,7 @@ static func _part(p: Dictionary, mats: Dictionary, labels: Dictionary, out: Buil
 			"axis": String(sv.get("axis", "z")),
 		})
 	for child in (p.get("parts", []) as Array):
-		var c := _part(child as Dictionary, mats, labels, out)
+		var c := _part(child as Dictionary, mats, labels, out, params)
 		if c != null:
 			node.add_child(c)
 	return node
@@ -285,13 +332,13 @@ static func _cylinder(top: float, bottom: float, height: float, sides: int,
 ## стороны, если описание этого просит: указатель читают с обоих концов стрелки,
 ## и пустая изнанка выглядела бы как другой указатель.
 static func _plate(node: Node3D, p: Dictionary, mats: Dictionary,
-		labels: Dictionary, mat: StandardMaterial3D) -> void:
+		labels: Dictionary, mat: StandardMaterial3D, params: Dictionary, out: Built) -> void:
 	var size := p.get("size", []) as Array
 	if size == null or size.size() < 2:
 		return
-	var w := float(size[0])
-	var h := float(size[1])
-	var t := float(p.get("thickness", 0.01))
+	var w := _num(size[0], params, out)
+	var h := _num(size[1], params, out)
+	var t := _num(p.get("thickness", 0.01), params, out)
 	node.add_child(_box(Vector3(w, h, t), mat))
 	var tex := _face_texture(node, p, mats, labels, w, h)
 	if tex == null:

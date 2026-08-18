@@ -119,14 +119,16 @@ const BUSH_H_MAX := 3.4
 ## Доля низких раскидистых кустов. Число спайково (BUSH_LOW_SHARE).
 const BUSH_LOW_SHARE := 0.42
 
-## Постройки: всё это решения художника, названные списком.
-const BUILDING_SINK := 1.5
-const ROOF_OVERHANG := 0.7
-const ROOF_THICKNESS := 0.6
-## Насколько кровля САДИТСЯ НА СТЕНУ, а не встаёт над ней. Порт из спайка вместе
-## с доводом: плита, поставленная ровно на срез стены, оставляет щель, и дом
-## читается висящим на ножках.
-const ROOF_SEAT := 0.3
+## ФОРМА ПОСТРОЙКИ УЕХАЛА НА СЕРВЕР 2026-08-18. Здесь стояли BUILDING_SINK 1.5,
+## ROOF_OVERHANG 0.7, ROOF_THICKNESS 0.6 и ROOF_SEAT 0.3 с пометкой «всё это
+## решения художника», и пометка была неверна: второй рендер по ним нарисовал бы
+## другой посёлок, и сказать, который верен, было бы нечем.
+##
+## Свес, толщина и посадка кровли живут в теле дома (assets/house.model.json), а
+## габарит подставляется в него параметрами экземпляра. Заглубление оказалось не
+## формой вовсе, а костылём под серверный недосмотр — отметка берётся в одной
+## точке при пятне двадцать метров, — и переехало к тому, кто отдаёт отметку:
+## httpapi/objects.go, BuildingSinkM, бида ClearAhead-316k.
 ## C_ROOF — не цвет кровли, а то, КУДА цвет кровли уводится от цвета стен.
 ## Разница существенная, и она куплена ошибкой: до 2026-08-12 крыша красилась
 ## прямо в C_ROOF, и посёлок с высоты строителя читался серыми плитами — все
@@ -365,6 +367,8 @@ var _stock_assets := {}     # имя вида   -> Dictionary записи ка�
 ## каталогом, разбираются ModelBuild. Пусто значит, что каталог их не прислал, и
 ## привод останется без тела — с отказом на экране, а не молча.
 var _device_models := {}
+## Тела по ИМЕНИ модели: дом и всё, у чего нет рода механизма.
+var _bodies := {}
 var _terrain_node: Node3D = null
 var _terrain_solid: Array[MeshInstance3D] = []
 ## Слой портов деталей (PortDebug). Держится узлом по тому же доводу, что гладь
@@ -1583,7 +1587,11 @@ func _turnout_target() -> Dictionary:
 	# (content.Model.Title) рядом с размерами. Своей таблицы «manual — ручной
 	# перевод» клиент больше не держит.
 	var model := _device_models.get(String(out.get("drive", "")), {}) as Dictionary
-	out["drive_title"] = String(model.get("title", ""))
+	# ПАСПОРТ МЕХАНИЗМА — своим блоком с 2026-08-18: формат тела перестал быть
+	# стрелочным, и род, имя и время перевода лежат в drive, а не в корне модели.
+	var drive_spec: Variant = model.get("drive", null)
+	out["drive_title"] = String((drive_spec as Dictionary).get("title", "")) \
+		if drive_spec is Dictionary else ""
 	return out
 
 
@@ -1742,12 +1750,19 @@ func _load_device_models() -> void:
 			errors.append("тело устройства %s: описание не разобралось как объект" % name)
 			continue
 		var doc := parsed as Dictionary
-		var kind := String(doc.get("device", ""))
-		if kind == "":
-			errors.append("тело устройства %s не назвало род механизма" % name)
-			continue
-		_device_models[kind] = doc
+		# ТЕЛО КЛАДЁТСЯ ПО ИМЕНИ ВСЕГДА: имя есть у всякого тела, род механизма —
+		# только у устройства. До 2026-08-18 ключ был один и он был родом привода,
+		# и дом в такой каталог не ложился вовсе.
+		_bodies[String(doc.get("model", name))] = doc
+		var drive: Variant = doc.get("drive", null)
+		if drive is Dictionary:
+			var kind := String((drive as Dictionary).get("device", ""))
+			if kind == "":
+				errors.append("тело устройства %s не назвало род механизма" % name)
+				continue
+			_device_models[kind] = doc
 	stats["device_models"] = _device_models.size()
+	stats["bodies"] = _bodies.size()
 	for note in cache.notes:
 		errors.append("кэш ассетов: %s" % note)
 
@@ -3902,7 +3917,7 @@ func _hud_text() -> String:
 			float(stats.get("grass_plant_ms", 0.0)), float(stats.get("ballast_toe_m", 0.0)),
 			stats.get("ballast_mask_cells", 0)])
 		l.append("  лес: битовых карт получено %d (только уровень 0)" % stats.get("forest_got", 0))
-		l.append("  построек %d (место, габарит и ОТМЕТКА — с сервера; форма крыши и цвет — здесь)" % stats.get("buildings_drawn", 0))
+		l.append("  построек %d (место, габарит, отметка И ТЕЛО — с сервера; цвет — здесь)" % stats.get("buildings_drawn", 0))
 		l.append("  рек %d, лент %d (ось, урез и ширина — с сервера; цвет и блеск — здесь)" % [
 			stats.get("rivers_drawn", 0), stats.get("river_quads", 0)])
 		if stats.has("solid_bodies"):
@@ -4659,52 +4674,51 @@ func _draw_buildings() -> void:
 	node.name = "Buildings"
 	world.add_child(node)
 
-	var verts := PackedVector3Array()
-	var norms := PackedVector3Array()
-	var cols := PackedColorArray()
-	var idx := PackedInt32Array()
 	var drawn := 0
+	var missing := {}
 	for b_raw in list:
 		var b: Dictionary = b_raw as Dictionary
-		var w := float(b.get("width", 0.0)) * 0.5
-		var d := float(b.get("depth", 0.0)) * 0.5
+		var w := float(b.get("width", 0.0))
+		var d := float(b.get("depth", 0.0))
 		var h := float(b.get("height", 0.0))
 		if w <= 0.0 or d <= 0.0 or h <= 0.0:
 			continue
-		var x := float(b.get("x", 0.0))
-		var y := float(b.get("y", 0.0))
-		var z := float(b.get("z", 0.0))
-		var a := float(b.get("heading", 0.0))
-		var fwd := Vector2(cos(a), sin(a))
-		# Цвет стены — из хеша ИМЕНИ дома, а не из порядка в списке: порядок
-		# может измениться, а дом останется тем же, и перекрашивать его при
-		# пересортировке было бы враньём про постоянство места.
+		# ТЕЛО НАЗЫВАЕТ САМ ДОМ. Своего выбора у показа нет: до 2026-08-18 форма
+		# кровли жила здесь четырьмя константами, и второй рендер нарисовал бы
+		# другой посёлок (разбор — httpapi/objects.go у поля Body).
+		var body_name := String(b.get("body", ""))
+		var body_doc: Dictionary = _bodies.get(body_name, {}) as Dictionary
+		if body_doc.is_empty():
+			missing[body_name] = true
+			continue
+		var built := ModelBuild.build(body_doc, {}, {"width": w, "depth": d, "height": h})
+		if built.failed():
+			missing[body_name + ": " + built.reason] = true
+			continue
+		# ЦВЕТ — ЗОНА РЕНДЕРА, и разнообразие живёт здесь: тело объявляет краску,
+		# показ уводит её по имени дома. Цвет несёт КРОВЛЯ, стены её оттеняют —
+		# с высоты строителя стен почти не видно, и посёлок с цветными стенами
+		# под серой крышей читался двенадцатью одинаковыми плитами (разбор — у
+		# объявления C_ROOF).
 		var col: Color = HOUSE_COLORS[abs(hash(String(b.get("id", "")))) % HOUSE_COLORS.size()]
-		# Заглубление: дом стоит НА земле, но её отметка взята в одной точке, а
-		# пятно у дома двадцать метров. Опустить коробку на BUILDING_SINK — то
-		# же лечение, что у спайка, и названо оно там же: дешевле, чем сажать
-		# каждый угол отдельно, и незаметно, пока участок не на склоне.
-		_house(verts, norms, cols, idx, x, y, z - BUILDING_SINK, fwd, w, d, h, col)
+		var wall_mat: StandardMaterial3D = built.materials.get("wall", null)
+		if wall_mat != null:
+			wall_mat.albedo_color = col.darkened(WALL_SHADE)
+		var roof_mat: StandardMaterial3D = built.materials.get("roof", null)
+		if roof_mat != null:
+			roof_mat.albedo_color = col.lerp(C_ROOF, ROOF_TINT)
+		var root: Node3D = built.root
+		root.position = TerrainMesh.to_godot(float(b.get("x", 0.0)), float(b.get("y", 0.0)),
+			float(b.get("z", 0.0)))
+		# Оси тела — glTF: вперёд смотрит −Z. Поворот дома вокруг вертикали
+		# приходит радианами плана, и знак у него тот же, что у всего, что мир
+		# кладёт по курсу.
+		root.rotation.y = -float(b.get("heading", 0.0))
+		node.add_child(root)
 		drawn += 1
 
-	if idx.is_empty():
-		return
-	var arrays := []
-	arrays.resize(Mesh.ARRAY_MAX)
-	arrays[Mesh.ARRAY_VERTEX] = verts
-	arrays[Mesh.ARRAY_NORMAL] = norms
-	arrays[Mesh.ARRAY_COLOR] = cols
-	arrays[Mesh.ARRAY_INDEX] = idx
-	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var mi := MeshInstance3D.new()
-	mi.name = "Houses"
-	mi.mesh = mesh
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.9
-	mi.material_override = mat
-	node.add_child(mi)
+	for m in missing:
+		errors.append("постройка: тело %s не собралось" % m)
 	stats["buildings_drawn"] = drawn
 
 
@@ -4834,13 +4848,9 @@ func _draw_water(rivers: Array) -> void:
 	stats["river_quads"] = points
 
 
-## _house — коробка стен плюс плита крыши с напуском.
+## _house СНЕСЁН 2026-08-18. Дом строился здесь двумя коробками по четырём
+## константам кровли; теперь он приезжает телом из каталога
+## (assets/house.model.json), а показ подставляет габарит и уводит краску.
 ##
-## Цвет дома несёт КРОВЛЯ, а стены его оттеняют: с высоты строителя и ДСП стен
-## почти не видно, и посёлок, у которого цветные стены под серой крышей,
-## читается двенадцатью одинаковыми плитами. Разбор — у объявления C_ROOF.
-func _house(v: PackedVector3Array, n: PackedVector3Array, c: PackedColorArray, idx: PackedInt32Array,
-		x: float, y: float, z: float, fwd: Vector2, hw: float, hd: float, h: float, wall: Color) -> void:
-	TrackView.box_into(v, n, c, idx, x, y, fwd, hd, hw, z, z + h, wall.darkened(WALL_SHADE))
-	TrackView.box_into(v, n, c, idx, x, y, fwd, hd + ROOF_OVERHANG, hw + ROOF_OVERHANG,
-		z + h - ROOF_SEAT, z + h - ROOF_SEAT + ROOF_THICKNESS, wall.lerp(C_ROOF, ROOF_TINT))
+## Знание, ради которого этот код держался, не выброшено: довод «цвет несёт
+## кровля, а стены оттеняют» переехал туда, где дома теперь строятся.

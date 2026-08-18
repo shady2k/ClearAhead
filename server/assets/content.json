@@ -42,7 +42,7 @@
       "name": "switch_stand_manual",
       "file": "switch_stand_manual.model.json",
       "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-ab158455aa7a03a34ea0d18e9d0d2325dd9bca74a46c40460f4e07157b7e6997",
+      "source_hash": "sha256-0470165844c1e92babbf8bfdca042986286e3f930f4472a96e247b06c51e72a6",
       "anchor": "tie_top",
       "scale": 1.0,
       "translation": [
@@ -62,7 +62,7 @@
       "name": "switch_stand_electric",
       "file": "switch_stand_electric.model.json",
       "media_type": "application/vnd.clearahead.model+json",
-      "source_hash": "sha256-0b0284adc043c00d05bff0c8ae01e548985c343322743d4bb622d3c2e4b74cdf",
+      "source_hash": "sha256-b4d6aced1f18c3175a853bdc09029d41c0baaffe59023677ed1959182f9ded59",
       "anchor": "tie_top",
       "scale": 1.0,
       "translation": [
@@ -74,6 +74,26 @@
         "title": "Электропривод стрелки со стрелочным указателем",
         "author": "ClearAhead",
         "source": "собственная работа: габарит по СП-6М (оценка), показания указателя по ИСИ",
+        "license": "CC0-1.0",
+        "modified": false
+      }
+    },
+    {
+      "name": "house",
+      "file": "house.model.json",
+      "media_type": "application/vnd.clearahead.model+json",
+      "source_hash": "sha256-2d85e536b5dd49e1fe69f4ee14a1154929e053d9b1d19ca108d204177a045914",
+      "anchor": "ground",
+      "scale": 1.0,
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "attribution": {
+        "title": "Жилой дом посёлка: коробка стен и плита кровли",
+        "author": "ClearAhead",
+        "source": "собственная работа: тело перенесено из клиента, где стояло четырьмя константами",
         "license": "CC0-1.0",
         "modified": false
       }
