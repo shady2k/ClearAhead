@@ -460,8 +460,7 @@ func _check_buffer_stops(network: Dictionary, by_id: Dictionary, front: float) -
 	if stops.is_empty():
 		_ok("упоры построены", false, "ни одного упора во входе")
 		return
-	var ratio := 1.0 / 3.0
-	var mesh := TrackView.buffer_stop_mesh(stops, ratio)
+	var mesh := TrackView.buffer_stop_mesh(stops)
 	_ok("упоры построены одним мешем", mesh != null)
 	if mesh == null:
 		return
@@ -469,7 +468,7 @@ func _check_buffer_stops(network: Dictionary, by_id: Dictionary, front: float) -
 		"%d при %d упорах" % [_tris(mesh), stops.size()])
 	var st: TrackBuild.BufferStop = stops[0]
 	var one: Array[TrackBuild.BufferStop] = [st]
-	var box := TrackView.buffer_stop_mesh(one, ratio)
+	var box := TrackView.buffer_stop_mesh(one)
 	var centre := TerrainMesh.to_godot(st.pose.x, st.pose.y, st.pose.z + st.height_m * 0.5)
 	var verdict := _outward(box, centre, front)
 	# Граней СЧИТАНО больше нуля — иначе проверка истинна вакуумно, а это ровно
@@ -774,7 +773,7 @@ func _check_refusals(spans: Array[TrackBuild.Span]) -> void:
 	var no_sleepers: Array[TrackBuild.Sleeper] = []
 	_ok("пустая решётка отвергнута", TrackView.sleeper_mesh(no_sleepers) == null)
 	var no_stops: Array[TrackBuild.BufferStop] = []
-	_ok("пустой список упоров отвергнут", TrackView.buffer_stop_mesh(no_stops, 1.0 / 3.0) == null)
+	_ok("пустой список упоров отвергнут", TrackView.buffer_stop_mesh(no_stops) == null)
 	var bare_frog := TrackBuild.FrogRail.new()
 	_ok("нитка крестовины без рельса отвергнута", TrackView.frog_rail_mesh(bare_frog) == null)
 

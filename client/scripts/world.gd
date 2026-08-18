@@ -140,7 +140,11 @@ const HOUSE_COLORS := [
 	Color(0.55, 0.50, 0.62), Color(0.82, 0.75, 0.60), Color(0.60, 0.66, 0.72),
 ]
 
-const BUFFER_STOP_LENGTH_RATIO := 0.33
+## ДЛИНА УПОРА УЕХАЛА НА СЕРВЕР 2026-08-18. Здесь стояло
+## BUFFER_STOP_LENGTH_RATIO = 0.33 — доля присланной ширины, по которой показ
+## выводил третий размер детали. Доля не единица измерения, а ссылка на чужое
+## число: упор вдвое шире стал бы вдвое длиннее, хотя длина упора шириной не
+## определяется. Теперь приезжает метрами полем `length` (track/buffer_stop.go).
 
 ## Корневые поля, которые клиент умеет читать. Список нужен не для порядка:
 ## поле `trackside` переименовали в `structures` (3637504), клиент остался на
@@ -2036,7 +2040,7 @@ func _draw_track(elements: Array[TrackGeom.Element], network: Dictionary,
 	var stops: Array[TrackBuild.BufferStop] = bs_res["list"]
 	var bs_mi := MeshInstance3D.new()
 	bs_mi.name = "BufferStops"
-	bs_mi.mesh = TrackView.buffer_stop_mesh(stops, BUFFER_STOP_LENGTH_RATIO)
+	bs_mi.mesh = TrackView.buffer_stop_mesh(stops)
 	if bs_mi.mesh != null:
 		bs_mi.material_override = TrackView.solid_material(Color(0.72, 0.16, 0.14))
 		node.add_child(bs_mi)

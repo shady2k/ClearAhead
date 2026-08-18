@@ -174,6 +174,10 @@ class BufferStop:
 	var pose: TrackGeom.AxisPoint
 	var height_m: float
 	var width_m: float
+	## Длина вдоль пути, метры. Приезжает с сервера с 2026-08-18; до того показ
+	## выводил её ДОЛЕЙ ширины (0.33), то есть проектировал третий размер детали
+	## сам, да ещё и отношением к чужому числу.
+	var length_m: float
 
 
 ## Крестовина: точка и обе касательные, всё присланное.
@@ -686,8 +690,11 @@ static func buffer_stops(network: Dictionary, by_id: Dictionary) -> Dictionary:
 		if String(st.get("kind", "")) != "buffer_stop":
 			continue
 		var sid := String(st.get("id", ""))
-		if not (st.has("height") and st.has("width")):
-			skipped.append("%s: нет height/width — габарита упора не прислали" % sid)
+		# ТРИ РАЗМЕРА, А НЕ ДВА, и третий такой же обязательный. Пропустить его и
+		# «дорисовать как раньше» значило бы вернуть в клиент долю 0.33 — то самое
+		# правило вывода, ради отсутствия которого поле length и заведено.
+		if not (st.has("height") and st.has("width") and st.has("length")):
+			skipped.append("%s: нет height/width/length — габарита упора не прислали" % sid)
 			continue
 		var spans: Array = st.get("spans", []) as Array
 		if spans.is_empty():
@@ -705,6 +712,7 @@ static func buffer_stops(network: Dictionary, by_id: Dictionary) -> Dictionary:
 		bs.pose = el.pose_at(float(sp.get("from", 0.0)))
 		bs.height_m = float(st["height"])
 		bs.width_m = float(st["width"])
+		bs.length_m = float(st["length"])
 		out.append(bs)
 	return {"list": out, "skipped": skipped}
 

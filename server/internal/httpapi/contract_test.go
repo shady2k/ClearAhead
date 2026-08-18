@@ -286,6 +286,7 @@ type wireStructure struct {
 	Width         float64    `json:"width,omitempty"`
 	Height        float64    `json:"height,omitempty"`
 	SlabThickness float64    `json:"slab_thickness,omitempty"`
+	Length        float64    `json:"length,omitempty"`
 	Spans         []wireSpan `json:"spans"`
 }
 

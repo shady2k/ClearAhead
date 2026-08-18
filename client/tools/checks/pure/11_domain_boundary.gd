@@ -147,9 +147,6 @@ const WORLD_DEBT := {
 	# Тело постройки: насколько сидит в земле, свес и толщина крыши.
 	"BUILDING_SINK": "ClearAhead-yfu3", "ROOF_OVERHANG": "ClearAhead-yfu3",
 	"ROOF_THICKNESS": "ClearAhead-yfu3", "ROOF_SEAT": "ClearAhead-yfu3",
-	# Упор: длина вдоль пути, и та ДОЛЕЙ — то есть даже не размер, а отношение к
-	# чужому числу. Тот же класс, что снесённая доля наката.
-	"BUFFER_STOP_LENGTH_RATIO": "ClearAhead-yfu3",
 	# Река: насколько лента утоплена относительно уреза.
 	"WATER_SINK": "ClearAhead-yfu3",
 	# Клетка маски, которой трава вычитается под балластом. Правило «где трава не

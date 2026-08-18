@@ -651,7 +651,7 @@ static func slab_mesh(strip: TrackBuild.PlatformStrip) -> ArrayMesh:
 ## художника того же рода, что длина крыла крестовины, и оно названо: упор,
 ## нарисованный плоским прямоугольником, не читался бы как препятствие. Второй
 ## клиент вправе взять другую пропорцию, и мир от этого не изменится.
-static func buffer_stop_mesh(list: Array[TrackBuild.BufferStop], length_ratio: float) -> ArrayMesh:
+static func buffer_stop_mesh(list: Array[TrackBuild.BufferStop]) -> ArrayMesh:
 	if list.is_empty():
 		return null
 	var verts := PackedVector3Array()
@@ -661,7 +661,7 @@ static func buffer_stop_mesh(list: Array[TrackBuild.BufferStop], length_ratio: f
 		var b: TrackBuild.BufferStop = b_raw
 		var p := b.pose
 		_box(verts, norms, idx, p.x, p.y, p.forward(),
-			b.width_m * length_ratio * 0.5, b.width_m * 0.5, p.z, p.z + b.height_m)
+			b.length_m * 0.5, b.width_m * 0.5, p.z, p.z + b.height_m)
 	if idx.is_empty():
 		return null
 	return _mesh(verts, norms, idx)

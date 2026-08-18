@@ -323,6 +323,7 @@
       "kind": "buffer_stop",
       "width": 1.8,
       "height": 1.1,
+      "length": 1.0,
       "spans": [
         {
           "element": "018bcfe5-680d-7242-8242-00000d424242",
@@ -337,6 +338,7 @@
       "kind": "buffer_stop",
       "width": 1.8,
       "height": 1.1,
+      "length": 1.0,
       "spans": [
         {
           "element": "018bcfe5-680f-7242-8242-00000f424242",
@@ -351,6 +353,7 @@
       "kind": "buffer_stop",
       "width": 1.8,
       "height": 1.1,
+      "length": 1.0,
       "spans": [
         {
           "element": "018bcfe5-6810-7242-8242-000010424242",

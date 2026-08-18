@@ -236,8 +236,18 @@ type RenderStructure struct {
 	Height float64 `json:"height,omitempty"`
 	// SlabThickness — толщина плиты платформы: платформа видна сбоку, и торец
 	// плиты — то, чем она отличается от прямоугольника на земле.
-	SlabThickness float64        `json:"slab_thickness,omitempty"`
-	Spans         netloc.LinearU `json:"spans"`
+	SlabThickness float64 `json:"slab_thickness,omitempty"`
+	// Length — длина сооружения ВДОЛЬ ПУТИ, метры. Есть у точечных видов, у
+	// которых протяжённость не задаётся спаном: сегодня это упор.
+	//
+	// До 2026-08-18 клиент выводил её сам, ДОЛЕЙ присланной ширины (0.33), — то
+	// есть третий размер детали проектировал показ, да ещё и отношением к чужому
+	// числу. Разбор — buffer_stop.go.
+	//
+	// У платформы отсутствует и не появится: её длина ЕСТЬ спан, и второе число
+	// рядом означало бы два ответа на один вопрос.
+	Length float64        `json:"length,omitempty"`
+	Spans  netloc.LinearU `json:"spans"`
 }
 
 // RenderGeometry — вход клиента и инструментов.
@@ -1102,6 +1112,11 @@ func Compile(m *mapfmt.Map) (*CompiledNetwork, *RenderGeometry, error) {
 			Height:        st.Height,
 			SlabThickness: st.SlabThickness,
 			Spans:         make(netloc.LinearU, 0, len(st.Span)),
+		}
+		// Длина вдоль пути — только у точечных видов. У платформы её роль играет
+		// спан, и назначить ей ещё и Length значило бы завести второй ответ.
+		if st.Kind == "buffer_stop" {
+			rt.Length = BufferStopLengthM
 		}
 		spans := make(netloc.LinearS, 0, len(st.Span))
 		for _, iv := range st.Span {
