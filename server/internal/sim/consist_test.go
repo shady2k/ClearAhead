@@ -253,3 +253,115 @@ func TestConsistIsHeavierThanLocomotiveAlone(t *testing.T) {
 	t.Logf("за 5 с: одиночный локомотив %.3f м/с, он же с двумя гружёными вагонами %.3f м/с",
 		float64(alone.Speed)/1e6, float64(withTrain.Speed)/1e6)
 }
+
+// locoAndWagon — локомотив и одинокий гружёный полувагон ПОРОЗНЬ, каждый своим
+// сцепом. Между ними gapM метров.
+func locoAndWagon(t *testing.T, gapM float64) (*World, *match.Match) {
+	t.Helper()
+	net := network(t)
+	s := setWithWagon(t)
+	load := 70.0
+	at := func(u float64) netloc.PointU {
+		return netloc.PointU{Element: seedmap.StationMain, U: u, Direction: netloc.DirForward}
+	}
+	locoU := 60.0
+	gonU := locoU + locoLenM/2 + gonLenM/2 + gapM
+	m := &match.Match{ID: "M1", Region: net.MapID, Units: []match.Unit{
+		{ID: locoID, Name: "LOCO_1", Type: "VL80", At: at(locoU)},
+		{ID: gonAID, Name: "GON_1", Type: "GON", At: at(gonU), LoadT: &load},
+	}}
+	for _, u := range m.Units {
+		st, _ := s.StockType(u.Type)
+		mo, err := match.StartMotion(u, st, net.Elements[seedmap.StationMain])
+		if err != nil {
+			t.Fatalf("начальное состояние %s: %v", u.Name, err)
+		}
+		m.SetMotion(u.ID, mo)
+		m.SetConsist(match.Single(u.ID))
+	}
+	m.Controls = map[string]match.Controls{locoID: match.StoppedWithAir()}
+	if st, ok := s.StockType("VL80"); ok {
+		if air, ok := st.AirBrake(); ok {
+			m.Air = map[string]brake.State{locoID: brake.Charged(air)}
+		}
+	}
+	m.Notches = map[string]int{locoID: 0}
+	return NewWorld(net, s), m
+}
+
+// ПОДЪЕХАЛ — СЦЕПИЛСЯ — ПОТЯНУЛ — ОТЦЕПИЛ. Веха В4 словами: «подъезжаете,
+// цепляете, тянете, расставляете, отцепляете».
+//
+// Тест сквозной нарочно. Порознь каждый шаг уже проверен, но между ними лежат
+// швы, на которых всё и ломается: подъезд обязан ОСТАНОВИТЬ машину у чужого
+// тела, сцепка — узнать смычку по той же геометрии, тяга — повезти обоих, а
+// расцепка — оставить вагон стоять там, где его отцепили.
+func TestApproachCoupleHaulAndPart(t *testing.T) {
+	w, m := locoAndWagon(t, 12)
+	wagonBefore, _ := m.MotionOf(gonAID)
+
+	// ПОДЪЕЗД. Локомотив идёт к вагону и обязан встать, а не проехать сквозь.
+	drive(t, m, match.Controls{Traction: 8, Reverser: match.ReverserForward, Handle: brake.HandleRun})
+	step(t, w, m, 120)
+	drive(t, m, match.Controls{Traction: 0, Reverser: match.ReverserNeutral, Handle: brake.HandleService})
+	step(t, w, m, 120)
+	c, _ := m.ConsistOf(locoID)
+	if c.Speed != 0 {
+		t.Fatalf("локомотив не встал у вагона: идёт %.3f м/с", float64(c.Speed)/1e6)
+	}
+	if got := gap(t, m, locoID, gonAID) - (locoLenM+gonLenM)/2; got > 0.05 {
+		t.Fatalf("между машинами %.3f м — до вагона не доехали, цеплять нечего", got)
+	}
+	if after, _ := m.MotionOf(gonAID); after.Span.Length() != wagonBefore.Span.Length() ||
+		after.S != wagonBefore.S {
+		t.Fatal("вагон сдвинулся сам, хотя его ещё не цепляли")
+	}
+
+	// СЦЕПКА.
+	if _, err := m.Couple(w.net, locoID, gonAID, "TRAIN"); err != nil {
+		t.Fatalf("сцепка: %v", err)
+	}
+
+	// ТЯГА: теперь едут оба, и вагон — вместе с локомотивом.
+	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward, Handle: brake.HandleRun})
+	step(t, w, m, 40)
+	locoMo, _ := m.MotionOf(locoID)
+	wagonMo, _ := m.MotionOf(gonAID)
+	if locoMo.Speed == 0 || wagonMo.Speed == 0 {
+		t.Fatalf("сцеп не поехал: локомотив %v, вагон %v", locoMo.Speed, wagonMo.Speed)
+	}
+	if wagonMo.S <= wagonBefore.S {
+		t.Fatalf("вагон не сдвинулся с места: было %s, стало %s", wagonBefore.S, wagonMo.S)
+	}
+	// ОСТАНОВКА И РАСЦЕПКА. Положение вагона запоминается ПОСЛЕ остановки, а не
+	// до неё: под тормозом состав проезжает ещё несколько метров, и это его
+	// законный путь, а не то, что должен был бы проверять этот тест.
+	drive(t, m, match.Controls{Traction: 0, Reverser: match.ReverserNeutral, Handle: brake.HandleEmergency})
+	step(t, w, m, 200)
+	if c, _ := m.ConsistOf(locoID); c.Speed != 0 {
+		t.Fatalf("состав не остановился: %.3f м/с", float64(c.Speed)/1e6)
+	}
+	stopped, _ := m.MotionOf(gonAID)
+	hauled := stopped.S
+	locoStopped, _ := m.MotionOf(locoID)
+	if _, _, err := m.Uncouple("TRAIN", locoID, "TAIL"); err != nil {
+		t.Fatalf("расцепка: %v", err)
+	}
+
+	// РАЗЪЕХАЛИСЬ: локомотив уходит назад, вагон остаётся там, где стоял.
+	// ТИКОВ С ЗАПАСОМ: после экстренного торможения магистраль надо зарядить
+	// заново, и до отпуска колодок машина стоит под собственным тормозом. Это
+	// не задержка теста, а поведение машины.
+	drive(t, m, match.Controls{Traction: 15, Reverser: match.ReverserReverse, Handle: brake.HandleRun})
+	step(t, w, m, 300)
+	locoAfter, _ := m.MotionOf(locoID)
+	wagonAfter, _ := m.MotionOf(gonAID)
+	if wagonAfter.S != hauled {
+		t.Fatalf("отцепленный вагон уехал: было %s, стало %s", hauled, wagonAfter.S)
+	}
+	if locoAfter.S >= locoStopped.S {
+		t.Fatalf("локомотив не уехал назад: %s против %s", locoAfter.S, locoStopped.S)
+	}
+	t.Logf("вагон подвинут на %.2f м и оставлен стоять; локомотив ушёл назад",
+		float64(hauled-wagonBefore.S)/1e6)
+}
