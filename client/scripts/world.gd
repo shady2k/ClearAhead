@@ -349,6 +349,10 @@ var _stands := {}
 var _blades := {}
 ## Положение стрелок по последнему снапшоту: id -> словарь провода.
 var _turnouts := {}
+## СЦЕПЫ ПО ПОСЛЕДНЕМУ СНАПШОТУ, списком как пришли: {id, members, speed,
+## leading}. Что с чем сцеплено — факт о мире, и решает его сервер: клиент их не
+## выводит и не дополняет, иначе завёл бы второе правило сцепки у себя.
+var _consists: Array = []
 ## Ближайшая стрелка ПО ХОДУ машины, которой управляет игрок: {turnout, distance}
 ## из снапшота. Считает её сервер — обход сети клиенту запрещён.
 var _ahead := {}
@@ -1190,6 +1194,10 @@ func _on_snapshot(snap: LiveChannel.Snapshot) -> void:
 	_ahead = _ahead_of(snap)
 	_show_turnouts()
 	_refresh_turnout_panel()
+	# СЦЕПЫ. Хранятся списком как пришли: клиент их не считает и не выводит —
+	# что с чем сцеплено, решает сервер, и второе правило вывода на этой стороне
+	# разошлось бы с ним ровно тогда, когда сцепка случится сама, ударом.
+	_consists = snap.consists
 	# Кабина берёт положение рукояток из снапшота: истина о машине приходит
 	# оттуда, а не остаётся тем, что игрок в последний раз выставил.
 	if cab.aboard():
@@ -3495,6 +3503,33 @@ func _cab_stats() -> void:
 
 
 ## _controls_of — положение органов машины из последнего снапшота.
+## _plural — русское склонение при числе. Четыре строки вместо «2 единиц» на
+## экране: текст, который читает человек, обязан быть написан по-человечески, и
+## это ровно то же правило, по которому отказы сервера пишутся словами.
+static func _plural(n: int, one: String, few: String, many: String) -> String:
+	var mod100 := n % 100
+	if mod100 >= 11 and mod100 <= 14:
+		return many
+	match n % 10:
+		1:
+			return one
+		2, 3, 4:
+			return few
+	return many
+
+
+## _consist_of — сцеп, в котором едет названная единица. Пусто, если сцепов ещё
+## не присылали: у старого сервера их в конверте нет, и выдумывать сцеп из одной
+## машины клиент не станет — «сцепа не прислали» и «машина одна» это разное.
+func _consist_of(unit_id: String) -> Dictionary:
+	for raw in _consists:
+		var c := raw as Dictionary
+		for raw_mem in (c.get("members", []) as Array):
+			if String((raw_mem as Dictionary).get("unit", "")) == unit_id:
+				return c
+	return {}
+
+
 func _unit_of(unit_id: String) -> Dictionary:
 	if channel == null or channel.last_snapshot == null:
 		return {}
@@ -3879,6 +3914,17 @@ func _hud_text() -> String:
 		# машинист (четыре класса фактов, ClearAhead-0na).
 		l.append("  скорость %.1f км/ч (с сервера; клиент между снимками не досчитывает)" % [
 			float(stats.get("stock_speed_ms", 0.0)) * 3.6])
+		# СЦЕП — ЭТО ТО, ЧЕМ ИГРОК УПРАВЛЯЕТ, а не то, в чём он сидит. Строка
+		# заведена вместе с автосцепкой от удара: сцепка теперь случается БЕЗ
+		# КОМАНДЫ, и без этой строки единственным известием о ней был бы вагон,
+		# поехавший впереди — то есть догадка вместо ответа.
+		var train := _consist_of(cab.unit_id)
+		if not train.is_empty():
+			var members := (train.get("members", []) as Array)
+			if members.size() > 1:
+				l.append("  [color=#80ff80]сцеп: %d %s, ведёт конец %s[/color]" % [
+					members.size(), _plural(members.size(), "единица", "единицы", "единиц"),
+					String(train.get("leading", "?"))])
 		l.append("  [i]W/S тяга, A/D кран машиниста, Z/X вспомогательный, R реверсор, 0 экстренная остановка[/i]")
 	if stats.has("revision"):
 		l.append("эпоха %s, ревизия %s, network_model %s…, network %s…, раскладка %s" % [

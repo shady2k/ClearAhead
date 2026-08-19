@@ -9,9 +9,11 @@ package match
 import (
 	"testing"
 
+	"github.com/shady2k/ClearAhead/server/internal/mapfmt"
 	"github.com/shady2k/ClearAhead/server/internal/netloc"
 	"github.com/shady2k/ClearAhead/server/internal/seedmap"
 	"github.com/shady2k/ClearAhead/server/internal/track"
+	"github.com/shady2k/ClearAhead/server/internal/units"
 )
 
 // Габарит машин фикстуры. Складываются в расстановке: тела ставятся вплотную,
@@ -58,7 +60,7 @@ func coupled(t *testing.T, gonDir netloc.Direction) (*Match, *track.CompiledNetw
 // ПОСЛЕ локомотива, не перевернувшись.
 func TestCoupleMakesOneChain(t *testing.T) {
 	m, net := coupled(t, netloc.DirForward)
-	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN")
+	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0)
 	if err != nil {
 		t.Fatalf("сцепка: %v", err)
 	}
@@ -91,7 +93,7 @@ func TestCoupleMakesOneChain(t *testing.T) {
 // весь состав (sim.dirA).
 func TestCoupleFlipsTheOneThatCameBackwards(t *testing.T) {
 	m, net := coupled(t, netloc.DirReverse)
-	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN")
+	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0)
 	if err != nil {
 		t.Fatalf("сцепка: %v", err)
 	}
@@ -111,12 +113,12 @@ func TestCoupleFlipsTheOneThatCameBackwards(t *testing.T) {
 // какой машины он щёлкнул.
 func TestCoupleIsSymmetric(t *testing.T) {
 	m1, net1 := coupled(t, netloc.DirForward)
-	a, err := m1.Couple(net1, loco1ID, loco2ID, "TRAIN")
+	a, err := m1.Couple(net1, loco1ID, loco2ID, "TRAIN", 0, 0)
 	if err != nil {
 		t.Fatalf("сцепка: %v", err)
 	}
 	m2, net2 := coupled(t, netloc.DirForward)
-	b, err := m2.Couple(net2, loco2ID, loco1ID, "TRAIN")
+	b, err := m2.Couple(net2, loco2ID, loco1ID, "TRAIN", 0, 0)
 	if err != nil {
 		t.Fatalf("обратная сцепка: %v", err)
 	}
@@ -155,38 +157,42 @@ func TestCoupleRefusals(t *testing.T) {
 		if err != nil {
 			t.Fatalf("расстановка: %v", err)
 		}
-		if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN"); err == nil {
+		if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0); err == nil {
 			t.Fatal("сцепились тела, стоящие в пяти метрах друг от друга")
 		}
 	})
 
-	t.Run("сцепка на ходу", func(t *testing.T) {
+	// СЦЕПКА НА ХОДУ БЕЗ МАСС — ОТКАЗ, А НЕ ТИХИЙ НОЛЬ. Правило «сцепляют
+	// стоящие» ушло из домена к команде (см. TestCoupleOnTheMoveKeepsMomentum),
+	// но безмассовый удар посчитать нельзя: молча остановленный состав выглядел
+	// бы как дефект физики, а не как забытый аргумент.
+	t.Run("удар без масс", func(t *testing.T) {
 		m, net := coupled(t, netloc.DirForward)
 		c, _ := m.ConsistOf(loco1ID)
 		c.Speed = 1_000_000 // метр в секунду
 		m.SetConsist(c)
-		if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN"); err == nil {
-			t.Fatal("сцепка прошла на ходу")
+		if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0); err == nil {
+			t.Fatal("сцепка на ходу прошла с неназванными массами")
 		}
 	})
 
 	t.Run("сцеп сам с собой", func(t *testing.T) {
 		m, net := coupled(t, netloc.DirForward)
-		if _, err := m.Couple(net, loco1ID, loco1ID, "TRAIN"); err == nil {
+		if _, err := m.Couple(net, loco1ID, loco1ID, "TRAIN", 0, 0); err == nil {
 			t.Fatal("сцеп сцепился сам с собой")
 		}
 	})
 
 	t.Run("нет такого сцепа", func(t *testing.T) {
 		m, net := coupled(t, netloc.DirForward)
-		if _, err := m.Couple(net, loco1ID, "НЕТ_ТАКОГО", "TRAIN"); err == nil {
+		if _, err := m.Couple(net, loco1ID, "НЕТ_ТАКОГО", "TRAIN", 0, 0); err == nil {
 			t.Fatal("сцепка с несуществующим сцепом прошла")
 		}
 	})
 
 	t.Run("новый сцеп без имени", func(t *testing.T) {
 		m, net := coupled(t, netloc.DirForward)
-		if _, err := m.Couple(net, loco1ID, loco2ID, ""); err == nil {
+		if _, err := m.Couple(net, loco1ID, loco2ID, "", 0, 0); err == nil {
 			t.Fatal("сцепка прошла без имени нового сцепа")
 		}
 	})
@@ -195,7 +201,7 @@ func TestCoupleRefusals(t *testing.T) {
 // РАСЦЕПКА ДЕЛИТ ЦЕПОЧКУ НАДВОЕ и обе части оставляет живыми сцепами.
 func TestUncoupleSplitsTheChain(t *testing.T) {
 	m, net := coupled(t, netloc.DirForward)
-	if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN"); err != nil {
+	if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0); err != nil {
 		t.Fatalf("сцепка: %v", err)
 	}
 	head, tail, err := m.Uncouple("TRAIN", loco1ID, "TAIL")
@@ -229,7 +235,7 @@ func TestUncoupleSplitsTheChain(t *testing.T) {
 // ОТКАЗЫ РАСЦЕПКИ.
 func TestUncoupleRefusals(t *testing.T) {
 	m, net := coupled(t, netloc.DirForward)
-	if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN"); err != nil {
+	if _, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 0, 0); err != nil {
 		t.Fatalf("сцепка: %v", err)
 	}
 	// За последней единицей расцеплять нечего: это не пустая часть, а команда,
@@ -245,5 +251,72 @@ func TestUncoupleRefusals(t *testing.T) {
 	}
 	if _, _, err := m.Uncouple("TRAIN", loco1ID, ""); err == nil {
 		t.Fatal("расцепка прошла без имени новой части")
+	}
+}
+
+// СЦЕПКА НА ХОДУ СОХРАНЯЕТ КОЛИЧЕСТВО ДВИЖЕНИЯ.
+//
+// Это и есть автосцепка: локомотив налетел на стоящий вагон, и дальше они идут
+// одним телом — медленнее локомотива и быстрее вагона. Число проверяется
+// СЧЁТОМ ОТДЕЛЬНО ОТ КОДА: 192 т на метре в секунду против 94 т в покое дают
+// 192/(192+94) = 0.6713… м/с. Проверка вида «вернулось то, что вернулось»
+// прошла бы и на потерянной массе.
+func TestCoupleOnTheMoveKeepsMomentum(t *testing.T) {
+	m, net := coupled(t, netloc.DirForward)
+	c, _ := m.ConsistOf(loco1ID)
+	c.Speed = 1_000_000 // метр в секунду
+	m.SetConsist(c)
+
+	const locoMass = 192_000 // кг, паспорт ВЛ80
+	const gonMass = 94_000   // кг, гружёный полувагон фикстуры: тара 24 плюс 70
+	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", locoMass, gonMass)
+	if err != nil {
+		t.Fatalf("сцепка на ходу: %v", err)
+	}
+	want := units.Speed(1_000_000 * locoMass / (locoMass + gonMass))
+	if diff := got.Speed - want; diff > 1 || diff < -1 {
+		t.Fatalf("после удара сцеп идёт %d мкм/с, посчитано %d", got.Speed, want)
+	}
+}
+
+// УДАР СЧИТАЕТСЯ В СИСТЕМЕ ОТСЧЁТА НОВОГО СЦЕПА, а не каждого прежнего в своей.
+//
+// Вагон стоит задом наперёд: в цепочке он перевернётся, и вместе с порядком
+// обязан перевернуться знак ЕГО скорости. Пусти его сюда как есть — и вагон,
+// катящийся навстречу локомотиву, сложился бы с ним как догоняющий.
+func TestImpactSpeaksInTheNewConsistFrame(t *testing.T) {
+	m, net := coupled(t, netloc.DirReverse)
+	// Оба идут навстречу друг другу с одинаковой скоростью по своим осям: у
+	// перевёрнутого вагона ход B → A направлен на локомотив.
+	for _, id := range []string{loco1ID, loco2ID} {
+		c, _ := m.ConsistOf(id)
+		c.Speed = 1_000_000
+		m.SetConsist(c)
+	}
+	got, err := m.Couple(net, loco1ID, loco2ID, "TRAIN", 100_000, 100_000)
+	if err != nil {
+		t.Fatalf("сцепка: %v", err)
+	}
+	// Равные массы, встречные ходы, одинаковые модули — сцеп обязан встать.
+	if got.Speed != 0 {
+		t.Fatalf("встречный удар равных масс дал %d мкм/с, ожидался покой", got.Speed)
+	}
+}
+
+// ИМЯ СЦЕПА ОТ УДАРА ВЫВОДИТСЯ, А НЕ ВЫДАЁТСЯ, и не зависит от порядка.
+//
+// Кто в кого въехал — вопрос к физике, а не к тождеству получившегося тела:
+// два прогона одной расстановки обязаны назвать его одинаково, иначе
+// канонический хеш состояния разошёлся бы между загрузками одного мира.
+func TestAutoConsistIDIsDerivedAndOrderFree(t *testing.T) {
+	a, b := AutoConsistID(loco1ID, loco2ID), AutoConsistID(loco2ID, loco1ID)
+	if a != b {
+		t.Fatalf("порядок изменил имя: %s против %s", a, b)
+	}
+	if a == AutoConsistID(loco1ID, "ДРУГОЙ") {
+		t.Fatal("разные пары дали одно имя")
+	}
+	if err := mapfmt.ValidID("сцеп", a); err != nil {
+		t.Fatalf("выведенное имя не проходит проверку идентификатора: %v", err)
 	}
 }

@@ -140,3 +140,36 @@ func TestUnique(t *testing.T) {
 		seen[id] = true
 	}
 }
+
+// ВЫВЕДЕННЫЙ ИДЕНТИФИКАТОР ПОВТОРЯЕТСЯ, А ВЕРСИЯ У НЕГО ВОСЬМАЯ.
+//
+// Повторяется — потому что на этом стоит воспроизводимость мира: сцеп,
+// родившийся от удара, обязан называться одинаково в двух прогонах одной
+// расстановки, иначе канонический хеш состояния разошёлся бы между загрузками.
+//
+// Восьмая — потому что седьмая ОБЕЩАЕТ метку времени в старших битах, а там
+// хеш. Версия — это не украшение записи, а слово, сказанное всякому разбору.
+func TestDerivedRepeatsAndSaysVersionEight(t *testing.T) {
+	got := Derived("consist.auto", "A", "B")
+	if again := Derived("consist.auto", "A", "B"); again != got {
+		t.Fatalf("два вызова дали разное: %s и %s", got, again)
+	}
+	if other := Derived("consist.auto", "A", "C"); other == got {
+		t.Fatalf("разные части дали одно имя: %s", other)
+	}
+	// ДЛИНА ЧАСТЕЙ ЗНАЧИМА, а не только их склейка: без префикса длины пары
+	// («AB», «») и («A», «B») дали бы один идентификатор.
+	if glued := Derived("consist.auto", "AB", ""); glued == Derived("consist.auto", "A", "B") {
+		t.Fatal("части склеились без учёта длины: («AB», «») совпало с («A», «B»)")
+	}
+	raw, err := hex.DecodeString(strings.ReplaceAll(got, "-", ""))
+	if err != nil || len(raw) != 16 {
+		t.Fatalf("форма идентификатора %q: %v", got, err)
+	}
+	if v := raw[6] >> 4; v != 8 {
+		t.Fatalf("версия %d, ожидалась восьмая (RFC 9562 §5.8, custom)", v)
+	}
+	if raw[8]&0xc0 != 0x80 {
+		t.Fatalf("вариант %#x, ожидался RFC 4122/9562", raw[8]&0xc0)
+	}
+}

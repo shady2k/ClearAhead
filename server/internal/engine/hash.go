@@ -219,6 +219,45 @@ func StateHash(m *match.Match) string {
 		writeStr(mv.To)
 		writeUint(uint64(mv.Left / units.Millisecond))
 	}
+	// СЦЕПЫ — ТОЖЕ СОСТОЯНИЕ, и это ШЕСТОЙ по счёту случай того же рода. Список
+	// выше можно читать как список забытого: органы, физика, занятость,
+	// положение остряка, идущий остряк — и всякий раз цена одна, потому что
+	// рассылка идёт ПО СМЕНЕ ХЕША.
+	//
+	// Здесь она стала выше прежних: сцепка теперь случается ОТ УДАРА, без
+	// команды и без ответа на неё (sim.couple). Не попади она в хеш — и
+	// единственное известие о том, что два тела стали поездом, доезжало бы до
+	// клиента секундным биением. Положение при этом менялось бы каждый тик, то
+	// есть снапшоты шли бы часто и НЕ НЕСЛИ БЫ новости: состав уже едет вместе, а
+	// на экране два тела едут рядом по совпадению.
+	//
+	// Сортировка по имени — по тому же доводу, что у единиц: порядок в срезе
+	// партии есть порядок РОЖДЕНИЯ сцепов, а не свойство состояния мира.
+	consists := append([]match.Consist(nil), m.Consists...)
+	slices.SortFunc(consists, func(a, b match.Consist) int {
+		switch {
+		case a.ID < b.ID:
+			return -1
+		case a.ID > b.ID:
+			return 1
+		default:
+			return 0
+		}
+	})
+	writeUint(uint64(len(consists)))
+	for _, c := range consists {
+		writeStr(c.ID)
+		writeStr(string(c.Leading))
+		writeUint(uint64(c.Speed))
+		writeUint(uint64(len(c.Members)))
+		// ПОРЯДОК ЧЛЕНОВ НЕ СОРТИРУЕТСЯ: он ЕСТЬ геометрия состава, читаемая от
+		// конца B к концу A, а не способ их перечислить. Отсортируй его — и
+		// переставленные местами вагоны дали бы один хеш.
+		for _, mem := range c.Members {
+			writeStr(mem.UnitID)
+			writeUint(boolBit(mem.Flipped))
+		}
+	}
 	return hex.EncodeToString(h.Sum(nil))
 }
 

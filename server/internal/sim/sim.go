@@ -102,12 +102,122 @@ func (w *World) Advance(m *match.Match, dt units.SimTime) error {
 	// ДВИЖУТСЯ СЦЕПЫ, А НЕ ЕДИНИЦЫ. Одиночная машина — сцеп из одной (В4,
 	// match/consist.go): второго пути «единица сама по себе» нет нарочно, иначе
 	// сцепка меняла бы не связь между машинами, а способ их считать.
+	//
+	// ОБХОД ИДЁТ ПО ИМЕНАМ, А НЕ ПО СРЕЗУ ПАРТИИ, и это не стилистика. Автосцепка
+	// этого же тика удаляет из партии ДВА сцепа и заводит третий; обход по срезу
+	// держал бы в руке заголовок, снятый до правки, и вобранный сцеп поехал бы
+	// второй раз — своими прежними единицами, которые к тому мигу уже едут в
+	// составе. Имя же можно перепроверить: сцепа нет — значит его вобрали.
+	ids := make([]string, 0, len(m.Consists))
 	for _, c := range m.Consists {
-		if err := w.advanceConsist(m, c, dt); err != nil {
+		ids = append(ids, c.ID)
+	}
+	for _, id := range ids {
+		c, ok := m.ConsistByID(id)
+		if !ok {
+			continue
+		}
+		into, err := w.advanceConsist(m, c, dt)
+		if err != nil {
+			return err
+		}
+		if into == "" {
+			continue
+		}
+		if err := w.couple(m, id, into); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// couple — АВТОСЦЕПКА: два тела соприкоснулись и стали одним.
+//
+// # Почему это здесь, а не в домене
+//
+// Потому что домену нечем взвесить сцепы. Скорость после удара — количество
+// движения, поделённое на суммарную массу (match.impact), а масса живёт в
+// паспорте с учётом груза, то есть у того, у кого есть набор контента. Домен
+// сцепляет и переворачивает, здесь — весы.
+//
+// # Чего здесь НЕТ: расцеплённая пара цепляется снова
+//
+// У настоящей автосцепки расцепной рычаг ставит замок «на буфер», и разведённые
+// машины не сцепляются повторно, пока не разъедутся. У нас такого состояния нет
+// вовсе, поэтому расцепленный и снова прижатый отцеп сцепится опять. На стоянке
+// это незаметно (стоящие тела не двигаются, а сцепка ловится только движением),
+// а вот отцепить на ходу и тут же догнать — сцепит. Названо здесь, потому что
+// лечится это не тут, а вместе с расцепным рычагом снаружи: положение замка —
+// такое же состояние мира, как положение остряка, и заводить его раньше того,
+// кто им двигает, значило бы объявить форму без потребителя.
+//
+// # Отказ гасит скорость, а не оставляет как есть
+//
+// Сцепка после настоящего касания провалиться не должна: тела в допуске смычки,
+// концы найдены тем же механизмом, которым состав едет. Но если она всё же
+// провалилась, оставить сцепу скорость значило бы дать телу, упёршемуся в
+// чужое, толкать его вечно — каждый тик заново и с тем же исходом. Гасим и
+// поднимаем ошибку: мир сломан, но не крутится.
+func (w *World) couple(m *match.Match, aID, bID string) error {
+	massA, err := w.consistMass(m, aID)
+	if err != nil {
+		return err
+	}
+	massB, err := w.consistMass(m, bID)
+	if err != nil {
+		return err
+	}
+	merged, err := m.Couple(w.net, aID, bID, match.AutoConsistID(aID, bID), massA, massB)
+	if err != nil {
+		if c, ok := m.ConsistByID(aID); ok {
+			c.Speed = 0
+			m.SetConsist(c)
+		}
+		return fmt.Errorf("sim: автосцепка %s и %s: %w", aID, bID, err)
+	}
+	// СКОРОСТИ ЕДИНИЦ — СЛЕДСТВИЕ СКОРОСТИ СЦЕПА, и пересчитать их надо ЗДЕСЬ, а
+	// не оставить до следующего тика. Между сцепкой и ним лежит снапшот: вагон
+	// уехал бы в нём с нулевой скоростью, идя при этом в составе, — то есть
+	// клиент показал бы стоящий вагон, ползущий по путям.
+	for _, mem := range merged.Members {
+		mo, ok := m.MotionOf(mem.UnitID)
+		if !ok {
+			continue
+		}
+		mo.Speed = merged.UnitSpeed(mem, mo.Facing)
+		m.SetMotion(mem.UnitID, mo)
+	}
+	return nil
+}
+
+// consistMass — масса сцепа: сумма масс единиц ПРИ ИХ ГРУЗЕ.
+//
+// При грузе, а не порожних: гружёный полувагон весит вчетверо против тары, и
+// удар о него кончается совсем не тем, чем удар о порожний. Паспорт с учётом
+// груза даёт тот же passportAt, которым считают силы, — второго правила «сколько
+// весит эта единица» не заводится.
+func (w *World) consistMass(m *match.Match, id string) (units.Mass, error) {
+	c, ok := m.ConsistByID(id)
+	if !ok {
+		return 0, fmt.Errorf("sim: сцепа %s в партии нет", id)
+	}
+	var total units.Mass
+	for _, mem := range c.Members {
+		u, ok := m.UnitOf(mem.UnitID)
+		if !ok {
+			return 0, fmt.Errorf("sim: сцеп %s: единицы %s в партии нет", id, mem.UnitID)
+		}
+		st, ok := w.set.StockType(u.Type)
+		if !ok {
+			return 0, fmt.Errorf("sim: единица %s: тип %s исчез из набора", u.ID, u.Type)
+		}
+		loco, err := passportAt(st, u)
+		if err != nil {
+			return 0, err
+		}
+		total += loco.Mass
+	}
+	return total, nil
 }
 
 // member — единица сцепа со всем, что нужно её посчитать: паспорт, состояние
@@ -231,18 +341,23 @@ func dirU(mem match.Member, facing netloc.Direction) int64 {
 // Отсюда порядок подшага: пневматика и контроллеры — по единицам, силы — по
 // единицам, сложение — одно, ускорение — одно, движение — всем на одну и ту же
 // величину.
-func (w *World) advanceConsist(m *match.Match, c match.Consist, dt units.SimTime) error {
+func (w *World) advanceConsist(m *match.Match, c match.Consist, dt units.SimTime) (string, error) {
 	ms, err := w.gather(m, c)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if len(ms) == 0 {
-		return nil
+		return "", nil
 	}
 	// СТОЯЩИЙ СЦЕП БЕЗ ТЯГИ И БЕЗ УКЛОНА НИКУДА НЕ ДЕНЕТСЯ, но проверять это
 	// здесь нельзя: уклон толкает и стоящего, а тормоз держит. Поэтому шаг
 	// делается всегда, а дешевизна берётся тем, что интегратор не аллоцирует.
 
+	// into — сцеп, об который состав уткнулся: его вернём наверх, и там случится
+	// сцепка. ЗДЕСЬ ЖЕ ПОДШАГИ ОБРЫВАЮТСЯ: продолжать интегрировать тело,
+	// которому уже некуда идти, значило бы копить в нём скорость, с которой оно
+	// потом ударит соседа, — а удар случился сейчас.
+	into := ""
 	left := dt
 	for left > 0 {
 		step := PhysicsStep
@@ -264,11 +379,14 @@ func (w *World) advanceConsist(m *match.Match, c match.Consist, dt units.SimTime
 			}
 		}
 		var err error
-		c, err = w.integrate(m, c, ms, step)
+		c, into, err = w.integrate(m, c, ms, step)
 		if err != nil {
-			return err
+			return "", err
 		}
 		left -= step
+		if into != "" {
+			break
+		}
 	}
 	m.SetConsist(c)
 	for _, e := range ms {
@@ -280,7 +398,7 @@ func (w *World) advanceConsist(m *match.Match, c match.Consist, dt units.SimTime
 			m.SetNotch(e.unit.ID, e.notch)
 		}
 	}
-	return nil
+	return into, nil
 }
 
 // stepNotch — продвинуть главный контроллер к заданию машиниста.
@@ -334,7 +452,8 @@ func stepNotch(milli, want int, st content.StockType, dt units.SimTime) int {
 // Конструкционная скорость есть предел прочности экипажной части, и он у
 // каждой машины свой; состав идёт по меньшему. Взять предел локомотива значило
 // бы разогнать порожний полувагон до ста десяти.
-func (w *World) integrate(m *match.Match, c match.Consist, ms []*member, dt units.SimTime) (match.Consist, error) {
+func (w *World) integrate(m *match.Match, c match.Consist, ms []*member,
+	dt units.SimTime) (match.Consist, string, error) {
 	var total units.Force
 	var mass units.Mass
 	maxSpeed := units.Speed(0)
@@ -343,11 +462,11 @@ func (w *World) integrate(m *match.Match, c match.Consist, ms []*member, dt unit
 	for _, e := range ms {
 		el, ok := w.net.Elements[e.mo.Element]
 		if !ok {
-			return c, fmt.Errorf("sim: единица %s: элемента %s нет в сети", e.unit.ID, e.mo.Element)
+			return c, "", fmt.Errorf("sim: единица %s: элемента %s нет в сети", e.unit.ID, e.mo.Element)
 		}
 		grade, radius, err := el.AlignmentAt(e.mo.S)
 		if err != nil {
-			return c, fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
+			return c, "", fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
 		}
 		// СКОРОСТЬ ЕДИНИЦЫ — СЛЕДСТВИЕ СКОРОСТИ СЦЕПА. Пишется здесь, до сил,
 		// потому что силы её и спрашивают: тормоз и сопротивление направлены
@@ -366,7 +485,7 @@ func (w *World) integrate(m *match.Match, c match.Consist, ms []*member, dt unit
 		}
 	}
 	if mass <= 0 {
-		return c, fmt.Errorf("sim: сцеп %s: суммарная масса %d — делить не на что", c.ID, mass)
+		return c, "", fmt.Errorf("sim: сцеп %s: суммарная масса %d — делить не на что", c.ID, mass)
 	}
 
 	speed := c.Speed
@@ -396,6 +515,7 @@ func (w *World) integrate(m *match.Match, c match.Consist, ms []*member, dt unit
 	c.Speed = next
 	return w.move(m, c, ms, ds)
 }
+
 
 // forces — сумма сил вдоль РОСТА u элемента.
 //
@@ -516,39 +636,54 @@ func (w *World) forces(e *member, grade int64, radius units.Distance) (units.For
 // может пройти, берём МЕНЬШЕЕ, и только потом двигаем всех на него. Меньшее и
 // есть физика сцепа: упор под головой останавливает весь состав, включая тот
 // хвост, перед которым пути ещё километр.
-func (w *World) move(m *match.Match, c match.Consist, ms []*member, ds units.Distance) (match.Consist, error) {
+func (w *World) move(m *match.Match, c match.Consist, ms []*member,
+	ds units.Distance) (match.Consist, string, error) {
 	if ds == 0 {
-		return c, nil
+		return c, "", nil
 	}
 	// ПЕРВЫЙ ПРОХОД: сколько может каждый. Отрезки-кандидаты сохраняются — при
 	// свободном пути второго счёта не будет вовсе, а это обычный случай.
 	cand := make([]track.Span, len(ms))
 	limit := abs(ds)
+	// into — СЦЕП, В КОТОРЫЙ УТКНУЛИСЬ, и он берётся у того члена, который
+	// остановил состав. Не у первого попавшегося: голова могла упереться в
+	// вагон, а хвост в это же время — в тупик за спиной, и цеплять надо с тем,
+	// об кого состав встал.
+	into := ""
 	for i, e := range ms {
-		sp, moved, err := w.slide(m, c, e, dirA(e.mem)*ds)
+		sp, moved, other, err := w.slide(m, c, e, dirA(e.mem)*ds)
 		if err != nil {
-			return c, err
+			return c, "", err
 		}
 		cand[i] = sp
 		if moved < limit {
-			limit = moved
+			limit, into = moved, other
 		}
 	}
-	if limit == 0 {
-		// Никто не сдвинулся: упор, край карты, стрелка не по ходу или чужое
-		// тело. Для физики это одно и то же — сцеп встал.
+	if limit == 0 && into == "" {
+		// Никто не сдвинулся, и впереди не тело: упор, край карты или стрелка не
+		// по ходу. Сцеп встал.
 		c.Speed = 0
-		return c, nil
+		return c, "", nil
+	}
+	if limit == 0 {
+		// Стоим вплотную к чужому телу. СКОРОСТЬ НЕ ГАСИМ: её сейчас спросит
+		// сцепка, чтобы поделить количество движения на два тела (match.impact).
+		// Погасить здесь значило бы, что состав, влетевший в вагон, останавливает
+		// сам себя, а вагон трогается ниоткуда.
+		return c, into, nil
 	}
 	if limit < abs(ds) {
 		// ВТОРОЙ ПРОХОД нужен только когда кто-то уткнулся: остальные обязаны
 		// пройти столько же, сколько он, а не столько, сколько могли.
-		c.Speed = 0
+		if into == "" {
+			c.Speed = 0
+		}
 		short := units.Distance(sign64(int64(ds))) * limit
 		for i, e := range ms {
-			sp, _, err := w.slide(m, c, e, dirA(e.mem)*short)
+			sp, _, _, err := w.slide(m, c, e, dirA(e.mem)*short)
 			if err != nil {
-				return c, err
+				return c, "", err
 			}
 			cand[i] = sp
 		}
@@ -561,7 +696,7 @@ func (w *World) move(m *match.Match, c match.Consist, ms []*member, ds units.Dis
 			continue
 		}
 		if err := e.mo.SetSpan(cand[i]); err != nil {
-			return c, fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
+			return c, "", fmt.Errorf("sim: единица %s: %w", e.unit.ID, err)
 		}
 		// Ось под единицей могла перевернуться (встречный элемент). Знак её
 		// скорости — следствие скорости сцепа, и пересчитывается он вместе с
@@ -570,7 +705,7 @@ func (w *World) move(m *match.Match, c match.Consist, ms []*member, ds units.Dis
 		e.dirU = dirU(e.mem, e.mo.Facing)
 		e.mo.Speed = c.UnitSpeed(e.mem, e.mo.Facing)
 	}
-	return c, nil
+	return c, into, nil
 }
 
 // sign64 — знак целого: ±1, ноль даёт ноль.
@@ -595,7 +730,7 @@ func sign64(v int64) int64 {
 // границы и не сжимается у упора. Наращивание без усечения дало бы состав,
 // растущий с каждым тиком, — и это не выдумка про запас, а первое, что вышло бы
 // при перестановке двух строк.
-func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Distance) (track.Span, units.Distance, error) {
+func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Distance) (track.Span, units.Distance, string, error) {
 	u, sp := e.unit, e.mo.Span
 	walk := w.top.At(m.TurnoutAt)
 	toA := dA > 0
@@ -608,13 +743,24 @@ func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Dista
 	// ГЕОМЕТРИЯ ПЕРВОЙ: сколько позволяет сама сеть.
 	cand, got, err := shift(sp, walk, toA, want)
 	if err != nil {
-		return nil, 0, fmt.Errorf("sim: единица %s: %w", u.ID, err)
+		return nil, 0, "", fmt.Errorf("sim: единица %s: %w", u.ID, err)
 	}
 	if got == 0 {
-		return sp, 0, nil
+		// Не сдвинулись вовсе. Помеха при этом может быть и чужим телом —
+		// например, мы уже стоим вплотную, — поэтому спрашиваем занятость от
+		// НЫНЕШНЕГО положения, наращенного на допуск смычки: иначе состав,
+		// доехавший до соседа в прошлом подшаге, отчитался бы упором сети.
+		return sp, 0, w.blocker(m, c, sp, walk, toA), nil
 	}
-	if _, _, busy := m.ConflictExcept(own, cand); !busy {
-		return cand, got, nil
+	ref, _, busy := m.ConflictExcept(own, cand)
+	if !busy {
+		return cand, got, "", nil
+	}
+	// ЧЬЁ ТЕЛО ВПЕРЕДИ — вопрос не праздный: с этого мига решается, упор это
+	// или сцепка. Занятость называет ЕДИНИЦУ, сцеп находится по ней.
+	into := ""
+	if oc, ok := m.ConsistOf(ref.Unit); ok {
+		into = oc.ID
 	}
 
 	// ЗАНЯТОСТЬ ВТОРОЙ, И ОНА РЕШАЕТСЯ ДЕЛЕНИЕМ ПОПОЛАМ, А НЕ ОТКАЗОМ ОТ ШАГА.
@@ -633,7 +779,7 @@ func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Dista
 		mid := lo + (hi-lo)/2
 		try, g, err := shift(sp, walk, toA, mid)
 		if err != nil {
-			return nil, 0, fmt.Errorf("sim: единица %s: %w", u.ID, err)
+			return nil, 0, "", fmt.Errorf("sim: единица %s: %w", u.ID, err)
 		}
 		if _, _, b := m.ConflictExcept(own, try); b {
 			hi = mid
@@ -641,7 +787,35 @@ func (w *World) slide(m *match.Match, c match.Consist, e *member, dA units.Dista
 		}
 		lo, best, bestGot = mid, try, g
 	}
-	return best, bestGot, nil
+	return best, bestGot, into, nil
+}
+
+// blocker — сцеп, стоящий вплотную по ходу, либо пусто.
+//
+// Спрашивается только там, где сеть не дала сдвинуться ни на микрометр: сама по
+// себе такая остановка означает упор, край карты или остряк не по ходу, но
+// ВЫГЛЯДИТ она так же, как «мы уже уткнулись в соседа». Отличает их допуск
+// смычки — тот же самый, которым сцепку узнаёт домен (match.CouplingGap): если
+// в нём чужое тело, это сосед, а не твердь.
+func (w *World) blocker(m *match.Match, c match.Consist, sp track.Span,
+	walk track.Walk, toA bool) string {
+	grow := track.Span.GrowA
+	if !toA {
+		grow = track.Span.GrowB
+	}
+	probe, stuck, err := grow(sp, walk, match.CouplingGap)
+	if err != nil || stuck == match.CouplingGap {
+		return ""
+	}
+	ref, _, busy := m.ConflictExcept(c.Has, probe)
+	if !busy {
+		return ""
+	}
+	oc, ok := m.ConsistOf(ref.Unit)
+	if !ok {
+		return ""
+	}
+	return oc.ID
 }
 
 // shift — отрезок, сдвинутый на d вдоль хода B → A (toA) либо против него.

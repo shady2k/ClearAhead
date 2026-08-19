@@ -126,6 +126,11 @@ class Snapshot extends RefCounted:
 	## drive, occupied_by}. Словарями по той же причине, что и единицы: их читает
 	## тот, кто ими распоряжается (мир и пульт), а не транспорт.
 	var turnouts: Array = []
+	## consists — СЦЕПЫ ПАРТИИ: словари {id, members, speed, leading}, где члены
+	## перечислены ОТ КОНЦА B К КОНЦУ A. Приехали 2026-08-19 вместе с автосцепкой
+	## от удара: сцеп теперь рождается без команды, и снапшот — единственное
+	## место, где о нём можно узнать.
+	var consists: Array = []
 
 	func full() -> bool:
 		return kind == "full"
@@ -423,6 +428,8 @@ func _take_envelope(env: Dictionary) -> void:
 	snap.units = (raw_units as Array) if typeof(raw_units) == TYPE_ARRAY else []
 	var raw_sw: Variant = env.get("turnouts", [])
 	snap.turnouts = (raw_sw as Array) if typeof(raw_sw) == TYPE_ARRAY else []
+	var raw_consists: Variant = env.get("consists", [])
+	snap.consists = (raw_consists as Array) if typeof(raw_consists) == TYPE_ARRAY else []
 	if not snap.full():
 		# Разностных снапшотов не существует, и применить их клиент не умеет.
 		# Молча принять неизвестный вид значило бы схлопнуть мир на экране до

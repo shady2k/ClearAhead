@@ -29,6 +29,7 @@
    "match": "string",
    "time": "int_string",
    "units": "[]unit",
+   "consists": "[]consist",
    "turnouts": "[]turnout"
   },
   "unit": {

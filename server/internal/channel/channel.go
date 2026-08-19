@@ -653,6 +653,14 @@ func (h *Handler) envelope(sess *session, snap engine.Snapshot) snapshotEnvelope
 	if placed == nil {
 		placed = []match.UnitState{}
 	}
+	// СЦЕПЫ ЕДУТ СПИСКОМ ЦЕЛИКОМ, как и стрелки: снапшот полный, а сцепов на
+	// станции единицы. Пустого списка не бывает — всякая единица в сцепе, — но
+	// nil обязан стать пустым массивом: в JSON это разные значения, и клиент,
+	// разбирающий null как массив, падал бы на пустом мире.
+	consists := snap.Match.Consists
+	if consists == nil {
+		consists = []match.Consist{}
+	}
 	return snapshotEnvelope{
 		ProtocolVersion: protocol.ProtocolVersion,
 		SessionID:       sess.id,
@@ -662,6 +670,7 @@ func (h *Handler) envelope(sess *session, snap engine.Snapshot) snapshotEnvelope
 		Match:           snap.Match.ID,
 		Time:            snap.Time,
 		Units:           placed,
+		Consists:        consists,
 		Turnouts:        snap.Match.TurnoutStates(h.net),
 	}
 }
@@ -713,6 +722,21 @@ type snapshotEnvelope struct {
 	// Time — модельное время партии, микросекунды СТРОКОЙ (units.SimTime).
 	Time  units.SimTime     `json:"time"`
 	Units []match.UnitState `json:"units"`
+	// Consists — СЦЕПЫ ПАРТИИ: что с чем сцеплено и каким порядком.
+	//
+	// # Зачем клиенту то, чего он не рисует
+	//
+	// Затем, что без этого он не знает, ПОЕЗД перед ним или несколько тел рядом.
+	// До 2026-08-19 сцепы на провод не ехали вовсе: сцепка отвечала составом
+	// только тому, кто её позвал, а автосцепки от удара тогда ещё не было — и
+	// сцеп, родившийся сам, не увидел бы никто. Теперь он рождается ударом, без
+	// команды и без ответа на неё, и снапшот — единственное место, где о нём
+	// можно узнать.
+	//
+	// Отсюда же следует, что расцепка снаружи (человек у расцепного рычага)
+	// опирается на этот список: чтобы предложить резать цепочку, надо знать,
+	// что она есть и в каком порядке идут машины.
+	Consists []match.Consist `json:"consists"`
 	// Turnouts — положение ВСЕХ стрелок региона.
 	//
 	// Живое состояние, а не геометрия: контракт отрисовки прямо говорит, что

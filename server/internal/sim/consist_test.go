@@ -289,38 +289,61 @@ func locoAndWagon(t *testing.T, gapM float64) (*World, *match.Match) {
 	return NewWorld(net, s), m
 }
 
-// ПОДЪЕХАЛ — СЦЕПИЛСЯ — ПОТЯНУЛ — ОТЦЕПИЛ. Веха В4 словами: «подъезжаете,
-// цепляете, тянете, расставляете, отцепляете».
+// ПОДЪЕХАЛ — СЦЕПИЛОСЬ САМО — ПОТЯНУЛ — ОТЦЕПИЛ. Веха В4 словами: «подъезжаете,
+// цепляете, тянете, расставляете, отцепляете», и слово владельца 2026-08-19:
+// «автосцепка на ходу».
 //
 // Тест сквозной нарочно. Порознь каждый шаг уже проверен, но между ними лежат
-// швы, на которых всё и ломается: подъезд обязан ОСТАНОВИТЬ машину у чужого
-// тела, сцепка — узнать смычку по той же геометрии, тяга — повезти обоих, а
-// расцепка — оставить вагон стоять там, где его отцепили.
+// швы, на которых всё и ломается: подъезд обязан ДОВЕСТИ машину до чужого тела,
+// касание — сцепить их без единой команды, тяга — повезти обоих, а расцепка —
+// оставить вагон стоять там, где его отцепили.
+//
+// ДО 2026-08-19 ЗДЕСЬ СТОЯЛА РУЧНАЯ СЦЕПКА, и тест требовал, чтобы вагон не
+// двигался, «пока его ещё не цепляли». Требование умерло вместе с правилом:
+// теперь он и не может не сдвинуться — его сцепило ударом.
 func TestApproachCoupleHaulAndPart(t *testing.T) {
 	w, m := locoAndWagon(t, 12)
 	wagonBefore, _ := m.MotionOf(gonAID)
 
-	// ПОДЪЕЗД. Локомотив идёт к вагону и обязан встать, а не проехать сквозь.
+	// ПОДЪЕЗД И УДАР. Идём тиками по одному, чтобы поймать скорость ПЕРЕД
+	// касанием: после него она уже поделена на два тела, и сравнивать будет не с
+	// чем.
 	drive(t, m, match.Controls{Traction: 8, Reverser: match.ReverserForward, Handle: brake.HandleRun})
-	step(t, w, m, 120)
-	drive(t, m, match.Controls{Traction: 0, Reverser: match.ReverserNeutral, Handle: brake.HandleService})
-	step(t, w, m, 120)
+	before := units.Speed(0)
+	hit := 0
+	for i := 1; i <= 400 && hit == 0; i++ {
+		if c, ok := m.ConsistOf(locoID); ok && len(c.Members) == 1 {
+			before = c.Speed
+		}
+		step(t, w, m, 1)
+		if c, _ := m.ConsistOf(locoID); len(c.Members) == 2 {
+			hit = i
+		}
+	}
+	if hit == 0 {
+		t.Fatal("локомотив дошёл до вагона и не сцепился с ним")
+	}
+	if len(m.Consists) != 1 {
+		t.Fatalf("после удара в партии %d сцепов, ожидался один: %+v", len(m.Consists), m.Consists)
+	}
 	c, _ := m.ConsistOf(locoID)
-	if c.Speed != 0 {
-		t.Fatalf("локомотив не встал у вагона: идёт %.3f м/с", float64(c.Speed)/1e6)
+	if !c.Has(gonAID) {
+		t.Fatalf("вагон не попал в сцеп: %+v", c.Members)
 	}
-	if got := gap(t, m, locoID, gonAID) - (locoLenM+gonLenM)/2; got > 0.05 {
-		t.Fatalf("между машинами %.3f м — до вагона не доехали, цеплять нечего", got)
+	// КОЛИЧЕСТВО ДВИЖЕНИЯ ПОДЕЛЕНО НА ОБА ТЕЛА. Число считается отдельно от
+	// кода: 192 т локомотива против 94 т гружёного полувагона дают
+	// 192/(192+94) = 0.6713 прежней скорости. Допуск в процент — на то, что удар
+	// случился где-то внутри тика, и скорость «перед» взята на его границе.
+	want := units.Speed(int64(before) * 192_000 / (192_000 + 94_000))
+	if before == 0 || c.Speed <= 0 || abs(c.Speed-want) > want/100 {
+		t.Fatalf("после удара сцеп идёт %.3f м/с, посчитано %.3f (перед ударом %.3f)",
+			float64(c.Speed)/1e6, float64(want)/1e6, float64(before)/1e6)
 	}
-	if after, _ := m.MotionOf(gonAID); after.Span.Length() != wagonBefore.Span.Length() ||
-		after.S != wagonBefore.S {
-		t.Fatal("вагон сдвинулся сам, хотя его ещё не цепляли")
+	// И СЦЕПИЛОСЬ ИМЕНЕМ, КОТОРОЕ ВЫВЕЛ СЕРВЕР: команды здесь не было ни одной.
+	if c.ID != match.AutoConsistID(locoID, gonAID) {
+		t.Fatalf("сцеп от удара назван %s, ожидалось выведенное имя", c.ID)
 	}
-
-	// СЦЕПКА.
-	if _, err := m.Couple(w.net, locoID, gonAID, "TRAIN"); err != nil {
-		t.Fatalf("сцепка: %v", err)
-	}
+	t.Logf("удар на %.3f м/с: сцеп пошёл %.3f м/с", float64(before)/1e6, float64(c.Speed)/1e6)
 
 	// ТЯГА: теперь едут оба, и вагон — вместе с локомотивом.
 	drive(t, m, match.Controls{Traction: 20, Reverser: match.ReverserForward, Handle: brake.HandleRun})
@@ -344,7 +367,7 @@ func TestApproachCoupleHaulAndPart(t *testing.T) {
 	stopped, _ := m.MotionOf(gonAID)
 	hauled := stopped.S
 	locoStopped, _ := m.MotionOf(locoID)
-	if _, _, err := m.Uncouple("TRAIN", locoID, "TAIL"); err != nil {
+	if _, _, err := m.Uncouple(c.ID, locoID, "TAIL"); err != nil {
 		t.Fatalf("расцепка: %v", err)
 	}
 
