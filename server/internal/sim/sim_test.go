@@ -84,6 +84,7 @@ func setWith(t *testing.T, edit func(map[string]any)) *content.Set {
 				"air": map[string]any{
 					"charge": 5.4, "full_service_drop": 1.5, "cylinder_full": 3.8,
 					"service_rate": 0.22, "emergency_rate": 0.9, "charge_rate": 0.6,
+					"overcharge": 6.5, "stabilizer_rate": 0.002,
 					"leak_rate": 0.02, "main_min": 7.5, "main_max": 9.0,
 					"compressor_rate": 0.2, "cylinder_rate": 0.9, "independent_max": 4.0,
 				},

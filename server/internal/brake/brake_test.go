@@ -18,6 +18,8 @@ func spec() Spec {
 		ServiceRate:     FromKgf(0.22),
 		EmergencyRate:   FromKgf(0.9),
 		ChargeRate:      FromKgf(0.6),
+		Overcharge:      FromKgf(6.5),
+		StabilizerRate:  FromKgf(0.002),
 		LeakRate:        FromKgf(0.02),
 		MainMin:         FromKgf(7.5),
 		MainMax:         FromKgf(9.0),
@@ -161,20 +163,63 @@ func TestReleaseRechargesAndFreesWheels(t *testing.T) {
 }
 
 // ПОЕЗДНОЕ ПОЛОЖЕНИЕ ВЕДЁТ К ЗАРЯДНОМУ С ДВУХ СТОРОН: и снизу (после
-// торможения), и сверху (после сверхзарядки первым положением).
+// торможения), и сверху (после сверхзарядки первым положением). РАЗНЫМИ
+// ТЕМПАМИ, и это здесь главное: снизу работает зарядка, сверху — стабилизатор,
+// и он на три порядка медленнее.
 func TestRunHoldsChargeFromBothSides(t *testing.T) {
 	sp := spec()
 	low := run(run(Charged(sp), sp, HandleService, 3), sp, HandleRun, 20)
 	if low.Pipe != sp.Charge {
 		t.Fatalf("снизу поездное привело к %s, ожидалось зарядное %s", low.Pipe, sp.Charge)
 	}
-	high := run(Charged(sp), sp, HandleRelease, 10) // сверхзарядка до главных резервуаров
+	high := run(Charged(sp), sp, HandleRelease, 10)
 	if high.Pipe <= sp.Charge {
 		t.Fatalf("отпуск не дал сверхзарядки: %s", high.Pipe)
 	}
-	back := run(high, sp, HandleRun, 20)
+	// СВЕРХУ — ЗА ВРЕМЯ СТАБИЛИЗАТОРА, а не за двадцать секунд. Прежняя редакция
+	// требовала здесь зарядного через 20 с и проходила, потому что сверхзарядку
+	// снимал темп ЗАРЯДКИ (0.6 в секунду): первого положения при таком темпе как
+	// бы и нет — завышение исчезало раньше, чем машинист успевал его увидеть.
+	back := run(high, sp, HandleRun, float64(high.Pipe-sp.Charge)/float64(sp.StabilizerRate)+1)
 	if back.Pipe != sp.Charge {
 		t.Fatalf("сверху поездное привело к %s, ожидалось зарядное %s", back.Pipe, sp.Charge)
+	}
+}
+
+// ПЕРВОЕ ПОЛОЖЕНИЕ УПИРАЕТСЯ В СВЕРХЗАРЯДНОЕ, А НЕ В ГЛАВНЫЕ РЕЗЕРВУАРЫ.
+//
+// Дефект, ради которого заведено число: потолком служило давление резервуаров —
+// 9.0, — и магистраль под 9.0 оставляла тормоз мёртвым на шестнадцать секунд
+// (столько служебной разрядке идти до зарядного). Держим кран в отпуске заведомо
+// дольше, чем нужно на любой из двух потолков: до 9.0 при темпе 0.6 хватило бы
+// шести секунд, и минута отличает «упёрлось в предел» от «ещё не доехало».
+func TestReleaseStopsAtOverchargeCeiling(t *testing.T) {
+	sp := spec()
+	s := run(Charged(sp), sp, HandleRelease, 60)
+	if s.Pipe != sp.Overcharge {
+		t.Fatalf("отпуск привёл магистраль к %s, ожидался предел сверхзарядки %s", s.Pipe, sp.Overcharge)
+	}
+	// И НАЖАТИЯ ПРИ ЭТОМ НЕТ: воздухораспределитель отсчитывает от зарядного, а
+	// магистраль выше него.
+	if s.Effort(sp) != 0 {
+		t.Fatalf("сверхзарядка дала нажатие %d‰ — колодки прижаты давлением выше зарядного", s.Effort(sp))
+	}
+}
+
+// ТЕМП СТАБИЛИЗАТОРА — ПО ПРОВЕРКЕ ИЗ ИНСТРУКЦИИ: переход 6.0 → 5.8 занимает
+// 80…120 секунд. Это ровно та проверка, которой темп настраивают на машине, и
+// проверять его иначе значило бы сверять число с самим собой.
+func TestStabilizerTakesTheDeclaredTime(t *testing.T) {
+	sp := spec()
+	s := State{Main: sp.MainMax, Pipe: FromKgf(6.0)}
+	want := FromKgf(5.8)
+	sec := 0
+	for s.Pipe > want && sec < 300 {
+		s = run(s, sp, HandleRun, 1)
+		sec++
+	}
+	if sec < 80 || sec > 120 {
+		t.Fatalf("переход 6.0 → 5.8 занял %d с, инструкция даёт 80…120", sec)
 	}
 }
 

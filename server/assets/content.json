@@ -144,6 +144,8 @@
      "service_rate": 0.22,
      "emergency_rate": 0.9,
      "charge_rate": 0.6,
+     "overcharge": 6.5,
+     "stabilizer_rate": 0.002,
      "leak_rate": 0.02,
      "main_min": 7.5,
      "main_max": 9.0,

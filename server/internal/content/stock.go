@@ -477,6 +477,14 @@ type BrakeSpec struct {
 // источник не назначен, числа взяты типовыми и дают правдоподобное поведение.
 // Проверить их по документу — работа автора набора, и место для этого здесь: они
 // в паспорте, а не в коде.
+//
+// ДВА ЧИСЛА ИЗ ЭТОГО ПРАВИЛА ВЫПАДАЮТ, и потому названы отдельно. Предел
+// сверхзарядки и темп её ликвидации даны владельцем 2026-08-19 как уставки крана
+// усл. № 394/395 на ВЛ80: отпуск первым положением завышает давление на 1.0–1.2
+// над зарядным (на практике 6.5–6.8), а переход 6.0 → 5.8 настраивается
+// стабилизатором за 80–120 с. Второе и есть 0.002 в секунду; первое при зарядном
+// 5.4 даёт 6.5 — нижний край названного окна, потому что верхний (6.8) взят при
+// зарядном 5.5–5.6, а не при нашем.
 type AirBrakeSpec struct {
 	ChargeKgf          float64 `json:"charge"`
 	FullServiceDropKgf float64 `json:"full_service_drop"`
@@ -484,6 +492,24 @@ type AirBrakeSpec struct {
 	ServiceRateKgfS    float64 `json:"service_rate"`
 	EmergencyRateKgfS  float64 `json:"emergency_rate"`
 	ChargeRateKgfS     float64 `json:"charge_rate"`
+	// OverchargeKgf — ПРЕДЕЛЬНОЕ СВЕРХЗАРЯДНОЕ ДАВЛЕНИЕ: выше него первое
+	// положение крана магистраль не зарядит.
+	//
+	// Без него потолком служило давление ГЛАВНЫХ РЕЗЕРВУАРОВ — 9.0 у ВЛ80, — и
+	// это был не запас, а дефект: игрок, заглянувший в отпуск, получал
+	// магистраль под 9.0 и мёртвый тормоз на шестнадцать секунд (столько
+	// служебная разрядка идёт от 9.0 до зарядного). Замер живым зондом
+	// 2026-08-19: ТМ = 9.00 при зарядном 5.40.
+	OverchargeKgf float64 `json:"overcharge"`
+	// StabilizerRateKgfS — темп ЛИКВИДАЦИИ СВЕРХЗАРЯДКИ поездным положением.
+	//
+	// Отдельно от ChargeRateKgfS, и это не симметрия ради симметрии: сверхзарядку
+	// снимает СТАБИЛИЗАТОР крана, а не тот канал, которым магистраль заряжают, и
+	// темпы у них разной величины. У ВЛ80 переход 6.0 → 5.8 настраивается за
+	// 80–120 с, то есть около 0.002 в секунду — против 0.6 у зарядки. Пока темп
+	// был один на оба направления, сверхзарядка снималась в триста раз быстрее
+	// настоящей, и разница между «заглянул в отпуск» и «не заглядывал» пропадала.
+	StabilizerRateKgfS float64 `json:"stabilizer_rate"`
 	LeakRateKgfS       float64 `json:"leak_rate"`
 	MainMinKgf         float64 `json:"main_min"`
 	MainMaxKgf         float64 `json:"main_max"`
@@ -507,6 +533,8 @@ func (b BrakeSpec) Domain() (brake.Spec, bool) {
 		ServiceRate:     brake.FromKgf(a.ServiceRateKgfS),
 		EmergencyRate:   brake.FromKgf(a.EmergencyRateKgfS),
 		ChargeRate:      brake.FromKgf(a.ChargeRateKgfS),
+		Overcharge:      brake.FromKgf(a.OverchargeKgf),
+		StabilizerRate:  brake.FromKgf(a.StabilizerRateKgfS),
 		LeakRate:        brake.FromKgf(a.LeakRateKgfS),
 		MainMin:         brake.FromKgf(a.MainMinKgf),
 		MainMax:         brake.FromKgf(a.MainMaxKgf),
